@@ -17,7 +17,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 | Milestone | Scope                                            | State |
 |-----------|--------------------------------------------------|-------|
 | M1        | Config store + minimal HTTP server + JSON Schema | ✅ implemented, host-tested |
-| M2        | WiFi state machine with reason codes             | planned |
+| M2        | WiFi state machine with reason codes             | ✅ implemented, host-tested, live on ESP32-P4 (BLE provisioning pending) |
 | M3        | SignalK discovery + token state machine          | planned |
 | M4        | WebSocket deltas + meta reconciliation           | planned |
 | M5        | Web UI (Vite SPA)                                | planned |
@@ -37,29 +37,33 @@ Recorded here so nothing is silently applied (plan §7):
   response, and the `Content-Type: application/json` CSRF guard on
   state-changing requests. Each is small and needed by the M1 acceptance
   test or the M5 UI; drop any of them if unwanted before the API is frozen.
-* `main/net_bootstrap.c` is throw-away M1 scaffolding (fixed WiFi
-  credentials from Kconfig) so the API is reachable; espos_wifi (M2) replaces
-  it.
+* ESP32-P4 pulls `espressif/esp_hosted` + `espressif/esp_wifi_remote`
+  (P4-only) because the chip has no radio; approved 2026-08-18.
+* M2 ships the SoftAP captive portal; BLE provisioning
+  (`espressif/network_provisioning`) is a follow-up, as agreed.
+* Delta buffering during offline periods (listed under M2) lands with the
+  delta pipeline in M4 — there is nothing to buffer before that.
 
 ## Quick start
 
 ```sh
 . $IDF_PATH/export.sh            # ESP-IDF v6.0.2, see .idf-version
-idf.py set-target esp32c6
-idf.py menuconfig          # espOS example app → WiFi SSID/password (M1 only)
+idf.py set-target esp32c6            # or esp32 / esp32s3 / esp32c3 / esp32p4
 idf.py build flash monitor
-curl http://<device-ip>/api/v1/config
+# join the "espOS-xxxx" access point, the setup page opens; or see docs/wifi.md
+curl http://<device-ip>/api/v1/wifi/status
 ```
 
 Docs: [REST API contract](docs/api.md) · [Config store &
-descriptors](docs/config.md) · [Development & host tests](docs/development.md)
-· [Security notes](docs/security.md)
+descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [Development & host
+tests](docs/development.md) · [Security notes](docs/security.md)
 
 ## Layout
 
 ```
 components/espos_config/   NVS-backed config store, build-time descriptor → schema/tables
-components/espos_httpd/    esp_http_server, /api/v1, static UI
+components/espos_httpd/    esp_http_server, /api/v1, SSE, static UI
+components/espos_wifi/     station manager + portal (state machine host-testable)
 main/                      example app
 tools/                     generators
 test/host/                 linux-target tests (no hardware needed)

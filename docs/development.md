@@ -14,7 +14,6 @@
 
 ```sh
 idf.py set-target esp32c6           # any of: esp32 esp32s3 esp32c3 esp32c6 esp32p4
-idf.py menuconfig                   # (M1 only) espOS example app → WiFi SSID/password
 idf.py build flash monitor
 ```
 
@@ -35,8 +34,23 @@ idf.py --preview set-target linux && idf.py build
 
 cd ../espos_httpd_test
 idf.py --preview set-target linux && idf.py build
-python3 run_test.py                        # drives the real REST server over HTTP
+python3 run_test.py                        # drives the real REST server over HTTP,
+                                           # incl. WiFi status/scan/SSE with the simulated driver
+
+cd ../espos_wifi_test
+idf.py --preview set-target linux && idf.py build
+./build/espos_wifi_test.elf                # WiFi state machine, every transition
 ```
+
+Multi-target caveat: `managed_components/` is synced to the current target's
+dependency set (ESP32-P4 pulls extra components), so build targets one after
+another, not concurrently, from the same checkout.
+
+## Flashing the Waveshare ESP32-P4 panels
+
+`sdkconfig.defaults.esp32p4` carries the SDIO pinout of the C6 co-processor
+and allows the rev-1.x silicon those boards use. `idf.py -p /dev/ttyACM0
+flash` as usual; credentials via the portal or an NVS image (docs/wifi.md).
 
 `tools/espos_gen_config.py` has its own tests: `python3 -m unittest
 discover -s tools -p 'test_*.py'`.
@@ -45,8 +59,9 @@ discover -s tools -p 'test_*.py'`.
 
 ```
 components/espos_config/   NVS-backed config store, descriptor tables, JSON, migrations
-components/espos_httpd/    esp_http_server + REST API + static UI
-main/                      example app (+ M1-only WiFi bootstrap)
+components/espos_httpd/    esp_http_server + REST API + SSE + static UI
+components/espos_wifi/     WiFi state machine, portal, /wifi endpoints
+main/                      example app
 tools/                     build-time generators
 test/host/                 linux-target unit/integration tests
 docs/                      contracts and guides

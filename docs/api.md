@@ -140,13 +140,56 @@ device to provisioning.
 page; M5: the built bundle). Unknown paths under `/api/` return `404
 {"error": "not_found"}`.
 
+## WiFi
+
+### `GET /wifi/status` — M2
+
+The status document described in [wifi.md](wifi.md): `state` ∈
+`disabled unconfigured connecting obtaining_ip connected backoff`,
+`reason: {code, text}`, link/IP details, `backoff_ms` while backing off,
+counters, `portal: {active, ssid, ip?, clients?}`.
+
+### `POST /wifi/scan` — M2
+
+Starts an asynchronous scan. `202 {"status": "scanning"}`; `409 busy` if
+the driver cannot scan right now. Requires the JSON content type.
+
+### `GET /wifi/scan` — M2
+
+```json
+{"scanning": false, "age_s": 3,
+ "results": [{"ssid": "MOIN", "bssid": "1c:0b:8b:90:da:90", "rssi": -52, "channel": 6, "auth": "wpa2/wpa3"}]}
+```
+`age_s` is `null` before the first scan. `auth` ∈ `open wep wpa wpa2
+wpa/wpa2 wpa2-enterprise wpa3 wpa2/wpa3 wapi owe other`. Results are cached;
+a `wifi_scan` SSE event carries the same document when a scan finishes.
+
+### Captive-portal probes — M2
+
+`/generate_204`, `/gen_204`, `/hotspot-detect.html`,
+`/library/test/success.html`, `/connecttest.txt`, `/ncsi.txt`, `/redirect`,
+`/canonical.html`, `/success.txt` answer `302 → http://192.168.4.1/`.
+
+## Events
+
+### `GET /events` — M2
+
+`text/event-stream` (chunked, `retry: 3000` first, a `: ping` comment every
+15 s). Events:
+
+| event       | data                                | when                                   |
+|-------------|-------------------------------------|----------------------------------------|
+| `wifi`      | the `/wifi/status` document          | on connect (snapshot) and every change |
+| `wifi_scan` | the `/wifi/scan` document            | scan finished                          |
+| `config`    | `{"ns": "...", "key": "..."}`         | a key's effective value changed        |
+
+At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; the next gets
+`503 too_many_streams`. Later milestones add `sk` events.
+
 ## Planned (shape reserved, not implemented)
 
 | Endpoint                     | Milestone | Notes                                          |
 |------------------------------|-----------|------------------------------------------------|
-| `GET /wifi/status`           | M2        | state, reason code + human string, RSSI, ip, backoff countdown |
-| `GET /wifi/scan`             | M2        | list of visible APs                            |
-| `GET /events` (SSE)          | M2        | `text/event-stream`: `wifi`, `sk`, `config` events |
 | `GET /sk/servers`            | M3        | mDNS-discovered SignalK servers                |
 | `GET /sk/status`             | M3        | token state machine state, server `self`, pending href |
 | `POST /sk/token`             | M3        | manual token paste                             |
