@@ -1,0 +1,19 @@
+menu "espOS config store"
+
+    config ESPOS_CONFIG_NVS_PARTITION
+        string "NVS partition label"
+        default "nvs"
+        help
+            Label of the NVS partition holding the configuration store.
+
+    config ESPOS_CONFIG_MAX_MIGRATIONS
+        int "Maximum registered migration steps"
+        default 16
+        range 1 128
+
+    config ESPOS_CONFIG_MAX_SUBSCRIBERS
+        int "Maximum change subscribers"
+        default 8
+        range 1 32
+
+endmenu

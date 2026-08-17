@@ -1,0 +1,6 @@
+## espos_config component manifest
+dependencies:
+  idf: ">=6.0.0"
+  # cJSON left the IDF core in 6.0; pinned exactly, like the IDF version, so a
+  # registry release cannot change the binary without a change in this repo.
+  espressif/cjson: "==1.7.19~2"
