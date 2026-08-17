@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  generator:
+    name: descriptor generator (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+
+  firmware:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32, esp32s3, esp32c3, esp32c6, esp32p4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: read pinned IDF version
+        id: idf
+        run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: ${{ matrix.target }}
+          command: idf.py -DSDKCONFIG=build/sdkconfig build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: espos-${{ matrix.target }}
+          path: |
+            build/espos.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ota_data_initial.bin
+          if-no-files-found: error
+
+  host-tests:
+    name: host tests (linux target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: read pinned IDF version
+        id: idf
+        run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: linux
+          command: >-
+            bash -c "
+            (apt-get update && apt-get install -y libbsd-dev) &&
+            cd test/host/espos_config_test && idf.py --preview set-target linux && idf.py build &&
+            ./build/espos_config_test.elf &&
+            cd ../espos_httpd_test && idf.py --preview set-target linux && idf.py build &&
+            python3 run_test.py"
