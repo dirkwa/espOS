@@ -68,6 +68,8 @@ typedef enum {
     ESPOS_WIFI_EV_LOST_IP,
     ESPOS_WIFI_EV_TIMER,          /* the single SM timer expired */
     ESPOS_WIFI_EV_PORTAL_CLIENT,  /* arg = int station count on the portal AP */
+    ESPOS_WIFI_EV_PORTAL_FAILED,  /* the port could not bring the AP up */
+    ESPOS_WIFI_EV_PORTAL_RECONFIG, /* portal SSID/password changed */
 } espos_wifi_event_t;
 
 typedef struct {
@@ -90,7 +92,7 @@ typedef struct {
     esp_err_t (*disconnect)(void *ctx);
     esp_err_t (*portal_start)(void *ctx);
     esp_err_t (*portal_stop)(void *ctx);
-    void (*arm_timer)(void *ctx, uint32_t ms);   /* one timer; re-arming replaces */
+    void (*arm_timer)(void *ctx, uint32_t ms);   /* one timer; re-arming replaces; must fire no earlier than now_ms()+ms */
     void (*cancel_timer)(void *ctx);
     uint32_t (*now_ms)(void *ctx);
     uint32_t (*random)(void *ctx);
@@ -124,6 +126,8 @@ typedef struct espos_wifi_sm {
     bool timer_is_dhcp;          /* which timeout the armed timer represents */
     bool timer_is_portal;
     uint32_t portal_due_ms;      /* when the portal should come up (0 = not scheduled) */
+    uint32_t state_due_ms;       /* deadline of the armed state timeout (0 = none) */
+    uint32_t timer_due_ms;       /* deadline of the armed timer (0 = none); early fires are stale */
 } espos_wifi_sm_t;
 
 void espos_wifi_sm_init(espos_wifi_sm_t *sm, const espos_wifi_port_t *port, void *port_ctx,

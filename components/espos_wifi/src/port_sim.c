@@ -107,8 +107,8 @@ static void sm_timer_cb(TimerHandle_t t)
 static void p_arm_timer(void *ctx, uint32_t ms)
 {
     (void)ctx;
-    TickType_t ticks = pdMS_TO_TICKS(ms);
-    xTimerChangePeriod(s_sm_timer, ticks ? ticks : 1, 0);
+    TickType_t ticks = (ms + portTICK_PERIOD_MS - 1) / portTICK_PERIOD_MS + 1; /* never early */
+    xTimerChangePeriod(s_sm_timer, ticks, 0);
 }
 
 static void p_cancel_timer(void *ctx)

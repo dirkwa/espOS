@@ -8,9 +8,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "freertos/timers.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -32,6 +34,7 @@ static const char *TAG = "espos_sse";
 typedef struct {
     httpd_req_t *req;   /* async copy, NULL if slot free */
     int fd;
+    TickType_t since;   /* for evicting the oldest stream when full */
 } client_t;
 
 static struct {
@@ -60,13 +63,14 @@ static void drop_locked(int i)
         return;
     }
     httpd_req_t *req = c->req;
+    int fd = c->fd;
     c->req = NULL;
     c->fd = -1;
-    /* Hand the socket back to the server loop. It notices the peer's close
-     * itself (recv → 0) and reaps the session; a half-open peer falls to
-     * the LRU purge. Do NOT httpd_sess_trigger_close() here: the fd may be
-     * reaped and reused for a new connection before that queued close runs,
-     * which would cut an unrelated request. */
+    /* Shut the socket down (peer sees EOF, our side reads EOF), then hand it
+     * back: the server loop finds it readable, recv() returns 0 and it reaps
+     * the session cleanly. Not httpd_sess_trigger_close(): that queued close
+     * could hit a reused fd belonging to a new connection. */
+    shutdown(fd, SHUT_RDWR);
     httpd_req_async_handler_complete(req);
     ESP_LOGD(TAG, "client %d dropped", i);
 }
@@ -181,23 +185,33 @@ static esp_err_t events_get(httpd_req_t *req)
 {
     httpd_req_t *copy = NULL;
     lock();
-    int slot = -1;
+    int slot = -1, oldest = 0;
     for (int i = 0; i < CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS; i++) {
         if (!s.clients[i].req) {
             slot = i;
             break;
         }
+        if ((int32_t)(s.clients[i].since - s.clients[oldest].since) < 0) {
+            oldest = i;
+        }
     }
     if (slot < 0) {
-        unlock();
-        return espos_httpd_send_error(req, "503 Service Unavailable", "too_many_streams",
-                                      "event stream limit reached");
+        /* Full — most likely stale tabs whose close we have not seen yet
+         * (async sockets sit outside select()). Evict the oldest stream;
+         * a live client simply reconnects (retry: 3000). */
+        ESP_LOGI(TAG, "stream table full, evicting client %d", oldest);
+        drop_locked(oldest);
+        slot = oldest;
     }
     esp_err_t err = httpd_req_async_handler_begin(req, &copy);
     if (err != ESP_OK) {
         unlock();
         return espos_httpd_send_error(req, "500 Internal Server Error", "async_failed", esp_err_to_name(err));
     }
+    /* Bound how long a slow/absent peer can stall a publisher: sends on
+     * this socket give up after 250 ms and the client is dropped. */
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 250 * 1000 };
+    setsockopt(httpd_req_to_sockfd(copy), SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     httpd_resp_set_type(copy, "text/event-stream");
     httpd_resp_set_hdr(copy, "Cache-Control", "no-cache");
     httpd_resp_set_hdr(copy, "Connection", "keep-alive");
@@ -211,6 +225,7 @@ static esp_err_t events_get(httpd_req_t *req)
     }
     s.clients[slot].req = copy;
     s.clients[slot].fd = httpd_req_to_sockfd(copy);
+    s.clients[slot].since = xTaskGetTickCount();
     unlock();
     ESP_LOGI(TAG, "client %d connected (fd %d)", slot, s.clients[slot].fd);
     for (int i = 0; i < MAX_CONNECT_CBS; i++) {

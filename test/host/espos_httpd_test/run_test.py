@@ -466,6 +466,15 @@ class WifiTests(unittest.TestCase):
         self.assertEqual(js["reason"], {"code": 0, "text": ""})
         self.assertNotIn("ip", js)
 
+    def test_01b_short_psk_slot_is_skipped(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "short"}})
+        self.assertEqual(st, 200)
+        time.sleep(0.5)
+        st, _, _, js = req("GET", "/api/v1/wifi/status")
+        self.assertEqual(js["state"], "unconfigured")   # 1..7 char WPA passwords are not valid
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": None, "psk0": None}})
+        time.sleep(0.5)
+
     def test_02_scan(self):
         st, _, _, js = req("POST", "/api/v1/wifi/scan", None, content_type=None)
         self.assertEqual(st, 415)
@@ -490,7 +499,7 @@ class WifiTests(unittest.TestCase):
         self.assertEqual(first[1][0], "wifi")
         self.assertEqual(json.loads(first[1][1])["state"], "unconfigured")
 
-        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret"}})
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
         self.assertEqual(st, 200)
         seen = []
         for ev, data in sse.events(timeout=4):
@@ -520,6 +529,28 @@ class WifiTests(unittest.TestCase):
         self.assertEqual(cfg["wifi"]["psk0"], SENTINEL)
         self.assertEqual(cfg["wifi"]["ssid0"], "Boat")
 
+    def test_03b_sse_eviction_when_full(self):
+        readers = [SseReader() for _ in range(3)]
+        for r in readers:
+            self.assertIn("200", r.status)
+        # a 4th stream evicts the oldest instead of failing
+        r4 = SseReader()
+        self.assertIn("200", r4.status)
+        first = list(itertools.islice(r4.events(timeout=3), 2))
+        self.assertEqual(first[1][0], "wifi")
+        # the oldest reader now sees EOF (its socket was shut down)
+        got = list(readers[0].events(timeout=2))
+        self.assertTrue(all(e in ("retry", "wifi", "comment") for e, _ in got))
+        readers[0].sock.settimeout(1.0)
+        try:
+            eof = readers[0].sock.recv(10) == b""
+        except socket.timeout:
+            eof = False
+        self.assertTrue(eof, "evicted stream must be closed by the server")
+        for r in readers + [r4]:
+            r.close()
+        time.sleep(0.5)
+
     def test_04_disable_and_reenable(self):
         st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"sta_enabled": False}})
         self.assertEqual(st, 200)
@@ -545,7 +576,7 @@ class WifiFailureTests(unittest.TestCase):
         cls.h.stop()
 
     def test_wrong_password_is_reported_with_backoff(self):
-        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "wrong", "ssid1": "Other", "psk1": "x"}})
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "wrongpass", "ssid1": "Other", "psk1": "xxxxxxxx"}})
         self.assertEqual(st, 200)
         # after both networks fail once we must be in backoff with the reason
         js = wait_for(lambda: (lambda r: r[3] if r[3]["state"] == "backoff" else None)(req("GET", "/api/v1/wifi/status")), timeout=6)
@@ -553,9 +584,9 @@ class WifiFailureTests(unittest.TestCase):
         self.assertEqual(js["reason"]["code"], 202)
         self.assertEqual(js["reason"]["text"], "wrong password")
         self.assertGreater(js["backoff_ms"], 0)
-        self.assertLessEqual(js["backoff_ms"], 1300)   # round 0: 1 s ±25 %
-        self.assertEqual(js["attempt"], 2)             # both networks tried
-        self.assertEqual(js["round"], 1)
+        self.assertLessEqual(js["backoff_ms"], 1300 * (2 ** (js["round"] - 1)))   # 1 s·2^(round-1) ±25 %
+        self.assertGreaterEqual(js["round"], 1)
+        self.assertEqual(js["attempt"], 2 * js["round"])   # both networks tried every round
         self.assertEqual(js["network_index"], 0)
         # a second round follows automatically
         js2 = wait_for(lambda: (lambda r: r[3] if r[3]["round"] >= 2 else None)(req("GET", "/api/v1/wifi/status")), timeout=6)

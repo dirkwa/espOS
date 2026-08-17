@@ -15,9 +15,12 @@
 static const char *TAG = "espos_dns";
 
 static TaskHandle_t s_task;
-static volatile bool s_stop;
+static volatile bool s_enabled;
 static uint32_t s_answer_ip;   /* network byte order */
 
+/* One task for the life of the process: it stays bound to :53 and simply
+ * ignores queries while the portal is down. Nothing here ever blocks the
+ * caller (which may be the timer daemon or the event task). */
 static void dns_task(void *arg)
 {
     (void)arg;
@@ -36,14 +39,12 @@ static void dns_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    struct timeval tv = { .tv_sec = 0, .tv_usec = 500 * 1000 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     uint8_t buf[512];
-    while (!s_stop) {
+    for (;;) {
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
         int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &flen);
-        if (n < 12) {
+        if (n < 12 || !s_enabled) {
             continue;
         }
         /* only standard queries with at least one question */
@@ -76,19 +77,17 @@ static void dns_task(void *arg)
         }
         sendto(sock, buf, len, 0, (struct sockaddr *)&from, flen);
     }
-    close(sock);
-    s_task = NULL;
-    vTaskDelete(NULL);
 }
 
 esp_err_t espos_wifi_portal_dns_start(const char *ip)
 {
+    s_answer_ip = inet_addr(ip);
+    s_enabled = true;
     if (s_task) {
         return ESP_OK;
     }
-    s_answer_ip = inet_addr(ip);
-    s_stop = false;
     if (xTaskCreate(dns_task, "espos_dns", 3072, NULL, tskIDLE_PRIORITY + 3, &s_task) != pdPASS) {
+        s_task = NULL;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
@@ -96,9 +95,5 @@ esp_err_t espos_wifi_portal_dns_start(const char *ip)
 
 void espos_wifi_portal_dns_stop(void)
 {
-    s_stop = true;
-    /* the task notices within 500 ms and exits by itself */
-    for (int i = 0; i < 20 && s_task; i++) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
+    s_enabled = false;
 }

@@ -59,9 +59,11 @@ the link; changing the password of the current network reconnects from the
 top of the list. `bssidN` pins one access point (`aa:bb:cc:dd:ee:ff`) and
 disables roaming for that slot.
 
-Security: WPA2-PSK minimum when a password is set (no downgrade to open/WEP),
-WPA3-SAE (H2E) accepted when the AP offers it, PMF capable. Empty password =
-open network.
+Security: with a password set the station refuses open/WEP networks
+(threshold WPA-PSK; WPA2 and WPA3-SAE/H2E are negotiated when the AP offers
+them, PMF capable). Passwords must be 8..63 characters — shorter ones are
+not valid WPA and the slot is skipped with a warning. Empty password = open
+network.
 
 ## Portal (SoftAP provisioning)
 
@@ -105,12 +107,12 @@ esptool.py --port /dev/ttyACM0 write_flash 0x9000 wifi.nvs.bin
 
 ```json
 {
-  "state": "connected", "sta_enabled": true, "hostname": "espos-cbec",
-  "network_index": 0, "ssid": "MOIN", "bssid": "1c:0b:8b:90:da:90", "channel": 6, "rssi": -59,
-  "ip": "192.168.0.118", "netmask": "255.255.255.0", "gateway": "192.168.0.1", "connected_s": 26,
+  "state": "connected", "sta_enabled": true, "hostname": "espos-1a2b",
+  "network_index": 0, "ssid": "Boat", "bssid": "aa:bb:cc:dd:ee:ff", "channel": 6, "rssi": -59,
+  "ip": "192.168.1.23", "netmask": "255.255.255.0", "gateway": "192.168.1.1", "connected_s": 26,
   "reason": {"code": 0, "text": ""},
   "attempt": 0, "round": 0, "connect_count": 1, "disconnect_count": 0,
-  "portal": {"active": false, "ssid": "espOS-cbec"}
+  "portal": {"active": false, "ssid": "espOS-1a2b"}
 }
 ```
 

@@ -52,6 +52,8 @@ static struct {
     size_t action_head, action_count;
     char *pending_status_json;   /* latest snapshot to publish (coalesced) */
     SemaphoreHandle_t drain_lock;
+    bool sm_ready;
+    bool api_registered;
 } s;
 
 static void lock(void)
@@ -99,9 +101,16 @@ static void load_cfg(espos_wifi_cfg_t *c)
         if (ssid[0] == '\0') {
             continue; /* empty slots are skipped; order of the rest is kept */
         }
+        char psk[65] = { 0 };
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, psk_keys[i], psk, sizeof(psk), NULL);
+        size_t pl = strlen(psk);
+        if (pl > 0 && pl < 8) {
+            ESP_LOGW(TAG, "%s: password shorter than 8 characters is not valid WPA; slot skipped", ssid_keys[i]);
+            continue;
+        }
         espos_wifi_net_t *n = &c->nets[c->net_count++];
         strcpy(n->ssid, ssid);
-        espos_config_get_str(ESPOS_CFG_NS_WIFI, psk_keys[i], n->psk, sizeof(n->psk), NULL);
+        strcpy(n->psk, psk);
         char bssid[18] = { 0 };
         espos_config_get_str(ESPOS_CFG_NS_WIFI, bssid_keys[i], bssid, sizeof(bssid), NULL);
         n->has_bssid = parse_bssid(bssid, n->bssid);
@@ -120,26 +129,28 @@ static void load_cfg(espos_wifi_cfg_t *c)
     espos_config_get_i32(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_AFTER_S, &v);
     c->portal_after_ms = (uint32_t)v * 1000;
 
-    /* names */
-    char h[33] = { 0 };
+    /* names: build locally, publish under the lock (readers copy under it) */
+    char h[33] = { 0 }, ap[33] = { 0 }, appsk[65] = { 0 };
     espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
+    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_SSID, ap, sizeof(ap), NULL);
+    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_PSK, appsk, sizeof(appsk), NULL);
+    if (appsk[0] && strlen(appsk) < 8) {
+        ESP_LOGW(TAG, "portal_psk shorter than 8 chars is invalid for WPA2; portal will be open");
+        appsk[0] = '\0';
+    }
+    lock();
     if (h[0]) {
         strcpy(s.hostname, h);
     } else {
         snprintf(s.hostname, sizeof(s.hostname), "espos-%s", s.short_id);
     }
-    char ap[33] = { 0 };
-    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_SSID, ap, sizeof(ap), NULL);
     if (ap[0]) {
         strcpy(s.portal_ssid, ap);
     } else {
         snprintf(s.portal_ssid, sizeof(s.portal_ssid), "espOS-%s", s.short_id);
     }
-    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_PSK, s.portal_psk, sizeof(s.portal_psk), NULL);
-    if (s.portal_psk[0] && strlen(s.portal_psk) < 8) {
-        ESP_LOGW(TAG, "portal_psk shorter than 8 chars is invalid for WPA2; portal will be open");
-        s.portal_psk[0] = '\0';
-    }
+    strcpy(s.portal_psk, appsk);
+    unlock();
 }
 
 void espos_wifi_portal_credentials(char ssid[33], char psk[65])
@@ -153,6 +164,7 @@ void espos_wifi_portal_credentials(char ssid[33], char psk[65])
 /* --------------------------------------------------------- SM plumbing */
 
 static char *status_json_locked(void);
+static void drain_all_locked(void);
 
 /* Lock held: append a driver action for later. */
 static void queue_action(int type, const espos_wifi_net_t *net)
@@ -196,7 +208,28 @@ static void on_status_changed(void *ctx)
  * drainer at a time keeps global ordering. */
 static void drain(void)
 {
-    xSemaphoreTake(s.drain_lock, portMAX_DELAY);
+    for (;;) {
+        /* Never block here: the event task may be the caller, and the current
+         * drainer may be inside a driver call whose completion needs that
+         * very task. Whoever holds the drain lock drains everything queued. */
+        if (xSemaphoreTake(s.drain_lock, 0) != pdTRUE) {
+            return;
+        }
+        drain_all_locked();
+        xSemaphoreGive(s.drain_lock);
+        /* something may have been queued between our last look and the give */
+        lock();
+        bool more = s.action_count > 0 || s.pending_status_json != NULL;
+        unlock();
+        if (!more) {
+            return;
+        }
+    }
+}
+
+/* Called with drain_lock held. */
+static void drain_all_locked(void)
+{
     for (;;) {
         lock();
         if (s.action_count == 0) {
@@ -231,7 +264,11 @@ static void drain(void)
             p->disconnect(NULL);
             break;
         case ACT_PORTAL_START:
-            p->portal_start(NULL);
+            if (p->portal_start(NULL) != ESP_OK) {
+                lock();
+                espos_wifi_sm_event(&s.sm, ESPOS_WIFI_EV_PORTAL_FAILED, NULL);
+                unlock();
+            }
             break;
         case ACT_PORTAL_STOP:
             p->portal_stop(NULL);
@@ -240,13 +277,12 @@ static void drain(void)
             break;
         }
     }
-    xSemaphoreGive(s.drain_lock);
 }
 
 void espos_wifi_dispatch(espos_wifi_event_t ev, const void *arg)
 {
-    if (!s.lock) {
-        return;
+    if (!s.lock || !s.sm_ready) {
+        return; /* driver events before the machine exists are meaningless */
     }
     lock();
     espos_wifi_sm_event(&s.sm, ev, arg);
@@ -262,9 +298,20 @@ static void cfg_debounce_cb(TimerHandle_t t)
     if (!s.started) {
         return;
     }
+    char old_ssid[33], old_psk[65];
+    lock();
+    strcpy(old_ssid, s.portal_ssid);
+    strcpy(old_psk, s.portal_psk);
+    unlock();
     espos_wifi_cfg_t c;
     load_cfg(&c);
     espos_wifi_dispatch(ESPOS_WIFI_EV_CONFIG, &c);
+    lock();
+    bool portal_changed = strcmp(old_ssid, s.portal_ssid) != 0 || strcmp(old_psk, s.portal_psk) != 0;
+    unlock();
+    if (portal_changed) {
+        espos_wifi_dispatch(ESPOS_WIFI_EV_PORTAL_RECONFIG, NULL);
+    }
 }
 
 static void on_config_change(const char *ns, const char *key, void *arg)
@@ -279,6 +326,9 @@ static void on_config_change(const char *ns, const char *key, void *arg)
 
 /* -------------------------------------------------------------- status */
 
+/* Lock held. Never calls into the driver (a hosted RPC could block while
+ * the event task waits for this lock); the live RSSI is added by callers
+ * that run outside the lock. */
 static void snapshot_locked(espos_wifi_status_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -287,7 +337,7 @@ static void snapshot_locked(espos_wifi_status_t *out)
     if (out->sm.state == ESPOS_WIFI_ST_CONNECTED) {
         uint32_t nowms = s.drv->sm_port->now_ms(NULL);
         out->connected_s = (nowms - out->sm.connected_since_ms) / 1000;
-        out->rssi = s.drv->rssi ? s.drv->rssi() : 0;
+        out->rssi = out->sm.link.rssi; /* from the association event */
     }
     strcpy(out->hostname, s.hostname);
     strcpy(out->portal_ssid, s.portal_ssid);
@@ -302,6 +352,12 @@ esp_err_t espos_wifi_get_status(espos_wifi_status_t *out)
     lock();
     snapshot_locked(out);
     unlock();
+    if (out->sm.state == ESPOS_WIFI_ST_CONNECTED && s.drv->rssi) {
+        int8_t r = s.drv->rssi(); /* driver call outside the lock */
+        if (r) {
+            out->rssi = r;
+        }
+    }
     return ESP_OK;
 }
 
@@ -373,12 +429,12 @@ esp_err_t espos_wifi_status_json(char **out_json)
         return ESP_ERR_INVALID_ARG;
     }
     *out_json = NULL;
-    if (!s.lock) {
-        return ESP_ERR_INVALID_STATE;
+    espos_wifi_status_t st;
+    esp_err_t err = espos_wifi_get_status(&st); /* includes the live RSSI */
+    if (err != ESP_OK) {
+        return err;
     }
-    lock();
-    *out_json = status_json_locked();
-    unlock();
+    *out_json = status_to_json(&st);
     return *out_json ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
@@ -508,6 +564,12 @@ esp_err_t espos_wifi_start(void)
             return ESP_ERR_NO_MEM;
         }
     }
+    if (!s.drain_lock) {
+        s.drain_lock = xSemaphoreCreateMutex();
+        if (!s.drain_lock) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
     if (!s.cfg_debounce) {
         s.cfg_debounce = xTimerCreate("wifi_cfg", pdMS_TO_TICKS(150), pdFALSE, NULL, cfg_debounce_cb);
         if (!s.cfg_debounce) {
@@ -545,18 +607,17 @@ esp_err_t espos_wifi_start(void)
     port.portal_start = q_portal_start;
     port.portal_stop = q_portal_stop;
     port.status_changed = on_status_changed;
-    if (!s.drain_lock) {
-        s.drain_lock = xSemaphoreCreateMutex();
-        if (!s.drain_lock) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
     lock();
     espos_wifi_sm_init(&s.sm, &port, NULL, &cfg);
+    s.sm_ready = true;
     unlock();
 
-    ESP_ERROR_CHECK(espos_wifi_register_api());
-    espos_httpd_sse_on_connect(sse_hello, NULL);
+    if (!s.api_registered) {
+        /* URI handlers and the SSE hook survive stop(); register once. */
+        ESP_ERROR_CHECK(espos_wifi_register_api());
+        espos_httpd_sse_on_connect(sse_hello, NULL);
+        s.api_registered = true;
+    }
     espos_config_subscribe(on_config_change, NULL);
     s.started = true;
     ESP_LOGI(TAG, "hostname %s, %u network(s), portal %s", s.hostname, (unsigned)cfg.net_count,
@@ -571,7 +632,12 @@ esp_err_t espos_wifi_stop(void)
         return ESP_OK;
     }
     espos_config_unsubscribe(on_config_change, NULL);
+    xTimerStop(s.cfg_debounce, 0);
     espos_wifi_dispatch(ESPOS_WIFI_EV_STOP, NULL);
     s.started = false;
-    return s.drv->deinit ? s.drv->deinit() : ESP_OK;
+    esp_err_t err = s.drv->deinit ? s.drv->deinit() : ESP_OK;
+    lock();
+    s.sm_ready = false;
+    unlock();
+    return err;
 }

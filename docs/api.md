@@ -158,7 +158,7 @@ the driver cannot scan right now. Requires the JSON content type.
 
 ```json
 {"scanning": false, "age_s": 3,
- "results": [{"ssid": "MOIN", "bssid": "1c:0b:8b:90:da:90", "rssi": -52, "channel": 6, "auth": "wpa2/wpa3"}]}
+ "results": [{"ssid": "Boat", "bssid": "aa:bb:cc:dd:ee:ff", "rssi": -52, "channel": 6, "auth": "wpa2/wpa3"}]}
 ```
 `age_s` is `null` before the first scan. `auth` ∈ `open wep wpa wpa2
 wpa/wpa2 wpa2-enterprise wpa3 wpa2/wpa3 wapi owe other`. Results are cached;

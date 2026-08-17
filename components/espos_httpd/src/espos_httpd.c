@@ -114,7 +114,16 @@ esp_err_t espos_httpd_start(void)
 #endif
     cfg.task_priority = CONFIG_ESPOS_HTTPD_TASK_PRIORITY;
     cfg.lru_purge_enable = true;
-    cfg.max_open_sockets = 4 + CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS; /* streams do not count against LRU */
+    /* Event streams hold a socket each and sit outside the LRU purge; keep
+     * a few for regular requests, but never exceed what lwIP can hand out
+     * (esp_http_server needs three of CONFIG_LWIP_MAX_SOCKETS for itself,
+     * the portal DNS responder one more). */
+    cfg.max_open_sockets = 4 + CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS;
+#ifdef CONFIG_LWIP_MAX_SOCKETS
+    if (cfg.max_open_sockets > CONFIG_LWIP_MAX_SOCKETS - 4) {
+        cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 4;
+    }
+#endif
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {

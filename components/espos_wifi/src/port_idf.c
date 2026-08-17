@@ -5,6 +5,7 @@
  * machine. On ESP32-P4 the same calls reach the C6 co-processor through
  * esp_wifi_remote; nothing here knows the difference.
  */
+#include <inttypes.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -48,6 +49,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         memcpy(link.ssid, e->ssid, n);
         memcpy(link.bssid, e->bssid, 6);
         link.channel = e->channel;
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            link.rssi = ap.rssi; /* we are on the event task, not under the SM lock */
+        }
         espos_wifi_dispatch(ESPOS_WIFI_EV_STA_CONNECTED, &link);
         break;
     }
@@ -65,20 +70,27 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         break;
     }
     case WIFI_EVENT_SCAN_DONE: {
+        const wifi_event_sta_scan_done_t *e = data;
+        if (e && e->status != 0) {
+            ESP_LOGW(TAG, "scan failed (status %" PRIu32 ")", (uint32_t)e->status);
+            esp_wifi_clear_ap_list();
+            espos_wifi_scan_done(NULL, 0);
+            break;
+        }
         uint16_t n = 0;
         esp_wifi_scan_get_ap_num(&n);
         if (n > 20) {
             n = 20;
         }
+        /* heap, not stack: this runs on the (small) system event task */
         wifi_ap_record_t *recs = calloc(n ? n : 1, sizeof(wifi_ap_record_t));
-        espos_wifi_scan_entry_t out[20];
+        espos_wifi_scan_entry_t *out = calloc(n ? n : 1, sizeof(espos_wifi_scan_entry_t));
         size_t count = 0;
-        if (recs && n) {
+        if (recs && out && n) {
             uint16_t got = n;
-            if (esp_wifi_scan_get_ap_records(&got, recs) == ESP_OK) {
-                for (uint16_t i = 0; i < got && count < 20; i++) {
+            if (esp_wifi_scan_get_ap_records(&got, recs) == ESP_OK) { /* also frees the driver list */
+                for (uint16_t i = 0; i < got && count < n; i++) {
                     espos_wifi_scan_entry_t *o = &out[count++];
-                    memset(o, 0, sizeof(*o));
                     strncpy(o->ssid, (const char *)recs[i].ssid, 32);
                     memcpy(o->bssid, recs[i].bssid, 6);
                     o->rssi = recs[i].rssi;
@@ -89,8 +101,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         } else {
             esp_wifi_clear_ap_list();
         }
-        free(recs);
         espos_wifi_scan_done(out, count);
+        free(out);
+        free(recs);
         break;
     }
     case WIFI_EVENT_AP_STACONNECTED:
@@ -131,8 +144,12 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id, void *data
 static esp_err_t p_connect(void *ctx, const espos_wifi_net_t *net)
 {
     (void)ctx;
-    s_disconnect_requested = false;
+    /* NB: s_disconnect_requested is deliberately left as is: the echo of a
+     * disconnect issued just before this connect (same drain) still has to
+     * be swallowed when it arrives during the new attempt. */
     wifi_config_t cfg = { 0 };
+    /* wifi_sta_config_t: ssid[32] / password[64] need not be NUL-terminated
+     * when full; strncpy pads shorter values with NUL. */
     strncpy((char *)cfg.sta.ssid, net->ssid, sizeof(cfg.sta.ssid));
     strncpy((char *)cfg.sta.password, net->psk, sizeof(cfg.sta.password));
     if (net->has_bssid) {
@@ -141,9 +158,9 @@ static esp_err_t p_connect(void *ctx, const espos_wifi_net_t *net)
     }
     cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    /* Refuse to downgrade to open/WEP when a password is configured; WPA3
-     * (SAE, H2E) is accepted when the AP offers it. */
-    cfg.sta.threshold.authmode = net->psk[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    /* With a password configured refuse open/WEP networks (WPA-PSK is the
+     * floor; WPA2 and WPA3-SAE/H2E are negotiated when the AP offers them). */
+    cfg.sta.threshold.authmode = net->psk[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
     cfg.sta.pmf_cfg.capable = true;
     cfg.sta.pmf_cfg.required = false;
     cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
@@ -231,24 +248,32 @@ static void timer_cb(TimerHandle_t t)
     espos_wifi_dispatch(ESPOS_WIFI_EV_TIMER, NULL);
 }
 
+/* Timer commands go through the daemon's queue; from the daemon task itself
+ * we must not block, elsewhere a short wait beats silently losing a state
+ * timeout when the queue is momentarily full. */
+static TickType_t timer_block(void)
+{
+    return xTaskGetCurrentTaskHandle() == xTimerGetTimerDaemonTaskHandle() ? 0 : pdMS_TO_TICKS(100);
+}
+
 static void p_arm_timer(void *ctx, uint32_t ms)
 {
     (void)ctx;
     if (!s_timer) {
         return;
     }
-    TickType_t ticks = pdMS_TO_TICKS(ms);
-    if (ticks == 0) {
-        ticks = 1;
+    /* round UP: the SM ignores a fire that arrives before now_ms()+ms */
+    TickType_t ticks = (ms + portTICK_PERIOD_MS - 1) / portTICK_PERIOD_MS + 1;
+    if (xTimerChangePeriod(s_timer, ticks, timer_block()) != pdPASS) { /* also starts it */
+        ESP_LOGE(TAG, "timer re-arm failed (queue full)");
     }
-    xTimerChangePeriod(s_timer, ticks, 0); /* also starts it */
 }
 
 static void p_cancel_timer(void *ctx)
 {
     (void)ctx;
-    if (s_timer) {
-        xTimerStop(s_timer, 0);
+    if (s_timer && xTimerStop(s_timer, timer_block()) != pdPASS) {
+        ESP_LOGE(TAG, "timer stop failed (queue full)");
     }
 }
 
@@ -291,8 +316,12 @@ static esp_err_t d_init(void)
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         return err;
     }
-    s_sta_netif = esp_netif_create_default_wifi_sta();
-    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (!s_sta_netif) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    }
+    if (!s_ap_netif) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+    }
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init);
     if (err != ESP_OK) {
@@ -301,12 +330,18 @@ static esp_err_t d_init(void)
     }
     /* Credentials live in espos_config; do not let the driver persist its own copy. */
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip_event, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, on_ip_event, NULL));
-    s_timer = xTimerCreate("espos_wifi", pdMS_TO_TICKS(1000), pdFALSE, NULL, timer_cb);
+    static bool handlers_registered;
+    if (!handlers_registered) {
+        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip_event, NULL));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, on_ip_event, NULL));
+        handlers_registered = true;
+    }
     if (!s_timer) {
-        return ESP_ERR_NO_MEM;
+        s_timer = xTimerCreate("espos_wifi", pdMS_TO_TICKS(1000), pdFALSE, NULL, timer_cb);
+        if (!s_timer) {
+            return ESP_ERR_NO_MEM;
+        }
     }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     err = esp_wifi_start();
@@ -325,6 +360,7 @@ static esp_err_t d_deinit(void)
     }
     p_portal_stop(NULL);
     esp_wifi_stop();
+    esp_wifi_deinit(); /* d_init re-inits; netifs, handlers and the timer stay */
     s_inited = false;
     return ESP_OK;
 }

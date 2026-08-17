@@ -115,6 +115,10 @@ static void arm(espos_wifi_sm_t *sm, uint32_t ms, bool is_dhcp)
 {
     sm->timer_is_dhcp = is_dhcp;
     sm->timer_is_portal = false;
+    sm->state_due_ms = now(sm) + ms;
+    if (sm->state_due_ms == 0) {
+        sm->state_due_ms = 1;
+    }
     if (sm->portal_due_ms) {
         uint32_t t = now(sm);
         uint32_t until_portal = (int32_t)(sm->portal_due_ms - t) > 0 ? sm->portal_due_ms - t : 1;
@@ -123,18 +127,38 @@ static void arm(espos_wifi_sm_t *sm, uint32_t ms, bool is_dhcp)
             sm->timer_is_portal = true; /* fires for the portal first; state timeout re-armed after */
         }
     }
+    sm->timer_due_ms = now(sm) + ms;
+    if (sm->timer_due_ms == 0) {
+        sm->timer_due_ms = 1;
+    }
     sm->port->arm_timer(sm->port_ctx, ms);
+}
+
+/* Re-arm the pending state timeout for whatever time it has left. */
+static void rearm_state(espos_wifi_sm_t *sm)
+{
+    if (!sm->state_due_ms) {
+        return;
+    }
+    int32_t left = (int32_t)(sm->state_due_ms - now(sm));
+    bool is_dhcp = sm->st.state == ESPOS_WIFI_ST_OBTAINING_IP;
+    uint32_t due = sm->state_due_ms;
+    arm(sm, left > 0 ? (uint32_t)left : 1, is_dhcp);
+    sm->state_due_ms = due; /* arm() recomputes it; keep the original deadline */
 }
 
 static void arm_portal_only(espos_wifi_sm_t *sm)
 {
+    sm->state_due_ms = 0;
     if (sm->portal_due_ms) {
         uint32_t t = now(sm);
         uint32_t ms = (int32_t)(sm->portal_due_ms - t) > 0 ? sm->portal_due_ms - t : 1;
         sm->timer_is_dhcp = false;
         sm->timer_is_portal = true;
+        sm->timer_due_ms = t + ms ? t + ms : 1;
         sm->port->arm_timer(sm->port_ctx, ms);
     } else {
+        sm->timer_due_ms = 0;
         sm->port->cancel_timer(sm->port_ctx);
     }
 }
@@ -249,6 +273,21 @@ uint32_t espos_wifi_sm_backoff_remaining_ms(const espos_wifi_sm_t *sm)
     return d > 0 ? (uint32_t)d : 0;
 }
 
+static bool nets_equal(const espos_wifi_cfg_t *a, const espos_wifi_cfg_t *b)
+{
+    if (a->net_count != b->net_count) {
+        return false;
+    }
+    for (size_t i = 0; i < a->net_count; i++) {
+        if (strcmp(a->nets[i].ssid, b->nets[i].ssid) != 0 || strcmp(a->nets[i].psk, b->nets[i].psk) != 0 ||
+            a->nets[i].has_bssid != b->nets[i].has_bssid ||
+            (a->nets[i].has_bssid && memcmp(a->nets[i].bssid, b->nets[i].bssid, 6) != 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Does the currently used network still exist unchanged in the new config? */
 static bool current_net_still_valid(const espos_wifi_sm_t *sm, const espos_wifi_cfg_t *ncfg, int *new_index)
 {
@@ -294,6 +333,8 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
             return;
         }
         sm->port->cancel_timer(sm->port_ctx);
+        sm->timer_due_ms = 0;
+        sm->state_due_ms = 0;
         portal_down(sm);
         if (sm->st.state == ESPOS_WIFI_ST_CONNECTED || sm->st.state == ESPOS_WIFI_ST_OBTAINING_IP ||
             sm->st.state == ESPOS_WIFI_ST_CONNECTING) {
@@ -308,7 +349,19 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
     case ESPOS_WIFI_EV_CONFIG: {
         const espos_wifi_cfg_t *ncfg = arg;
         if (memcmp(ncfg, &sm->cfg, sizeof(*ncfg)) == 0) {
-            return; /* nothing relevant changed (e.g. only names/portal cosmetics) */
+            return; /* nothing changed */
+        }
+        if (nets_equal(ncfg, &sm->cfg) && ncfg->sta_enabled == sm->cfg.sta_enabled) {
+            /* timing / portal knobs only: take them, re-evaluate the portal, keep going */
+            sm->cfg = *ncfg;
+            if (sm->started) {
+                portal_policy(sm);
+                if (sm->st.state == ESPOS_WIFI_ST_UNCONFIGURED || sm->st.state == ESPOS_WIFI_ST_DISABLED) {
+                    arm_portal_only(sm);
+                }
+                notify(sm);
+            }
+            return;
         }
         int keep_index = -1;
         bool keep = sm->started && ncfg->sta_enabled &&
@@ -371,8 +424,10 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
     }
 
     case ESPOS_WIFI_EV_GOT_IP:
-        if (sm->st.state != ESPOS_WIFI_ST_OBTAINING_IP && sm->st.state != ESPOS_WIFI_ST_CONNECTED &&
-            sm->st.state != ESPOS_WIFI_ST_CONNECTING) {
+        /* Only after association (first lease) or while connected (renewal).
+         * A lease seen in CONNECTING is stale from the previous association
+         * (the driver always reports STA_CONNECTED before GOT_IP). */
+        if (sm->st.state != ESPOS_WIFI_ST_OBTAINING_IP && sm->st.state != ESPOS_WIFI_ST_CONNECTED) {
             return;
         }
         if (arg) {
@@ -388,6 +443,8 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
         set_state(sm, ESPOS_WIFI_ST_CONNECTED);
         sm->port->cancel_timer(sm->port_ctx);
         sm->timer_is_dhcp = false;
+        sm->state_due_ms = 0;
+        sm->timer_due_ms = 0;
         portal_policy(sm); /* takes the portal down */
         notify(sm);
         return;
@@ -400,8 +457,8 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
             memset(&sm->st.ip, 0, sizeof(sm->st.ip));
             sm->st.reason = ESPOS_WIFI_REASON_LOST_IP;
             set_state(sm, ESPOS_WIFI_ST_OBTAINING_IP);
-            arm(sm, sm->cfg.dhcp_timeout_ms, true);
             portal_policy(sm);
+            arm(sm, sm->cfg.dhcp_timeout_ms, true);
             notify(sm);
         }
         return;
@@ -410,25 +467,29 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
         if (!sm->started) {
             return;
         }
+        /* A fire that was queued behind the lock while we re-armed (or
+         * cancelled) the timer would act on the wrong state: only honour a
+         * fire once its own deadline has passed. Ports round the arm time UP
+         * to whole ticks so a legitimate expiry is never early. */
+        if (sm->timer_due_ms == 0 || (int32_t)(now(sm) - sm->timer_due_ms) < 0) {
+            return;
+        }
+        sm->timer_due_ms = 0;
         if (sm->timer_is_portal) {
             sm->timer_is_portal = false;
             portal_policy(sm);
-            /* re-arm the state timeout for the remaining time */
+            /* the state timeout keeps its original deadline */
             switch (sm->st.state) {
-            case ESPOS_WIFI_ST_BACKOFF: {
-                uint32_t rem = espos_wifi_sm_backoff_remaining_ms(sm);
-                if (rem == 0) {
+            case ESPOS_WIFI_ST_BACKOFF:
+                if (espos_wifi_sm_backoff_remaining_ms(sm) == 0) {
                     start_attempt(sm);
                 } else {
-                    arm(sm, rem, false);
+                    rearm_state(sm);
                 }
                 break;
-            }
             case ESPOS_WIFI_ST_CONNECTING:
-                arm(sm, sm->cfg.connect_timeout_ms, false); /* generous; fine as a safety net */
-                break;
             case ESPOS_WIFI_ST_OBTAINING_IP:
-                arm(sm, sm->cfg.dhcp_timeout_ms, true);
+                rearm_state(sm);
                 break;
             default:
                 arm_portal_only(sm);
@@ -437,6 +498,7 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
             notify(sm);
             return;
         }
+        sm->state_due_ms = 0;
         switch (sm->st.state) {
         case ESPOS_WIFI_ST_BACKOFF:
             start_attempt(sm);
@@ -457,6 +519,33 @@ void espos_wifi_sm_event(espos_wifi_sm_t *sm, espos_wifi_event_t ev, const void 
     case ESPOS_WIFI_EV_PORTAL_CLIENT:
         sm->st.portal_clients = arg ? *(const int *)arg : 0;
         notify(sm);
+        return;
+
+    case ESPOS_WIFI_EV_PORTAL_FAILED:
+        /* the driver could not bring the AP up: forget it and retry in 10 s */
+        if (sm->st.portal_active) {
+            sm->st.portal_active = false;
+            sm->st.portal_clients = 0;
+            sm->portal_due_ms = now(sm) + 10000;
+            if (sm->portal_due_ms == 0) {
+                sm->portal_due_ms = 1;
+            }
+            if (sm->state_due_ms) {
+                rearm_state(sm);
+            } else {
+                arm_portal_only(sm);
+            }
+            notify(sm);
+        }
+        return;
+
+    case ESPOS_WIFI_EV_PORTAL_RECONFIG:
+        /* portal SSID/password changed while it is up: bounce it */
+        if (sm->st.portal_active) {
+            portal_down(sm);
+            portal_policy(sm);
+            notify(sm);
+        }
         return;
     }
 }

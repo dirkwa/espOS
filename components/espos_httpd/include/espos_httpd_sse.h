@@ -9,7 +9,10 @@
  *
  * The stream starts with "retry: 3000". A comment ping goes out every
  * CONFIG_ESPOS_HTTPD_SSE_PING_S seconds so dead sockets are noticed.
- * Publishers may call from any task; sends are serialised.
+ * Publishers may call from any task; sends are serialised and each socket
+ * has a 250 ms send timeout, so a stalled client costs a publisher at most
+ * that before it is dropped. When all slots are taken the oldest stream is
+ * evicted (clients reconnect).
  */
 #pragma once
 

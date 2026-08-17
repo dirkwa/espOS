@@ -439,6 +439,99 @@ TEST_CASE("stop: disconnects, portal down, timer cancelled; start again works", 
     TEST_ASSERT_EQUAL(2, F.connects);
 }
 
+TEST_CASE("portal start failure is retried, not believed", "[wifi_sm]")
+{
+    espos_wifi_cfg_t c = cfg_with(NULL, NULL);
+    reset(&c);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_START, NULL);
+    TEST_ASSERT_TRUE(ST()->portal_active);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_PORTAL_FAILED, NULL);
+    TEST_ASSERT_FALSE(ST()->portal_active);
+    TEST_ASSERT_TRUE(F.timer_armed);
+    TEST_ASSERT_EQUAL_UINT32(F.now + 10000, F.timer_due);
+    tick(10000);
+    TEST_ASSERT_TRUE(ST()->portal_active);
+    TEST_ASSERT_EQUAL(2, F.portal_starts);
+}
+
+TEST_CASE("timing/portal knob changes do not restart an attempt", "[wifi_sm]")
+{
+    espos_wifi_cfg_t c = cfg_with("Boat", NULL);
+    reset(&c);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_START, NULL);
+    TEST_ASSERT_EQUAL(1, F.connects);
+    espos_wifi_cfg_t c2 = c;
+    c2.backoff_max_ms = 30000;
+    c2.portal_after_ms = 5000;
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_CONFIG, &c2);
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_CONNECTING, ST()->state);
+    TEST_ASSERT_EQUAL(1, F.connects);                        /* no restart */
+    TEST_ASSERT_EQUAL_UINT32(30000, SM.cfg.backoff_max_ms);  /* but taken */
+    /* a stale lease (GOT_IP without a preceding association) is ignored */
+    ev_got_ip();
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_CONNECTING, ST()->state);
+    ev_connected("Boat");
+    ev_got_ip();
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_CONNECTED, ST()->state);
+}
+
+TEST_CASE("a timer fire that is early for the currently armed deadline is ignored", "[wifi_sm]")
+{
+    espos_wifi_cfg_t c = cfg_with("Boat", NULL);
+    reset(&c);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_START, NULL);
+    ev_disconnected(201);                                    /* BACKOFF, armed for 750 ms */
+    /* a fire queued from a previous arm arrives now (before the deadline) */
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_TIMER, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_BACKOFF, ST()->state);
+    TEST_ASSERT_EQUAL(1, F.connects);
+    tick(750);                                               /* the real one */
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_CONNECTING, ST()->state);
+    TEST_ASSERT_EQUAL(2, F.connects);
+    /* after GOT_IP the timer is cancelled: a late fire does nothing */
+    ev_connected("Boat");
+    ev_got_ip();
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_TIMER, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_CONNECTED, ST()->state);
+}
+
+TEST_CASE("portal deadline firing does not extend the DHCP/connect timeout", "[wifi_sm]")
+{
+    espos_wifi_cfg_t c = cfg_with("Boat", NULL);
+    c.portal_after_ms = 3000;
+    c.dhcp_timeout_ms = 10000;
+    reset(&c);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_START, NULL);
+    ev_connected("Boat");                                    /* dhcp timer: due at +10 s */
+    uint32_t dhcp_due = F.now + 10000;
+    TEST_ASSERT_TRUE(F.timer_due < dhcp_due);                /* portal deadline (+3 s) pre-empts */
+    tick(3000);                                              /* portal fires */
+    TEST_ASSERT_TRUE(ST()->portal_active);
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_ST_OBTAINING_IP, ST()->state);
+    TEST_ASSERT_EQUAL_UINT32(dhcp_due, F.timer_due);         /* original deadline kept */
+    tick(7000);
+    TEST_ASSERT_EQUAL(ESPOS_WIFI_REASON_DHCP_TIMEOUT, ST()->reason);
+}
+
+TEST_CASE("portal reconfig bounces a running portal only", "[wifi_sm]")
+{
+    espos_wifi_cfg_t c = cfg_with(NULL, NULL);
+    reset(&c);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_START, NULL);
+    TEST_ASSERT_EQUAL(1, F.portal_starts);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_PORTAL_RECONFIG, NULL);
+    TEST_ASSERT_EQUAL(1, F.portal_stops);
+    TEST_ASSERT_EQUAL(2, F.portal_starts);
+    TEST_ASSERT_TRUE(ST()->portal_active);
+    espos_wifi_cfg_t c2 = cfg_with("Boat", NULL);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_CONFIG, &c2);
+    ev_connected("Boat");
+    ev_got_ip();
+    TEST_ASSERT_FALSE(ST()->portal_active);
+    espos_wifi_sm_event(&SM, ESPOS_WIFI_EV_PORTAL_RECONFIG, NULL); /* nothing to bounce */
+    TEST_ASSERT_EQUAL(2, F.portal_starts);
+}
+
 TEST_CASE("portal client count is tracked", "[wifi_sm]")
 {
     espos_wifi_cfg_t c = cfg_with(NULL, NULL);

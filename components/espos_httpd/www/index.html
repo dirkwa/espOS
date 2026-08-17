@@ -71,8 +71,8 @@ $("wform").onsubmit = async e => {
   $("msg").textContent = r.ok ? "saved — connecting…" : `error: ${r.js && (r.js.message || r.js.error)}`;
 };
 $("scan").onclick = async () => {
-  await api("POST", "/api/v1/wifi/scan", {});
-  $("msg").textContent = "scanning…";
+  const r = await api("POST", "/api/v1/wifi/scan", {});
+  $("msg").textContent = r.ok ? "scanning…" : `scan failed: ${r.js && (r.js.message || r.js.error)}`;
 };
 function fillScan(s) {
   const dl = $("ssids"); dl.innerHTML = "";
