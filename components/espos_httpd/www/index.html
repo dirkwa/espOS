@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>espOS</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; color: #222; }
+  h1 { font-weight: 600; margin-bottom: 0; }
+  .sub { color: #666; margin-top: .25rem; }
+  pre { background: #f4f4f4; padding: .75rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, monospace; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0 1rem; }
+  button { padding: .4rem .8rem; }
+</style>
+</head>
+<body>
+<h1>espOS</h1>
+<p class="sub">Placeholder page — the web UI arrives in milestone M5. The API is live.</p>
+<h3>System</h3>
+<pre id="info">loading…</pre>
+<h3>Configuration</h3>
+<div class="row">
+  <button id="reload">Reload</button>
+  <a href="/api/v1/config/schema" target="_blank"><button type="button">Schema</button></a>
+</div>
+<pre id="cfg">loading…</pre>
+<script>
+async function load() {
+  for (const [id, url] of [["info", "/api/v1/system/info"], ["cfg", "/api/v1/config"]]) {
+    try {
+      const r = await fetch(url);
+      document.getElementById(id).textContent = JSON.stringify(await r.json(), null, 2);
+    } catch (e) {
+      document.getElementById(id).textContent = String(e);
+    }
+  }
+}
+document.getElementById("reload").onclick = load;
+load();
+</script>
+</body>
+</html>

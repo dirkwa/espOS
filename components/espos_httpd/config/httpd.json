@@ -1,0 +1,18 @@
+{
+  "namespace": "httpd",
+  "version": 1,
+  "title": "HTTP server",
+  "description": "Built-in web server serving the UI and the REST API.",
+  "keys": [
+    {
+      "name": "port",
+      "type": "int",
+      "default": 80,
+      "min": 1,
+      "max": 65535,
+      "title": "TCP port",
+      "description": "Port the HTTP server listens on.",
+      "restart_required": true
+    }
+  ]
+}
