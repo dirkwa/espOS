@@ -16,9 +16,7 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_httpd.h"
-#if CONFIG_SOC_WIFI_SUPPORTED
-#include "net_bootstrap.h"
-#endif
+#include "espos_wifi.h"
 
 static const char *TAG = "app";
 
@@ -33,10 +31,8 @@ void app_main(void)
     ESP_ERROR_CHECK(espos_config_init(NULL, NULL));
     ESP_ERROR_CHECK(espos_config_subscribe(on_config_change, NULL));
 
-#if CONFIG_SOC_WIFI_SUPPORTED
-    ESP_ERROR_CHECK(net_bootstrap_start());
-#endif
     ESP_ERROR_CHECK(espos_httpd_start());
+    ESP_ERROR_CHECK(espos_wifi_start());
 
     char label[33];
     for (;;) {

@@ -15,3 +15,9 @@ ui/node_modules/
 ui/dist/
 .vscode/
 *.log
+# Factory-provisioning inputs and images (contain WiFi passwords / tokens)
+provisioning/
+*.nvs.csv
+*.nvs.bin
+secrets/
+*.secret
