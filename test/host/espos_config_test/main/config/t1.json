@@ -1,0 +1,15 @@
+{
+  "namespace": "t1",
+  "version": 1,
+  "title": "Test namespace 1",
+  "keys": [
+    {"name": "flag", "type": "bool", "default": true},
+    {"name": "count", "type": "int", "default": 42, "min": -100, "max": 1000, "restart_required": true},
+    {"name": "any_int", "type": "int"},
+    {"name": "ratio", "type": "float", "default": 0.1, "min": 0.0, "max": 10.0},
+    {"name": "any_float", "type": "float", "default": -1.5},
+    {"name": "name", "type": "string", "default": "hello", "maxLength": 8},
+    {"name": "mode", "type": "string", "default": "b", "enum": ["a", "b", "ccc"]},
+    {"name": "blob", "type": "blob", "maxLength": 8}
+  ]
+}

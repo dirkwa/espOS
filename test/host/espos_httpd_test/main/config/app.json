@@ -1,0 +1,65 @@
+{
+  "$comment": "Example application namespace. Exercises every descriptor type; replace with your app's keys.",
+  "namespace": "app",
+  "version": 1,
+  "title": "Example app",
+  "description": "Settings of the example application in main/.",
+  "keys": [
+    {
+      "name": "label",
+      "type": "string",
+      "default": "espOS device",
+      "maxLength": 32,
+      "title": "Label",
+      "description": "Free-text name shown in the UI."
+    },
+    {
+      "name": "enabled",
+      "type": "bool",
+      "default": true,
+      "title": "Enabled",
+      "description": "Master switch for the example task."
+    },
+    {
+      "name": "interval_ms",
+      "type": "int",
+      "default": 1000,
+      "min": 100,
+      "max": 60000,
+      "unit": "ms",
+      "title": "Interval",
+      "description": "How often the example task logs a heartbeat."
+    },
+    {
+      "name": "scale",
+      "type": "float",
+      "default": 1.0,
+      "min": 0.0,
+      "max": 100.0,
+      "title": "Scale factor"
+    },
+    {
+      "name": "mode",
+      "type": "string",
+      "default": "auto",
+      "enum": ["auto", "manual"],
+      "title": "Mode"
+    },
+    {
+      "name": "api_key",
+      "type": "string",
+      "default": "",
+      "maxLength": 64,
+      "secret": true,
+      "title": "API key",
+      "description": "Demonstrates a secret: never read back over the API."
+    },
+    {
+      "name": "cal_table",
+      "type": "blob",
+      "maxLength": 64,
+      "title": "Calibration table",
+      "description": "Opaque bytes, base64 over the API."
+    }
+  ]
+}

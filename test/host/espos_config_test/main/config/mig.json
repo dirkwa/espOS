@@ -1,0 +1,9 @@
+{
+  "namespace": "mig",
+  "version": 3,
+  "title": "Migration test namespace",
+  "keys": [
+    {"name": "speed_ms", "type": "int", "default": 500, "min": 0, "max": 100000},
+    {"name": "label", "type": "string", "default": "x", "maxLength": 16}
+  ]
+}

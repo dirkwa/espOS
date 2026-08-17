@@ -1,0 +1,7 @@
+{
+  "$comment": "Version 20 so migration-table-full paths can be exercised.",
+  "namespace": "big",
+  "version": 20,
+  "title": "Many versions",
+  "keys": [{"name": "v", "type": "int", "default": 0}]
+}

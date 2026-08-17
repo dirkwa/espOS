@@ -1,0 +1,10 @@
+{
+  "namespace": "sec",
+  "version": 1,
+  "title": "Secrets",
+  "keys": [
+    {"name": "password", "type": "string", "default": "", "maxLength": 32, "secret": true},
+    {"name": "key_blob", "type": "blob", "maxLength": 16, "secret": true},
+    {"name": "public", "type": "string", "default": "pub", "maxLength": 32}
+  ]
+}
