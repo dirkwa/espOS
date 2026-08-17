@@ -365,6 +365,139 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(st, 200)
 
 
+# ------------------------------------------------------------ SignalK mock
+
+import http.server
+import threading
+import uuid as _uuid
+
+
+class MockSignalK:
+    """Just enough of signalk-server's security API for the token flow, plus
+    /__test/* controls. Runs in a thread on an ephemeral port."""
+
+    def __init__(self, self_urn="urn:mrn:signalk:uuid:0e6d1a1a-1111-4111-8111-000000000099"):
+        self.self_urn = self_urn
+        self.security = True
+        self.device_requests = True
+        self.requests = {}      # requestId -> dict(clientId, state, permission, token)
+        self.tokens = {}        # token -> clientId (valid)
+        self.log = []
+        mock = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, obj=None, raw=None, ctype="application/json"):
+                body = raw if raw is not None else (json.dumps(obj).encode() if obj is not None else b"")
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                mock.log.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path == "/signalk":
+                    return self._send(200, {"endpoints": {"v1": {"version": "2.31.1"}}})
+                if self.path.startswith("/signalk/v1/requests/"):
+                    rid = self.path.rsplit("/", 1)[1]
+                    r = mock.requests.get(rid)
+                    if not r:
+                        return self._send(500, raw=b"Unable to check request: not found", ctype="text/plain")
+                    reply = {"state": r["state"], "requestId": rid, "statusCode": 202 if r["state"] == "PENDING" else 200,
+                             "href": "/signalk/v1/requests/" + rid}
+                    if r["state"] == "COMPLETED":
+                        reply["accessRequest"] = {"permission": r["permission"]}
+                        if r.get("token"):
+                            reply["accessRequest"]["token"] = r["token"]
+                    return self._send(200, reply)
+                if self.path == "/signalk/v1/api/self":
+                    if not mock.security:
+                        return self._send(200, "vessels." + mock.self_urn)
+                    auth = self.headers.get("Authorization", "")
+                    tok = auth[7:] if auth.startswith("Bearer ") else ""
+                    if tok and tok in mock.tokens:
+                        return self._send(200, "vessels." + mock.self_urn)
+                    return self._send(401, raw=b"Unauthorized", ctype="text/plain")
+                if self.path.startswith("/__test/"):
+                    parts = self.path.split("/")
+                    cmd, arg = parts[2], (parts[3] if len(parts) > 3 else "")
+                    if cmd == "approve":
+                        for rid, r in mock.requests.items():
+                            if r["clientId"] == arg and r["state"] == "PENDING":
+                                tok = "mock." + _uuid.uuid4().hex
+                                r.update(state="COMPLETED", permission="APPROVED", token=tok)
+                                mock.tokens[tok] = arg
+                                return self._send(200, {"token": tok})
+                        return self._send(404, {"error": "no pending"})
+                    if cmd == "deny":
+                        for rid, r in mock.requests.items():
+                            if r["clientId"] == arg and r["state"] == "PENDING":
+                                r.update(state="COMPLETED", permission="DENIED")
+                                return self._send(200, {})
+                        return self._send(404, {"error": "no pending"})
+                    if cmd == "revoke":
+                        mock.tokens = {t: c for t, c in mock.tokens.items() if c != arg}
+                        return self._send(200, {})
+                    if cmd == "forget":
+                        mock.requests.clear()
+                        return self._send(200, {})
+                    if cmd == "issue":       # mint a token without a request (manual paste)
+                        tok = "manual." + _uuid.uuid4().hex
+                        mock.tokens[tok] = arg
+                        return self._send(200, {"token": tok})
+                    if cmd == "security":
+                        mock.security = arg == "on"
+                        return self._send(200, {})
+                    if cmd == "devreq":
+                        mock.device_requests = arg == "on"
+                        return self._send(200, {})
+                    if cmd == "log":
+                        return self._send(200, mock.log)
+                return self._send(404, {"error": "nope"})
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                mock.log.append(("POST", self.path, body))
+                if self.path == "/signalk/v1/access/requests":
+                    if not mock.security:
+                        return self._send(404, {"message": "Access requests not available. Server security is not enabled."})
+                    if not mock.device_requests:
+                        return self._send(403, {"state": "COMPLETED", "statusCode": 403})
+                    cid = body.get("clientId")
+                    for rid, r in mock.requests.items():
+                        if r["clientId"] == cid and r["state"] == "PENDING":
+                            return self._send(400, {"state": "COMPLETED", "statusCode": 400,
+                                                    "message": f"A device with clientId '{cid}' has already requested access"})
+                    rid = str(_uuid.uuid4())
+                    mock.requests[rid] = {"clientId": cid, "state": "PENDING", "permission": "", "description": body.get("description")}
+                    return self._send(202, {"state": "PENDING", "requestId": rid, "statusCode": 202,
+                                            "href": "/signalk/v1/requests/" + rid})
+                return self._send(404, {"error": "nope"})
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def ctl(self, cmd, arg=""):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", f"/__test/{cmd}/{arg}")
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        return r.status, (json.loads(raw) if raw else None)
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
 class SseReader:
     """Minimal text/event-stream client on a raw socket (stdlib only)."""
 
@@ -540,7 +673,7 @@ class WifiTests(unittest.TestCase):
         self.assertEqual(first[1][0], "wifi")
         # the oldest reader now sees EOF (its socket was shut down)
         got = list(readers[0].events(timeout=2))
-        self.assertTrue(all(e in ("retry", "wifi", "comment") for e, _ in got))
+        self.assertTrue(all(e in ("retry", "wifi", "sk", "sk_servers", "comment") for e, _ in got))
         readers[0].sock.settimeout(1.0)
         try:
             eof = readers[0].sock.recv(10) == b""
@@ -592,6 +725,144 @@ class WifiFailureTests(unittest.TestCase):
         js2 = wait_for(lambda: (lambda r: r[3] if r[3]["round"] >= 2 else None)(req("GET", "/api/v1/wifi/status")), timeout=6)
         self.assertIsNotNone(js2)
         self.assertGreaterEqual(js2["attempt"], 3)
+
+
+def sk_status():
+    st, _, _, js = req("GET", "/api/v1/sk/status")
+    assert st == 200, js
+    return js
+
+
+def wait_sk(pred, timeout=15.0):
+    return wait_for(lambda: (lambda js: js if pred(js) else None)(sk_status()), timeout=timeout, step=0.25)
+
+
+class SkTests(unittest.TestCase):
+    """SignalK discovery + token flow against MockSignalK (real HTTP)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockSignalK()
+        servers = f"127.0.0.1,{cls.mock.port},{cls.mock.self_urn},mockboat"
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_SK_SERVERS": servers})
+        # simulated WiFi must be up for discovery to fire promptly
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}, "sk": {"check_s": 10}})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.mock.stop()
+
+    def test_01_discovery_selects_server_and_requests_access(self):
+        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=20)
+        self.assertIsNotNone(js, sk_status())
+        self.assertEqual(js["server"]["host"], "127.0.0.1")
+        self.assertEqual(js["server"]["port"], self.mock.port)
+        self.assertEqual(js["server"]["self"], self.mock.self_urn)
+        self.assertEqual(js["server"]["source"], "discovered")
+        self.assertTrue(js["token"]["pending_href"].startswith("/signalk/v1/requests/"))
+        self.assertEqual(len(js["client_id"]), 36)
+        self.assertEqual(js["description"], "espOS espos-1a2b")
+        self.assertEqual(js["permissions"], "readwrite")
+        st, _, _, srv = req("GET", "/api/v1/sk/servers")
+        self.assertEqual(st, 200)
+        self.assertEqual(len(srv["servers"]), 1)
+        self.assertTrue(srv["servers"][0]["selected"])
+        # the request the mock saw carries our identity
+        posted = [b for m, p, b in self.mock.ctl("log")[1] if m == "POST"]
+        self.assertEqual(posted[-1]["clientId"], js["client_id"])
+        self.assertEqual(posted[-1]["permissions"], "readwrite")
+
+    def test_02_approve_yields_token_verified(self):
+        cid = sk_status()["client_id"]
+        st, js = self.mock.ctl("approve", cid)
+        self.assertEqual(st, 200, js)
+        js = wait_sk(lambda j: j["token"]["state"] == "approved", timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        self.assertTrue(js["token"]["has_token"])
+        self.assertEqual(js["token"]["counts"]["approved"], 1)
+        self.assertNotIn("pending_href", js["token"])
+        # secrets: token never appears in the status document
+        self.assertNotIn("mock.", json.dumps(js))
+
+    def test_03_revoke_is_detected_and_re_requested(self):
+        cid = sk_status()["client_id"]
+        self.mock.ctl("revoke", cid)
+        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=25)   # check_s = 10
+        self.assertIsNotNone(js, sk_status())
+        self.assertEqual(js["token"]["counts"]["unauthorized"], 1)
+        self.assertFalse(js["token"]["has_token"])
+
+    def test_04_deny_then_user_retry(self):
+        cid = sk_status()["client_id"]
+        self.mock.ctl("deny", cid)
+        js = wait_sk(lambda j: j["token"]["state"] == "denied", timeout=70)     # poll backoff ≤ 60 s
+        self.assertIsNotNone(js, sk_status())
+        self.assertIn("denied", js["token"]["last_error"])
+        time.sleep(1.0)
+        self.assertEqual(sk_status()["token"]["state"], "denied")           # no auto retry
+        st, _, _, _ = req("POST", "/api/v1/sk/request", None)
+        self.assertEqual(st, 202)
+        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=10)
+        self.assertIsNotNone(js)
+
+    def test_05_server_forgets_request_404_re_request(self):
+        before = sk_status()["token"]["counts"]["requests"]
+        self.mock.ctl("forget")
+        js = wait_sk(lambda j: j["token"]["counts"]["requests"] > before, timeout=70)
+        self.assertIsNotNone(js, sk_status())
+        self.assertEqual(js["token"]["state"], "pending")
+
+    def test_06_manual_token_paste(self):
+        cid = sk_status()["client_id"]
+        st, js = self.mock.ctl("issue", cid)
+        tok = js["token"]
+        st, _, _, js = req("POST", "/api/v1/sk/token", {"token": tok})
+        self.assertEqual(st, 202)
+        js = wait_sk(lambda j: j["token"]["state"] == "approved", timeout=10)
+        self.assertIsNotNone(js, sk_status())
+        # bad requests
+        st, _, _, js = req("POST", "/api/v1/sk/token", {"nope": 1})
+        self.assertEqual(st, 400)
+        st, _, _, js = req("POST", "/api/v1/sk/token", {"token": "x"}, content_type=None)
+        self.assertEqual(st, 415)
+
+    def test_07_forget_and_sse_events(self):
+        sse = SseReader()
+        hello = list(itertools.islice(sse.events(timeout=3), 4))
+        kinds = [e for e, _ in hello]
+        self.assertIn("sk", kinds)
+        self.assertIn("sk_servers", kinds)
+        self.mock.ctl("forget")   # the request left pending on the server would 400 (duplicate)
+        st, _, _, _ = req("POST", "/api/v1/sk/forget", None)
+        self.assertEqual(st, 202)
+        seen = []
+        for ev, data in sse.events(timeout=10):
+            if ev == "sk":
+                seen.append(json.loads(data)["token"]["state"])
+                if seen[-1] == "pending":
+                    break
+        sse.close()
+        self.assertIn("pending", seen)
+        self.assertFalse(sk_status()["token"]["has_token"])
+
+    def test_08_security_disabled_means_open(self):
+        self.mock.ctl("security", "off")
+        self.mock.ctl("forget")
+        st, _, _, _ = req("POST", "/api/v1/sk/forget", None)   # start from scratch → POST → 404 → open
+        js = wait_sk(lambda j: j["token"]["state"] == "open", timeout=10)
+        self.assertIsNotNone(js, sk_status())
+        self.mock.ctl("security", "on")
+
+    def test_09_manual_host_config_wins_over_discovery(self):
+        st, _, _, _ = req("PUT", "/api/v1/config", {"sk": {"server_host": "127.0.0.1", "server_port": self.mock.port}})
+        self.assertEqual(st, 200)
+        js = wait_sk(lambda j: j["server"].get("source") == "manual", timeout=10)
+        self.assertIsNotNone(js, sk_status())
+        self.assertEqual(js["server"]["host"], "127.0.0.1")
+        req("PUT", "/api/v1/config", {"sk": {"server_host": None, "server_port": None}})
+        js = wait_sk(lambda j: j["server"].get("source") == "discovered", timeout=10)
+        self.assertIsNotNone(js, sk_status())
 
 
 if __name__ == "__main__":

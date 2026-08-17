@@ -17,6 +17,7 @@
 #include "espos_config.h"
 #include "espos_httpd.h"
 #include "espos_wifi.h"
+#include "espos_sk.h"
 
 static const char *TAG = "app";
 
@@ -33,6 +34,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(espos_httpd_start());
     ESP_ERROR_CHECK(espos_wifi_start());
+    ESP_ERROR_CHECK(espos_sk_start());
 
     char label[33];
     for (;;) {

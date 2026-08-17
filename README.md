@@ -18,7 +18,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 |-----------|--------------------------------------------------|-------|
 | M1        | Config store + minimal HTTP server + JSON Schema | ✅ implemented, host-tested |
 | M2        | WiFi state machine with reason codes             | ✅ implemented, host-tested, live on ESP32-P4 (BLE provisioning pending) |
-| M3        | SignalK discovery + token state machine          | planned |
+| M3        | SignalK discovery + token state machine          | ✅ implemented, host-tested against signalk-server 2.31, live on ESP32-P4 |
 | M4        | WebSocket deltas + meta reconciliation           | planned |
 | M5        | Web UI (Vite SPA)                                | planned |
 | M6        | Signed OTA with rollback                         | planned |
@@ -41,6 +41,10 @@ Recorded here so nothing is silently applied (plan §7):
   (P4-only) because the chip has no radio; approved 2026-08-18.
 * M2 ships the SoftAP captive portal; BLE provisioning
   (`espressif/network_provisioning`) is a follow-up, as agreed.
+* M3 adds `espressif/mdns` (registry, exact-pinned) for discovery, approved
+  2026-08-18. Discovery of `_signalk-ws._tcp` is folded into the
+  `_signalk-http._tcp` browse (every server advertises both with the same
+  TXT records; the ws endpoint comes from `GET /signalk`).
 * Delta buffering during offline periods (listed under M2) lands with the
   delta pipeline in M4 — there is nothing to buffer before that.
 
@@ -55,7 +59,8 @@ curl http://<device-ip>/api/v1/wifi/status
 ```
 
 Docs: [REST API contract](docs/api.md) · [Config store &
-descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [Development & host
+descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
+discovery & token](docs/signalk.md) · [Development & host
 tests](docs/development.md) · [Security notes](docs/security.md)
 
 ## Layout
@@ -64,6 +69,7 @@ tests](docs/development.md) · [Security notes](docs/security.md)
 components/espos_config/   NVS-backed config store, build-time descriptor → schema/tables
 components/espos_httpd/    esp_http_server, /api/v1, SSE, static UI
 components/espos_wifi/     station manager + portal (state machine host-testable)
+components/espos_sk/       SignalK discovery + access-token state machine
 main/                      example app
 tools/                     generators
 test/host/                 linux-target tests (no hardware needed)
