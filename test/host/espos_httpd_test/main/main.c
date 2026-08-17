@@ -21,6 +21,7 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_httpd.h"
+#include "espos_wifi.h"
 
 static const char *TAG = "harness";
 static volatile sig_atomic_t s_terminate;
@@ -50,6 +51,10 @@ void app_main(void)
     setvbuf(stdout, NULL, _IOLBF, 0); /* the runner reads us through a pipe */
     signal(SIGTERM, on_sigterm);
     signal(SIGINT, on_sigterm);
+    /* A write to a socket whose peer went away raises SIGPIPE on Linux (no
+     * such thing on lwIP); without this the harness dies silently the first
+     * time an SSE client disconnects. */
+    signal(SIGPIPE, SIG_IGN);
     esp_register_shutdown_handler(cleanup_flash_file);
     const char *port_env = getenv("ESPOS_TEST_PORT");
     int port = port_env ? atoi(port_env) : 18080;
@@ -61,6 +66,7 @@ void app_main(void)
     /* The harness overrides the configured port so the runner can pick one. */
     ESP_ERROR_CHECK(espos_config_set_i32(ESPOS_CFG_NS_HTTPD, ESPOS_CFG_HTTPD_PORT, port));
     ESP_ERROR_CHECK(espos_httpd_start());
+    ESP_ERROR_CHECK(espos_wifi_start()); /* simulated driver on the host, see port_sim.c */
     /* Announce readiness with a raw write loop: stdio gives up on EINTR
      * (which the simulator's tick signals can cause) and would silently drop
      * the line. */
