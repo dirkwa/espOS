@@ -174,8 +174,16 @@ TEST_CASE("404 on poll: server lost the request → re-request", "[sk_tok]")
     /* signalk-server answers 500 "Unable to check request: not found" — same */
     request_result(202, "/signalk/v1/requests/def", NULL);
     tick(5000);
-    poll_result(500, NULL, NULL, NULL);
+    espos_sk_http_result_t r = { .http_status = 500 };
+    strcpy(r.message, "Unable to check request: not found");
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_POLL_RESULT, &r);
     TEST_ASSERT_EQUAL(3, F.requests);
+    /* a plain 500 (server hiccup) is transient: keep the pending request */
+    request_result(202, "/signalk/v1/requests/ghi", NULL);
+    tick(5000);
+    poll_result(500, NULL, NULL, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_ERROR, ST()->state);
+    TEST_ASSERT_EQUAL_STRING("/signalk/v1/requests/ghi", F.saved.pending_href);
 }
 
 TEST_CASE("reboot mid-approval resumes polling the stored href", "[sk_tok]")
@@ -277,7 +285,7 @@ TEST_CASE("manual server without self: token verified, self learned and stored",
     TEST_ASSERT_EQUAL_STRING("urn:mrn:signalk:uuid:cccc", ST()->server.self);
 }
 
-TEST_CASE("security disabled on the server: OPEN, re-checked, requests when enabled", "[sk_tok]")
+TEST_CASE("security disabled on the server: OPEN, re-probed by POST, requests when enabled", "[sk_tok]")
 {
     reset(NULL);
     espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
@@ -285,13 +293,70 @@ TEST_CASE("security disabled on the server: OPEN, re-checked, requests when enab
     request_result(404, NULL, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_OPEN, ST()->state);
     tick(60000);
-    TEST_ASSERT_EQUAL(1, F.verifies);
-    verify_result(200, "urn:mrn:signalk:uuid:aaaa");
+    TEST_ASSERT_EQUAL(2, F.requests);                                              /* probe = re-POST */
+    TEST_ASSERT_EQUAL(0, F.verifies);                                              /* GET /self is blind with allow_readonly */
+    request_result(404, NULL, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_OPEN, ST()->state);
     tick(60000);
-    verify_result(401, NULL);                                                     /* security switched on */
-    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_IDLE, ST()->state);
+    request_result(202, "/signalk/v1/requests/x", NULL);                          /* security switched on */
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_REQUESTED, ST()->state);
+    TEST_ASSERT_EQUAL(3, F.requests);
+}
+
+TEST_CASE("a host that is not a SignalK server (599) is an error, not 'open'", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_MANUAL);
+    request_result(599, NULL, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_ERROR, ST()->state);
+    TEST_ASSERT_NOT_NULL(strstr(ST()->last_error, "not a SignalK"));
+}
+
+TEST_CASE("error retry re-evaluates: a token kept for another server is not verified against this one", "[sk_tok]")
+{
+    espos_sk_tok_store_t st = { .token = "tok.en.3", .token_self = "urn:mrn:signalk:uuid:aaaa" };
+    reset(&st);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_B);                           /* other server → request */
+    request_result(0, NULL, NULL);                                                /* unreachable */
+    tick(F.timer_due - F.now);
+    TEST_ASSERT_EQUAL(0, F.verifies);
     TEST_ASSERT_EQUAL(2, F.requests);
+    TEST_ASSERT_EQUAL_STRING("tok.en.3", SM.store.token);
+}
+
+TEST_CASE("self URN becoming known for the same server is not a server change", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_MANUAL);
+    request_result(202, "/signalk/v1/requests/abc", NULL);
+    tick(5000);
+    poll_result(200, "COMPLETED", "DENIED", NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_DENIED, ST()->state);
+    espos_sk_server_t known = SRV_MANUAL;
+    strcpy(known.self, "urn:mrn:signalk:uuid:cccc");
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &known);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_DENIED, ST()->state);                           /* not re-requested */
+    TEST_ASSERT_EQUAL(1, F.requests);
+    TEST_ASSERT_EQUAL_STRING("urn:mrn:signalk:uuid:cccc", ST()->server.self);
+    /* but a different self on the same address is a reinstalled server */
+    strcpy(known.self, "urn:mrn:signalk:uuid:dddd");
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &known);
+    TEST_ASSERT_EQUAL(2, F.requests);
+}
+
+TEST_CASE("manual token with no server yet is kept and verified once a server appears", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_MANUAL_TOKEN, "pasted.tok");
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_NO_SERVER, ST()->state);
+    TEST_ASSERT_EQUAL_STRING("pasted.tok", F.saved.token);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);
+    TEST_ASSERT_EQUAL(1, F.verifies);
+    TEST_ASSERT_EQUAL_STRING("pasted.tok", F.last_verify_token);
 }
 
 TEST_CASE("device requests disabled (403) → denied with message", "[sk_tok]")
@@ -382,11 +447,32 @@ TEST_CASE("stale results and stale timers are ignored; stop cancels", "[sk_tok]"
     /* start again: the known server is resumed (pending poll) */
     espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
     TEST_ASSERT_EQUAL(1, F.polls);
+    poll_result(200, "PENDING", NULL, NULL);                                      /* answer lands */
     /* server goes away → NO_SERVER; comes back → resumes pending */
     espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_NO_SERVER, ST()->state);
     espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);
     TEST_ASSERT_EQUAL(2, F.polls);
+}
+
+TEST_CASE("server change while an action is in flight: the stale answer is dropped", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);                           /* request to A in flight */
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_B);                           /* switch while busy */
+    TEST_ASSERT_TRUE(ST()->busy);
+    TEST_ASSERT_EQUAL(1, F.requests);
+    request_result(202, "/signalk/v1/requests/for-A", NULL);                      /* A's answer arrives */
+    TEST_ASSERT_EQUAL_STRING("", F.saved.pending_href);                            /* not attributed to B */
+    TEST_ASSERT_EQUAL(2, F.requests);                                              /* fresh request to B */
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_IDLE, ST()->state);
+    /* manual token while busy waits for the answer, then verifies */
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_MANUAL_TOKEN, "pasted");
+    TEST_ASSERT_EQUAL(0, F.verifies);
+    request_result(202, "/signalk/v1/requests/for-B", NULL);
+    TEST_ASSERT_EQUAL(1, F.verifies);
+    TEST_ASSERT_EQUAL_STRING("pasted", F.last_verify_token);
 }
 
 TEST_CASE("state names", "[sk_tok]")

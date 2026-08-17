@@ -183,8 +183,11 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 | `wifi_scan` | the `/wifi/scan` document            | scan finished                          |
 | `config`    | `{"ns": "...", "key": "..."}`         | a key's effective value changed        |
 
-At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; the next gets
-`503 too_many_streams`. Later milestones add `sk` events.
+| `sk`        | the `/sk/status` document            | on connect and every token/server change |
+| `sk_servers`| the `/sk/servers` document           | on connect and after each discovery pass |
+
+At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
+oldest stream is evicted (clients reconnect via `retry`).
 
 ## SignalK
 
@@ -213,8 +216,8 @@ open error`; `pending_href`/`pending_s` while pending; `server.source` ∈
 ### `POST /sk/discover`, `POST /sk/request`, `POST /sk/forget` — M3
 
 `202` with a status word; JSON content type required. `request` re-requests
-access (from `denied`/`error`/`open`); `forget` drops the token and pending
-request and starts over.
+access (from `denied`/`error`/`open`); `forget` drops the token (a pending
+request keeps being polled).
 
 ### `POST /sk/token` — M3
 
