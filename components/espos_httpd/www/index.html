@@ -5,39 +5,90 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>espOS</title>
 <style>
-  body { font: 15px/1.45 system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; color: #222; }
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 1.5rem auto; max-width: 44rem; padding: 0 1rem; color: #222; }
   h1 { font-weight: 600; margin-bottom: 0; }
+  h3 { margin: 1.4rem 0 .4rem; }
   .sub { color: #666; margin-top: .25rem; }
-  pre { background: #f4f4f4; padding: .75rem; border-radius: 6px; overflow-x: auto; }
-  code { font-family: ui-monospace, monospace; }
-  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0 1rem; }
-  button { padding: .4rem .8rem; }
+  pre { background: #f4f4f4; padding: .75rem; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .5rem 0; }
+  input, select, button { font: inherit; padding: .4rem .6rem; }
+  input { min-width: 12rem; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; background: #ddd; font-size: 13px; }
+  .ok { background: #cfe9cf; } .bad { background: #f3d1d1; } .warn { background: #f7e7b5; }
+  #msg { color: #a33; }
 </style>
 </head>
 <body>
 <h1>espOS</h1>
-<p class="sub">Placeholder page — the web UI arrives in milestone M5. The API is live.</p>
+<p class="sub">Setup page (the full UI arrives in M5). The API is live under <code>/api/v1</code>.</p>
+
+<h3>WiFi <span id="wstate" class="badge">…</span></h3>
+<div id="wdetail" class="sub"></div>
+<form id="wform" class="row" autocomplete="off">
+  <input id="ssid" list="ssids" placeholder="Network (SSID)" required>
+  <datalist id="ssids"></datalist>
+  <input id="psk" type="password" placeholder="Password (empty = open)">
+  <button type="submit">Join</button>
+  <button type="button" id="scan">Scan</button>
+</form>
+<div id="msg"></div>
+
 <h3>System</h3>
 <pre id="info">loading…</pre>
-<h3>Configuration</h3>
-<div class="row">
-  <button id="reload">Reload</button>
-  <a href="/api/v1/config/schema" target="_blank"><button type="button">Schema</button></a>
-</div>
+<h3>Configuration <a href="/api/v1/config/schema" target="_blank" style="font-size:13px;font-weight:normal">schema</a></h3>
 <pre id="cfg">loading…</pre>
+
 <script>
-async function load() {
-  for (const [id, url] of [["info", "/api/v1/system/info"], ["cfg", "/api/v1/config"]]) {
-    try {
-      const r = await fetch(url);
-      document.getElementById(id).textContent = JSON.stringify(await r.json(), null, 2);
-    } catch (e) {
-      document.getElementById(id).textContent = String(e);
-    }
-  }
+const $ = id => document.getElementById(id);
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: body !== undefined ? {"Content-Type": "application/json"} : {},
+                                body: body !== undefined ? JSON.stringify(body) : undefined });
+  let js = null; try { js = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, js };
 }
-document.getElementById("reload").onclick = load;
-load();
+function showWifi(w) {
+  const cls = w.state === "connected" ? "ok" : (w.state === "backoff" || w.reason.code ? "bad" : "warn");
+  $("wstate").className = "badge " + cls;
+  $("wstate").textContent = w.state + (w.portal && w.portal.active ? " · portal " + w.portal.ssid : "");
+  const bits = [];
+  if (w.ssid) bits.push(`${w.ssid} (${w.rssi} dBm, ch ${w.channel})`);
+  if (w.ip) bits.push(`IP ${w.ip}`);
+  if (w.reason && w.reason.code) bits.push(`last: ${w.reason.text} [${w.reason.code}]`);
+  if (w.backoff_ms) bits.push(`retry in ${Math.ceil(w.backoff_ms / 1000)} s`);
+  if (w.attempt) bits.push(`attempt ${w.attempt}`);
+  $("wdetail").textContent = bits.join(" · ") || "hostname " + w.hostname;
+}
+async function loadAll() {
+  const [i, c, w] = await Promise.all([api("GET", "/api/v1/system/info"), api("GET", "/api/v1/config"), api("GET", "/api/v1/wifi/status")]);
+  $("info").textContent = JSON.stringify(i.js, null, 2);
+  $("cfg").textContent = JSON.stringify(c.js, null, 2);
+  if (w.js) showWifi(w.js);
+}
+$("wform").onsubmit = async e => {
+  e.preventDefault();
+  $("msg").textContent = "";
+  const r = await api("PUT", "/api/v1/config", { wifi: { ssid0: $("ssid").value, psk0: $("psk").value } });
+  $("msg").textContent = r.ok ? "saved — connecting…" : `error: ${r.js && (r.js.message || r.js.error)}`;
+};
+$("scan").onclick = async () => {
+  await api("POST", "/api/v1/wifi/scan", {});
+  $("msg").textContent = "scanning…";
+};
+function fillScan(s) {
+  const dl = $("ssids"); dl.innerHTML = "";
+  (s.results || []).sort((a, b) => b.rssi - a.rssi).forEach(r => {
+    const o = document.createElement("option"); o.value = r.ssid; o.label = `${r.ssid} (${r.rssi} dBm, ${r.auth})`; dl.appendChild(o);
+  });
+  if (!s.scanning) $("msg").textContent = `${(s.results || []).length} network(s) found`;
+}
+try {
+  const es = new EventSource("/api/v1/events");
+  es.addEventListener("wifi", e => showWifi(JSON.parse(e.data)));
+  es.addEventListener("wifi_scan", e => fillScan(JSON.parse(e.data)));
+  es.addEventListener("config", () => api("GET", "/api/v1/config").then(c => $("cfg").textContent = JSON.stringify(c.js, null, 2)));
+} catch (e) {}
+loadAll();
+api("GET", "/api/v1/wifi/scan").then(s => s.js && fillScan(s.js));
 </script>
 </body>
 </html>

@@ -22,4 +22,17 @@ menu "espOS HTTP server"
         default 32
         range 8 128
 
+    config ESPOS_HTTPD_SSE_MAX_CLIENTS
+        int "Maximum concurrent event-stream clients"
+        default 3
+        range 1 8
+        help
+            GET /api/v1/events keeps a socket open per client (lwIP
+            CONFIG_LWIP_MAX_SOCKETS bounds the total).
+
+    config ESPOS_HTTPD_SSE_PING_S
+        int "Event-stream keepalive interval (s)"
+        default 15
+        range 5 120
+
 endmenu
