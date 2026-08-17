@@ -5,6 +5,7 @@ Drives build/espos_httpd_test.elf through the REST API contract in docs/api.md.
 Standard library only. Exit code 0 == all checks passed.
 """
 import http.client
+import itertools
 import json
 import os
 import select
@@ -38,12 +39,13 @@ def pick_port():
 
 
 class Harness:
-    def __init__(self, fresh=True):
+    def __init__(self, fresh=True, extra_env=None):
         global PORT
         PORT = pick_port()
         if not free_port_check(PORT):
             raise RuntimeError(f"port {PORT} is already in use; set ESPOS_TEST_PORT to a free port")
         env = dict(os.environ, ESPOS_TEST_PORT=str(PORT))
+        env.update(extra_env or {})
         if fresh:
             env["ESPOS_TEST_FRESH"] = "1"
         self.proc = subprocess.Popen([ELF], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -167,7 +169,7 @@ class ApiTests(unittest.TestCase):
         st, hd, raw, js = req("GET", "/api/v1/config")
         self.assertEqual(st, 200)
         self.assertEqual(hd.get("Cache-Control"), "no-store")
-        self.assertEqual(set(js.keys()), {"app", "httpd"})
+        self.assertTrue({"app", "httpd", "wifi"} <= set(js.keys()))
         app = js["app"]
         self.assertEqual(app["label"], "espOS device")
         self.assertTrue(app["enabled"])
@@ -361,6 +363,235 @@ class ApiTests(unittest.TestCase):
         for _ in range(30):
             st, _, _, _ = req("GET", "/api/v1/system/info")
             self.assertEqual(st, 200)
+
+
+class SseReader:
+    """Minimal text/event-stream client on a raw socket (stdlib only)."""
+
+    def __init__(self, path="/api/v1/events", timeout=5.0):
+        self.sock = socket.create_connection(("127.0.0.1", PORT), timeout=timeout)
+        self.sock.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n".encode())
+        self.buf = b""
+        # headers
+        while b"\r\n\r\n" not in self.buf:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("closed during headers")
+            self.buf += chunk
+        head, self.buf = self.buf.split(b"\r\n\r\n", 1)
+        self.status = head.split(b"\r\n")[0].decode()
+        self.headers = dict(l.decode().split(": ", 1) for l in head.split(b"\r\n")[1:] if b": " in l)
+
+    def _dechunk(self):
+        # Transfer-Encoding: chunked; we only ever get whole small chunks
+        out = b""
+        while True:
+            if b"\r\n" not in self.buf:
+                break
+            size_line, rest = self.buf.split(b"\r\n", 1)
+            try:
+                n = int(size_line.strip(), 16)
+            except ValueError:
+                # not a chunk header — treat buffer as raw data
+                out += self.buf
+                self.buf = b""
+                break
+            if len(rest) < n + 2:
+                break
+            out += rest[:n]
+            self.buf = rest[n + 2:]
+        return out
+
+    def events(self, timeout=5.0):
+        """Yield (event, data) tuples until timeout."""
+        deadline = time.time() + timeout
+        data_acc = b""
+        while time.time() < deadline:
+            data_acc += self._dechunk()
+            while b"\n\n" in data_acc:
+                block, data_acc = data_acc.split(b"\n\n", 1)
+                ev, dat = None, []
+                for line in block.decode().split("\n"):
+                    if line.startswith("event: "):
+                        ev = line[7:]
+                    elif line.startswith("data: "):
+                        dat.append(line[6:])
+                    elif line.startswith("retry: ") or line.startswith(":"):
+                        ev = ev or ("retry" if line.startswith("retry") else "comment")
+                yield ev, "\n".join(dat)
+            self.sock.settimeout(max(0.05, deadline - time.time()))
+            try:
+                chunk = self.sock.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                return
+            self.buf += chunk
+
+    def close(self):
+        self.sock.close()
+
+
+def wait_for(pred, timeout=5.0, step=0.1):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = pred()
+        if last:
+            return last
+        time.sleep(step)
+    return last
+
+
+class WifiTests(unittest.TestCase):
+    """WiFi state machine over HTTP with the simulated driver (port_sim.c)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Harness(fresh=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    def test_01_unconfigured_brings_the_portal_up(self):
+        st, _, _, js = req("GET", "/api/v1/wifi/status")
+        self.assertEqual(st, 200)
+        self.assertEqual(js["state"], "unconfigured")
+        self.assertTrue(js["sta_enabled"])
+        self.assertEqual(js["hostname"], "espos-1a2b")
+        self.assertTrue(js["portal"]["active"])
+        self.assertEqual(js["portal"]["ssid"], "espOS-1a2b")
+        self.assertEqual(js["portal"]["ip"], "192.168.4.1")
+        self.assertEqual(js["reason"], {"code": 0, "text": ""})
+        self.assertNotIn("ip", js)
+
+    def test_01b_short_psk_slot_is_skipped(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "short"}})
+        self.assertEqual(st, 200)
+        time.sleep(0.5)
+        st, _, _, js = req("GET", "/api/v1/wifi/status")
+        self.assertEqual(js["state"], "unconfigured")   # 1..7 char WPA passwords are not valid
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": None, "psk0": None}})
+        time.sleep(0.5)
+
+    def test_02_scan(self):
+        st, _, _, js = req("POST", "/api/v1/wifi/scan", None, content_type=None)
+        self.assertEqual(st, 415)
+        st, _, _, js = req("POST", "/api/v1/wifi/scan", None)
+        self.assertEqual(st, 202)
+        st, _, _, js = req("GET", "/api/v1/wifi/scan")
+        self.assertEqual(st, 200)
+        self.assertFalse(js["scanning"])
+        names = sorted(r["ssid"] for r in js["results"])
+        self.assertEqual(names, ["Boat", "Marina-Guest"])
+        boat = [r for r in js["results"] if r["ssid"] == "Boat"][0]
+        self.assertEqual(boat["auth"], "wpa2")
+        self.assertEqual(boat["bssid"], "de:ad:be:ef:00:01")
+
+    def test_03_configure_and_connect_with_sse(self):
+        sse = SseReader()
+        self.assertIn("200", sse.status)
+        self.assertEqual(sse.headers.get("Content-Type"), "text/event-stream")
+        # hello: retry + a wifi snapshot
+        first = list(itertools.islice(sse.events(timeout=3), 2))
+        self.assertEqual(first[0][0], "retry")
+        self.assertEqual(first[1][0], "wifi")
+        self.assertEqual(json.loads(first[1][1])["state"], "unconfigured")
+
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+        self.assertEqual(st, 200)
+        seen = []
+        for ev, data in sse.events(timeout=4):
+            seen.append((ev, data))
+            if ev == "wifi" and json.loads(data)["state"] == "connected":
+                break
+        kinds = [e for e, _ in seen]
+        self.assertIn("config", kinds)               # config change was broadcast
+        states = [json.loads(d)["state"] for e, d in seen if e == "wifi"]
+        self.assertIn("connecting", states)
+        self.assertIn("obtaining_ip", states)
+        self.assertEqual(states[-1], "connected")
+        sse.close()
+
+        st, _, _, js = req("GET", "/api/v1/wifi/status")
+        self.assertEqual(js["state"], "connected")
+        self.assertEqual(js["ssid"], "Boat")
+        self.assertEqual(js["ip"], "10.0.0.2")
+        self.assertEqual(js["gateway"], "10.0.0.1")
+        self.assertEqual(js["rssi"], -55)
+        self.assertEqual(js["network_index"], 0)
+        self.assertEqual(js["connect_count"], 1)
+        self.assertFalse(js["portal"]["active"])      # portal goes down once connected
+        self.assertEqual(js["reason"]["code"], 0)
+        # secrets stay secret
+        _, _, _, cfg = req("GET", "/api/v1/config?ns=wifi")
+        self.assertEqual(cfg["wifi"]["psk0"], SENTINEL)
+        self.assertEqual(cfg["wifi"]["ssid0"], "Boat")
+
+    def test_03b_sse_eviction_when_full(self):
+        readers = [SseReader() for _ in range(3)]
+        for r in readers:
+            self.assertIn("200", r.status)
+        # a 4th stream evicts the oldest instead of failing
+        r4 = SseReader()
+        self.assertIn("200", r4.status)
+        first = list(itertools.islice(r4.events(timeout=3), 2))
+        self.assertEqual(first[1][0], "wifi")
+        # the oldest reader now sees EOF (its socket was shut down)
+        got = list(readers[0].events(timeout=2))
+        self.assertTrue(all(e in ("retry", "wifi", "comment") for e, _ in got))
+        readers[0].sock.settimeout(1.0)
+        try:
+            eof = readers[0].sock.recv(10) == b""
+        except socket.timeout:
+            eof = False
+        self.assertTrue(eof, "evicted stream must be closed by the server")
+        for r in readers + [r4]:
+            r.close()
+        time.sleep(0.5)
+
+    def test_04_disable_and_reenable(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"sta_enabled": False}})
+        self.assertEqual(st, 200)
+        js = wait_for(lambda: (lambda r: r[3] if r[3]["state"] == "disabled" else None)(req("GET", "/api/v1/wifi/status")))
+        self.assertIsNotNone(js)
+        self.assertEqual(js["reason"]["code"], 1005)
+        self.assertTrue(js["portal"]["active"])
+        req("PUT", "/api/v1/config", {"wifi": {"sta_enabled": True}})
+        js = wait_for(lambda: (lambda r: r[3] if r[3]["state"] == "connected" else None)(req("GET", "/api/v1/wifi/status")))
+        self.assertIsNotNone(js)
+        self.assertEqual(js["connect_count"], 2)
+
+
+class WifiFailureTests(unittest.TestCase):
+    """Driver reports AUTH_FAIL (202) on every attempt."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_WIFI": "fail:202"})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    def test_wrong_password_is_reported_with_backoff(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "wrongpass", "ssid1": "Other", "psk1": "xxxxxxxx"}})
+        self.assertEqual(st, 200)
+        # after both networks fail once we must be in backoff with the reason
+        js = wait_for(lambda: (lambda r: r[3] if r[3]["state"] == "backoff" else None)(req("GET", "/api/v1/wifi/status")), timeout=6)
+        self.assertIsNotNone(js)
+        self.assertEqual(js["reason"]["code"], 202)
+        self.assertEqual(js["reason"]["text"], "wrong password")
+        self.assertGreater(js["backoff_ms"], 0)
+        self.assertLessEqual(js["backoff_ms"], 1300 * (2 ** (js["round"] - 1)))   # 1 s·2^(round-1) ±25 %
+        self.assertGreaterEqual(js["round"], 1)
+        self.assertEqual(js["attempt"], 2 * js["round"])   # both networks tried every round
+        self.assertEqual(js["network_index"], 0)
+        # a second round follows automatically
+        js2 = wait_for(lambda: (lambda r: r[3] if r[3]["round"] >= 2 else None)(req("GET", "/api/v1/wifi/status")), timeout=6)
+        self.assertIsNotNone(js2)
+        self.assertGreaterEqual(js2["attempt"], 3)
 
 
 if __name__ == "__main__":

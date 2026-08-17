@@ -1,0 +1,64 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * espos_wifi — station connection manager with an explicit status model,
+ * multi-network priority list, exponential backoff, and a SoftAP
+ * provisioning portal. Configuration lives in the "wifi" namespace of
+ * espos_config; status is exposed at GET /api/v1/wifi/status and pushed on
+ * the SSE stream as "wifi" events.
+ */
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include "esp_err.h"
+#include "espos_wifi_sm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Bring up netif/event loop/driver, load the "wifi" namespace, register the
+ * HTTP endpoints and start the state machine. Requires espos_config_init()
+ * and espos_httpd_start() to have run. Idempotent.
+ */
+esp_err_t espos_wifi_start(void);
+esp_err_t espos_wifi_stop(void);
+
+/** Snapshot of the current status (thread-safe copy). rssi is refreshed
+ * from the driver when connected. */
+typedef struct {
+    espos_wifi_sm_status_t sm;
+    int8_t rssi;
+    uint32_t backoff_remaining_ms;
+    uint32_t connected_s;      /* seconds since GOT_IP, 0 if not connected */
+    char hostname[33];
+    char portal_ssid[33];
+    char portal_ip[16];
+} espos_wifi_status_t;
+
+esp_err_t espos_wifi_get_status(espos_wifi_status_t *out);
+
+/** Serialise the status as the JSON document of docs/api.md (malloc'ed). */
+esp_err_t espos_wifi_status_json(char **out_json);
+
+/* Scan API: start is asynchronous; results are cached and a "wifi_scan"
+ * SSE event fires when they are ready. */
+esp_err_t espos_wifi_scan_start(void);
+typedef struct {
+    char ssid[33];
+    uint8_t bssid[6];
+    int8_t rssi;
+    uint8_t channel;
+    uint8_t authmode;          /* wifi_auth_mode_t value */
+} espos_wifi_scan_entry_t;
+/** JSON: {"scanning":bool,"age_s":n,"results":[{"ssid","bssid","rssi","channel","auth"}]} */
+esp_err_t espos_wifi_scan_json(char **out_json);
+
+/** Device-unique short id, "1a2b" (last two MAC bytes), for default names. */
+const char *espos_wifi_short_id(void);
+
+#ifdef __cplusplus
+}
+#endif

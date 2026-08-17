@@ -6,6 +6,11 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
+# ---- Task stacks: WiFi/IP events and FreeRTOS timers run the state machine,
+# JSON building and SSE sends; the IDF defaults (2304 / 2048) are too tight.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
 # ---- Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 

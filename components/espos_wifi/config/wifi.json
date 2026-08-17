@@ -1,0 +1,45 @@
+{
+  "namespace": "wifi",
+  "version": 1,
+  "title": "WiFi",
+  "description": "Station networks in priority order (slot 0 first), reconnect policy and the provisioning access point.",
+  "keys": [
+    {"name": "sta_enabled", "type": "bool", "default": true, "title": "Station enabled",
+     "description": "Connect to the configured networks. Off = radio idle (portal still available if enabled)."},
+    {"name": "hostname", "type": "string", "default": "", "maxLength": 32, "pattern": "^[A-Za-z0-9-]*$",
+     "title": "Hostname", "description": "DHCP/mDNS hostname. Empty = espos-<last 4 hex of MAC>.", "restart_required": true},
+
+    {"name": "ssid0", "type": "string", "default": "", "maxLength": 32, "title": "Network 1 SSID"},
+    {"name": "psk0", "type": "string", "default": "", "maxLength": 64, "secret": true, "pattern": "^(.{8,63})?$",
+     "title": "Network 1 password", "description": "Empty for an open network, else 8..63 characters (WPA)."},
+    {"name": "bssid0", "type": "string", "default": "", "maxLength": 17, "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$",
+     "title": "Network 1 BSSID pin", "description": "Optional aa:bb:cc:dd:ee:ff to pin one access point (no roaming)."},
+    {"name": "ssid1", "type": "string", "default": "", "maxLength": 32, "title": "Network 2 SSID"},
+    {"name": "psk1", "type": "string", "default": "", "maxLength": 64, "secret": true, "pattern": "^(.{8,63})?$", "title": "Network 2 password"},
+    {"name": "bssid1", "type": "string", "default": "", "maxLength": 17, "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$", "title": "Network 2 BSSID pin"},
+    {"name": "ssid2", "type": "string", "default": "", "maxLength": 32, "title": "Network 3 SSID"},
+    {"name": "psk2", "type": "string", "default": "", "maxLength": 64, "secret": true, "pattern": "^(.{8,63})?$", "title": "Network 3 password"},
+    {"name": "bssid2", "type": "string", "default": "", "maxLength": 17, "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$", "title": "Network 3 BSSID pin"},
+    {"name": "ssid3", "type": "string", "default": "", "maxLength": 32, "title": "Network 4 SSID"},
+    {"name": "psk3", "type": "string", "default": "", "maxLength": 64, "secret": true, "pattern": "^(.{8,63})?$", "title": "Network 4 password"},
+    {"name": "bssid3", "type": "string", "default": "", "maxLength": 17, "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$", "title": "Network 4 BSSID pin"},
+
+    {"name": "backoff_max_s", "type": "int", "default": 60, "min": 5, "max": 600, "unit": "s",
+     "title": "Reconnect backoff cap", "description": "Exponential backoff between rounds over all networks, 1 s doubling up to this cap, ±25 % jitter."},
+    {"name": "dhcp_tmo_s", "type": "int", "default": 15, "min": 3, "max": 120, "unit": "s",
+     "title": "DHCP timeout", "description": "Associated but no IP after this long counts as a failed attempt."},
+    {"name": "connect_tmo_s", "type": "int", "default": 20, "min": 5, "max": 120, "unit": "s",
+     "title": "Connect timeout", "description": "Safety net if the driver never reports a result."},
+
+    {"name": "portal_enabled", "type": "bool", "default": true, "title": "Provisioning access point",
+     "description": "Bring up the setup access point when no network is configured or nothing connects for a while."},
+    {"name": "portal_after_s", "type": "int", "default": 90, "min": 10, "max": 3600, "unit": "s",
+     "title": "Portal after", "description": "Seconds without a connection before the access point comes up (0 networks configured: immediately)."},
+    {"name": "portal_ssid", "type": "string", "default": "", "maxLength": 32, "title": "Access point SSID",
+     "description": "Empty = espOS-<last 4 hex of MAC>."},
+    {"name": "portal_psk", "type": "string", "default": "", "maxLength": 64, "secret": true, "pattern": "^(.{8,63})?$",
+     "title": "Access point password", "description": "Empty = open network. 8..63 characters for WPA2."},
+    {"name": "ps_mode", "type": "string", "default": "none", "enum": ["none", "min", "max"], "title": "Power save",
+     "description": "WiFi modem power save. 'none' keeps latency lowest.", "restart_required": true}
+  ]
+}

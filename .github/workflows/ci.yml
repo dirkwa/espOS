@@ -61,4 +61,6 @@ jobs:
             cd test/host/espos_config_test && idf.py --preview set-target linux && idf.py build &&
             ./build/espos_config_test.elf &&
             cd ../espos_httpd_test && idf.py --preview set-target linux && idf.py build &&
-            python3 run_test.py"
+            python3 run_test.py &&
+            cd ../espos_wifi_test && idf.py --preview set-target linux && idf.py build &&
+            ./build/espos_wifi_test.elf"

@@ -5,16 +5,29 @@
 #include <string.h>
 #include <strings.h>
 
+#include "esp_event.h"
 #include "esp_log.h"
+#if !CONFIG_IDF_TARGET_LINUX
+#include "esp_netif.h"
+#endif
 #include "sdkconfig.h"
 
 #include "espos_config.h"
 #include "espos_cfg_keys.h"
 #include "espos_httpd.h"
 #include "espos_httpd_priv.h"
+#include "espos_httpd_sse.h"
 
 static const char *TAG = "espos_httpd";
 static httpd_handle_t s_server;
+
+static void config_changed(const char *ns, const char *key, void *arg)
+{
+    (void)arg;
+    char body[80];
+    snprintf(body, sizeof(body), "{\"ns\":\"%s\",\"key\":\"%s\"}", ns, key);
+    espos_httpd_sse_publish("config", body);
+}
 
 httpd_handle_t espos_httpd_handle(void)
 {
@@ -72,6 +85,20 @@ esp_err_t espos_httpd_start(void)
     int32_t port = 80;
     (void)espos_config_get_i32(ESPOS_CFG_NS_HTTPD, ESPOS_CFG_HTTPD_PORT, &port);
 
+    /* esp_http_server posts lifecycle events to the default loop; make sure
+     * one exists so it does not log an error on every request. */
+    esp_err_t lerr = esp_event_loop_create_default();
+    if (lerr != ESP_OK && lerr != ESP_ERR_INVALID_STATE) {
+        return lerr;
+    }
+#if !CONFIG_IDF_TARGET_LINUX
+    /* Sockets need the lwIP stack; esp_netif_init() is idempotent and may
+     * already have been called by whoever brought a network interface up. */
+    lerr = esp_netif_init();
+    if (lerr != ESP_OK && lerr != ESP_ERR_INVALID_STATE) {
+        return lerr;
+    }
+#endif
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = (uint16_t)port;
     cfg.ctrl_port = 32768 + (uint16_t)(port & 0x0FFF); /* keep distinct per instance */
@@ -87,6 +114,16 @@ esp_err_t espos_httpd_start(void)
 #endif
     cfg.task_priority = CONFIG_ESPOS_HTTPD_TASK_PRIORITY;
     cfg.lru_purge_enable = true;
+    /* Event streams hold a socket each and sit outside the LRU purge; keep
+     * a few for regular requests, but never exceed what lwIP can hand out
+     * (esp_http_server needs three of CONFIG_LWIP_MAX_SOCKETS for itself,
+     * the portal DNS responder one more). */
+    cfg.max_open_sockets = 4 + CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS;
+#ifdef CONFIG_LWIP_MAX_SOCKETS
+    if (cfg.max_open_sockets > CONFIG_LWIP_MAX_SOCKETS - 4) {
+        cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 4;
+    }
+#endif
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
@@ -100,6 +137,9 @@ esp_err_t espos_httpd_start(void)
     ESP_ERROR_CHECK(espos_httpd_register_config_api(s_server));
     ESP_ERROR_CHECK(espos_httpd_register_system_api(s_server));
     ESP_ERROR_CHECK(espos_httpd_register_static(s_server));
+    ESP_ERROR_CHECK(espos_httpd_register_sse(s_server));
+    /* config changes are pushed to UIs as "config" events */
+    (void)espos_config_subscribe(config_changed, NULL);
     ESP_LOGI(TAG, "listening on port %ld", (long)port);
     return ESP_OK;
 }
@@ -109,6 +149,8 @@ esp_err_t espos_httpd_stop(void)
     if (!s_server) {
         return ESP_OK;
     }
+    espos_config_unsubscribe(config_changed, NULL);
+    espos_httpd_sse_shutdown();
     esp_err_t err = httpd_stop(s_server);
     s_server = NULL;
     return err;
