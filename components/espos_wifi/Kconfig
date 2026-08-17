@@ -1,0 +1,11 @@
+menu "espOS WiFi"
+
+    config ESPOS_WIFI_MAX_NETWORKS
+        int "Configured networks (priority slots)"
+        default 4
+        range 1 4
+        help
+            Number of ssidN/pskN/bssidN slots honoured from the "wifi"
+            namespace (the descriptor declares four).
+
+endmenu
