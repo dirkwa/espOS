@@ -1,0 +1,25 @@
+# espOS project defaults. Per-target overrides go in sdkconfig.defaults.<target>.
+
+# ---- Partitions: custom table with two OTA slots, NVS, coredump, UI storage
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# ---- Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- HTTP server
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
+
+# ---- Core dump to flash (surfaced by the UI in M5). IDF 6 is ELF+SHA256 only.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# ---- OTA rollback (M6 relies on it; harmless before)
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---- Security (production): enable in a release overlay, see docs/security.md
+# CONFIG_SECURE_FLASH_ENC_ENABLED=y
+# CONFIG_NVS_ENCRYPTION=y

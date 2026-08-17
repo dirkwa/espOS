@@ -1,0 +1,10 @@
+# espOS partition table (4 MB flash). Offsets are computed by gen_esp32part.
+# Name,     Type, SubType,  Offset,  Size,   Flags
+nvs,        data, nvs,      ,        24K,
+otadata,    data, ota,      ,        8K,
+phy_init,   data, phy,      ,        4K,
+nvs_keys,   data, nvs_keys, ,        4K,    encrypted
+coredump,   data, coredump, ,        64K,
+ota_0,      app,  ota_0,    ,        1600K,
+ota_1,      app,  ota_1,    ,        1600K,
+storage,    data, littlefs, ,        640K,
