@@ -1,0 +1,18 @@
+menu "espOS example app"
+
+    menu "M1 network bootstrap (temporary, replaced by espos_wifi in M2)"
+
+        config ESPOS_EXAMPLE_WIFI_SSID
+            string "WiFi SSID"
+            default ""
+            help
+                Station SSID used only so the M1 example can be reached over the
+                network. Leave empty to skip WiFi entirely.
+
+        config ESPOS_EXAMPLE_WIFI_PASSWORD
+            string "WiFi password"
+            default ""
+
+    endmenu
+
+endmenu
