@@ -1,0 +1,22 @@
+{
+  "namespace": "sk",
+  "version": 1,
+  "title": "SignalK server",
+  "description": "Which SignalK server to talk to and how to obtain access. The device identity (clientId) and the token itself live in device state, not here.",
+  "keys": [
+    {"name": "discovery", "type": "bool", "default": true, "title": "Discover servers via mDNS",
+     "description": "Browse _signalk-http._tcp on the local network. Off = only the manual server below."},
+    {"name": "server_self", "type": "string", "default": "", "maxLength": 127, "title": "Preferred server (self URN)",
+     "description": "Vessel self URN of the discovered server to use, e.g. urn:mrn:signalk:uuid:… Empty = first discovered server with a master role."},
+    {"name": "server_host", "type": "string", "default": "", "maxLength": 63, "title": "Manual server host",
+     "description": "Host name or IP when mDNS is blocked. Empty = use discovery."},
+    {"name": "server_port", "type": "int", "default": 80, "min": 1, "max": 65535, "title": "Manual server port"},
+    {"name": "description", "type": "string", "default": "", "maxLength": 63, "title": "Access request description",
+     "description": "Shown to the admin approving the request. Empty = espOS <hostname>."},
+    {"name": "permissions", "type": "string", "default": "readwrite", "enum": ["readonly", "readwrite", "admin"],
+     "title": "Requested permissions", "description": "readwrite is needed to publish deltas."},
+    {"name": "check_s", "type": "int", "default": 60, "min": 10, "max": 3600, "unit": "s", "title": "Token check interval",
+     "description": "How often an approved token is verified against the server (detects revocation)."},
+    {"name": "discover_s", "type": "int", "default": 60, "min": 15, "max": 3600, "unit": "s", "title": "Discovery interval"}
+  ]
+}

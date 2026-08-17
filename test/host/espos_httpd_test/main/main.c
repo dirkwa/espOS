@@ -22,6 +22,7 @@
 #include "espos_config.h"
 #include "espos_httpd.h"
 #include "espos_wifi.h"
+#include "espos_sk.h"
 
 static const char *TAG = "harness";
 static volatile sig_atomic_t s_terminate;
@@ -67,6 +68,7 @@ void app_main(void)
     ESP_ERROR_CHECK(espos_config_set_i32(ESPOS_CFG_NS_HTTPD, ESPOS_CFG_HTTPD_PORT, port));
     ESP_ERROR_CHECK(espos_httpd_start());
     ESP_ERROR_CHECK(espos_wifi_start()); /* simulated driver on the host, see port_sim.c */
+    ESP_ERROR_CHECK(espos_sk_start());   /* real HTTP; servers from ESPOS_SIM_SK_SERVERS */
     /* Announce readiness with a raw write loop: stdio gives up on EINTR
      * (which the simulator's tick signals can cause) and would silently drop
      * the line. */

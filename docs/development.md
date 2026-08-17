@@ -40,6 +40,10 @@ python3 run_test.py                        # drives the real REST server over HT
 cd ../espos_wifi_test
 idf.py --preview set-target linux && idf.py build
 ./build/espos_wifi_test.elf                # WiFi state machine, every transition
+
+cd ../espos_sk_test
+idf.py --preview set-target linux && idf.py build
+./build/espos_sk_test.elf                  # SignalK token state machine
 ```
 
 Multi-target caveat: `managed_components/` is synced to the current target's
@@ -61,6 +65,7 @@ discover -s tools -p 'test_*.py'`.
 components/espos_config/   NVS-backed config store, descriptor tables, JSON, migrations
 components/espos_httpd/    esp_http_server + REST API + SSE + static UI
 components/espos_wifi/     WiFi state machine, portal, /wifi endpoints
+components/espos_sk/       SignalK discovery, token state machine, /sk endpoints
 main/                      example app
 tools/                     build-time generators
 test/host/                 linux-target unit/integration tests

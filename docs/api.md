@@ -186,13 +186,49 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; the next gets
 `503 too_many_streams`. Later milestones add `sk` events.
 
+## SignalK
+
+### `GET /sk/status` — M3
+
+```json
+{
+  "token": {"state": "approved", "has_token": true, "busy": false,
+            "approved_s": 120, "next_action_s": 40, "last_check_s": 20,
+            "last_http_status": 200, "last_error": "",
+            "counts": {"requests": 1, "approved": 1, "denied": 0, "unauthorized": 0}},
+  "server": {"host": "192.168.1.10", "port": 80, "self": "urn:mrn:signalk:uuid:…",
+             "source": "discovered", "name": "boat", "swname": "signalk-server", "swvers": "2.31.1"},
+  "client_id": "…uuid…", "description": "espOS espos-1a2b", "permissions": "readwrite",
+  "discovery": {"enabled": true, "count": 2, "last_s": 12}
+}
+```
+`token.state` ∈ `no_server requesting pending verifying approved denied
+open error`; `pending_href`/`pending_s` while pending; `server.source` ∈
+`discovered manual none`. The token itself is never returned.
+
+### `GET /sk/servers` — M3
+
+`{"servers": [{"host","port","self","name","roles","swname","swvers","seen_s","selected"}], "last_s": 12}`
+
+### `POST /sk/discover`, `POST /sk/request`, `POST /sk/forget` — M3
+
+`202` with a status word; JSON content type required. `request` re-requests
+access (from `denied`/`error`/`open`); `forget` drops the token and pending
+request and starts over.
+
+### `POST /sk/token` — M3
+
+Body `{"token": "<jwt>"}` → `202 {"status": "verifying"}`; the token is
+verified against `/signalk/v1/api/self` and kept if it works. `400
+validation` for a bad body.
+
+SSE events: `sk` (the status document, on connect and on change),
+`sk_servers` (the servers document after each discovery pass).
+
 ## Planned (shape reserved, not implemented)
 
 | Endpoint                     | Milestone | Notes                                          |
 |------------------------------|-----------|------------------------------------------------|
-| `GET /sk/servers`            | M3        | mDNS-discovered SignalK servers                |
-| `GET /sk/status`             | M3        | token state machine state, server `self`, pending href |
-| `POST /sk/token`             | M3        | manual token paste                             |
 | `GET /logs`                  | M5        | log ring buffer                                |
 | `GET /system/coredump`       | M5        | last crash summary                             |
 | `POST /ota`, `GET /ota/status` | M6      | update from URL / manifest                     |

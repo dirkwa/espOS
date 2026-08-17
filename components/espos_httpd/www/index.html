@@ -33,6 +33,21 @@
 </form>
 <div id="msg"></div>
 
+<h3>SignalK <span id="skstate" class="badge">…</span></h3>
+<div id="skdetail" class="sub"></div>
+<div class="row">
+  <select id="skservers"><option value="">(auto)</option></select>
+  <button type="button" id="skuse">Use</button>
+  <button type="button" id="skdiscover">Discover</button>
+  <button type="button" id="skrequest">Request access</button>
+  <button type="button" id="skforget">Forget token</button>
+</div>
+<form id="sktokform" class="row" autocomplete="off">
+  <input id="sktoken" placeholder="Paste a token" style="min-width:20rem">
+  <button type="submit">Use token</button>
+</form>
+<div id="skmsg" class="sub"></div>
+
 <h3>System</h3>
 <pre id="info">loading…</pre>
 <h3>Configuration <a href="/api/v1/config/schema" target="_blank" style="font-size:13px;font-weight:normal">schema</a></h3>
@@ -81,8 +96,33 @@ function fillScan(s) {
   });
   if (!s.scanning) $("msg").textContent = `${(s.results || []).length} network(s) found`;
 }
+function showSk(d) {
+  const t = d.token, cls = t.state === "approved" || t.state === "open" ? "ok" : (t.state === "denied" || t.state === "error" ? "bad" : "warn");
+  $("skstate").className = "badge " + cls; $("skstate").textContent = t.state;
+  const bits = [];
+  if (d.server && d.server.host) bits.push(`${d.server.name || d.server.host}:${d.server.port} (${d.server.source})`);
+  if (t.pending_href) bits.push(`waiting for approval ${t.pending_s || 0}s — approve "${d.description}" in the server admin UI`);
+  if (t.approved_s !== undefined) bits.push(`approved ${t.approved_s}s ago`);
+  if (t.last_error) bits.push(t.last_error);
+  bits.push(`clientId ${d.client_id}`);
+  $("skdetail").textContent = bits.join(" · ");
+}
+function fillServers(s) {
+  const sel = $("skservers"); const cur = sel.value; sel.innerHTML = '<option value="">(auto)</option>';
+  (s.servers || []).forEach(r => { const o = document.createElement("option"); o.value = r.self; o.textContent = `${r.name || r.host} ${r.host}:${r.port} ${r.swvers}${r.selected ? " ✓" : ""}`; sel.appendChild(o); });
+  sel.value = cur;
+}
+$("skuse").onclick = () => api("PUT", "/api/v1/config", { sk: { server_self: $("skservers").value } }).then(r => $("skmsg").textContent = r.ok ? "server preference saved" : "error");
+$("skdiscover").onclick = () => api("POST", "/api/v1/sk/discover", {}).then(() => $("skmsg").textContent = "discovering…");
+$("skrequest").onclick = () => api("POST", "/api/v1/sk/request", {}).then(() => $("skmsg").textContent = "requesting…");
+$("skforget").onclick = () => api("POST", "/api/v1/sk/forget", {}).then(() => $("skmsg").textContent = "token forgotten");
+$("sktokform").onsubmit = e => { e.preventDefault(); api("POST", "/api/v1/sk/token", { token: $("sktoken").value }).then(r => { $("skmsg").textContent = r.ok ? "verifying token…" : `error: ${r.js && r.js.message}`; $("sktoken").value = ""; }); };
+api("GET", "/api/v1/sk/status").then(r => r.js && showSk(r.js));
+api("GET", "/api/v1/sk/servers").then(r => r.js && fillServers(r.js));
 try {
   const es = new EventSource("/api/v1/events");
+  es.addEventListener("sk", e => showSk(JSON.parse(e.data)));
+  es.addEventListener("sk_servers", e => fillServers(JSON.parse(e.data)));
   es.addEventListener("wifi", e => showWifi(JSON.parse(e.data)));
   es.addEventListener("wifi_scan", e => fillScan(JSON.parse(e.data)));
   es.addEventListener("config", () => api("GET", "/api/v1/config").then(c => $("cfg").textContent = JSON.stringify(c.js, null, 2)));
