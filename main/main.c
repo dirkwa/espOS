@@ -15,6 +15,7 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_log.h"
 #include "espos_httpd.h"
 #include "espos_wifi.h"
 #include "espos_sk.h"
@@ -29,6 +30,7 @@ static void on_config_change(const char *ns, const char *key, void *arg)
 
 void app_main(void)
 {
+    ESP_ERROR_CHECK(espos_log_init());     /* first: keep the boot log for /api/v1/logs */
     ESP_ERROR_CHECK(espos_config_init(NULL, NULL));
     ESP_ERROR_CHECK(espos_config_subscribe(on_config_change, NULL));
 

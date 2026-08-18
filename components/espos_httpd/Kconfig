@@ -19,7 +19,7 @@ menu "espOS HTTP server"
 
     config ESPOS_HTTPD_MAX_URI_HANDLERS
         int "Maximum number of URI handlers"
-        default 32
+        default 48
         range 8 128
 
     config ESPOS_HTTPD_SSE_MAX_CLIENTS
@@ -35,5 +35,16 @@ menu "espOS HTTP server"
         int "Event-stream keepalive interval (s)"
         default 15
         range 5 120
+
+    config ESPOS_HTTPD_WWW_DIR
+        string "Mount point of the UI storage partition"
+        default "/www"
+        help
+            The LittleFS "storage" partition holding the gzipped UI bundle
+            is mounted here and served at /.
+
+    config ESPOS_HTTPD_DEBUG_CRASH
+        bool "Expose POST /api/v1/system/crash (deliberate panic, for testing core dumps)"
+        default n
 
 endmenu

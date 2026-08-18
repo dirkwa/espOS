@@ -20,7 +20,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 | M2        | WiFi state machine with reason codes             | ✅ implemented, host-tested, live on ESP32-P4 (BLE provisioning pending) |
 | M3        | SignalK discovery + token state machine          | ✅ implemented, host-tested against signalk-server 2.31, live on ESP32-P4 |
 | M4        | WebSocket deltas + meta reconciliation           | ✅ implemented, host-tested (mock stream), live on ESP32-P4 against signalk-server 2.31 |
-| M5        | Web UI (Vite SPA)                                | planned |
+| M5        | Web UI (Vite SPA) + logs + core dump             | ✅ implemented, developed against a mock, verified served from LittleFS on ESP32-P4 |
 | M6        | Signed OTA with rollback                         | planned |
 
 ## Decisions and additions vs. the plan
@@ -47,12 +47,20 @@ Recorded here so nothing is silently applied (plan §7):
   TXT records; the ws endpoint comes from `GET /signalk`).
 * Delta buffering during offline periods (listed under M2) landed with the
   delta pipeline in M4 — there was nothing to buffer before that.
+* M5 adds `joltwallet/littlefs` (registry, exact-pinned) — the plan names
+  LittleFS for the UI bundle and this is the ESP-IDF component for it — and
+  the UI's build-time npm dependencies (`preact`, `vite`,
+  `@preact/preset-vite`, `typescript`; nothing at runtime but preact).
+  Beyond the M5 bullets: `PUT /api/v1/logs/level` (runtime log level) and
+  `GET /api/v1/system/coredump/raw` (download for `espcoredump.py`), both
+  small and needed to make logs/crashes actually useful from a browser.
 
 ## Quick start
 
 ```sh
 . $IDF_PATH/export.sh            # ESP-IDF v6.0.2, see .idf-version
 idf.py set-target esp32c6            # or esp32 / esp32s3 / esp32c3 / esp32p4
+(cd ui && npm ci && npm run build)   # optional: the web UI → LittleFS image
 idf.py build flash monitor
 # join the "espOS-xxxx" access point, the setup page opens; or see docs/wifi.md
 curl http://<device-ip>/api/v1/wifi/status

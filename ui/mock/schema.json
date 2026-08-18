@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:espos:config",
+  "title": "espOS configuration",
+  "description": "Every property is an NVS namespace; every nested property is a key in it. Values omitted from a PUT are left untouched; null resets a key to its default; secret values read back as \"********\" and that sentinel is ignored on write.",
+  "type": "object",
+  "properties": {
+    "app": {
+      "type": "object",
+      "title": "Example app",
+      "x-espos-version": 1,
+      "properties": {
+        "label": {
+          "title": "Label",
+          "description": "Free-text name shown in the UI.",
+          "type": "string",
+          "default": "espOS device",
+          "maxLength": 32
+        },
+        "enabled": {
+          "title": "Enabled",
+          "description": "Master switch for the example task.",
+          "type": "boolean",
+          "default": true
+        },
+        "interval_ms": {
+          "title": "Interval",
+          "description": "How often the example task logs a heartbeat.",
+          "type": "integer",
+          "default": 1000,
+          "minimum": 100,
+          "maximum": 60000,
+          "x-espos-unit": "ms"
+        },
+        "scale": {
+          "title": "Scale factor",
+          "type": "number",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 100.0
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "string",
+          "default": "auto",
+          "maxLength": 6,
+          "enum": [
+            "auto",
+            "manual"
+          ]
+        },
+        "api_key": {
+          "title": "API key",
+          "description": "Demonstrates a secret: never read back over the API.",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "cal_table": {
+          "title": "Calibration table",
+          "description": "Opaque bytes, base64 over the API.",
+          "type": "string",
+          "contentEncoding": "base64",
+          "x-espos-type": "blob",
+          "x-espos-maxBytes": 64,
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "description": "Settings of the example application in main/."
+    },
+    "httpd": {
+      "type": "object",
+      "title": "HTTP server",
+      "x-espos-version": 1,
+      "properties": {
+        "port": {
+          "title": "TCP port",
+          "description": "Port the HTTP server listens on.",
+          "type": "integer",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 65535,
+          "x-espos-restartRequired": true
+        }
+      },
+      "additionalProperties": false,
+      "description": "Built-in web server serving the UI and the REST API."
+    },
+    "sk": {
+      "type": "object",
+      "title": "SignalK server",
+      "x-espos-version": 1,
+      "properties": {
+        "discovery": {
+          "title": "Discover servers via mDNS",
+          "description": "Browse _signalk-http._tcp on the local network. Off = only the manual server below.",
+          "type": "boolean",
+          "default": true
+        },
+        "server_self": {
+          "title": "Preferred server (self URN)",
+          "description": "Vessel self URN of the discovered server to use, e.g. urn:mrn:signalk:uuid:… Empty = first discovered server with a master role.",
+          "type": "string",
+          "default": "",
+          "maxLength": 127
+        },
+        "server_host": {
+          "title": "Manual server host",
+          "description": "Host name or IP when mDNS is blocked. Empty = use discovery.",
+          "type": "string",
+          "default": "",
+          "maxLength": 63
+        },
+        "server_port": {
+          "title": "Manual server port",
+          "type": "integer",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "description": {
+          "title": "Access request description",
+          "description": "Shown to the admin approving the request. Empty = espOS <hostname>.",
+          "type": "string",
+          "default": "",
+          "maxLength": 63
+        },
+        "permissions": {
+          "title": "Requested permissions",
+          "description": "readwrite is needed to publish deltas.",
+          "type": "string",
+          "default": "readwrite",
+          "maxLength": 9,
+          "enum": [
+            "readonly",
+            "readwrite",
+            "admin"
+          ]
+        },
+        "check_s": {
+          "title": "Token check interval",
+          "description": "How often an approved token is verified against the server (detects revocation).",
+          "type": "integer",
+          "default": 60,
+          "minimum": 10,
+          "maximum": 3600,
+          "x-espos-unit": "s"
+        },
+        "discover_s": {
+          "title": "Discovery interval",
+          "type": "integer",
+          "default": 60,
+          "minimum": 15,
+          "maximum": 3600,
+          "x-espos-unit": "s"
+        },
+        "ws_enabled": {
+          "title": "Stream deltas",
+          "description": "Keep a WebSocket to the server open and send published values as deltas.",
+          "type": "boolean",
+          "default": true
+        },
+        "batch_ms": {
+          "title": "Delta batching window",
+          "description": "Values published within this window go out as one delta message.",
+          "type": "integer",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 5000,
+          "x-espos-unit": "ms"
+        },
+        "buffer_msgs": {
+          "title": "Offline buffer (messages)",
+          "description": "Delta messages kept while the server is unreachable; oldest are dropped first.",
+          "type": "integer",
+          "default": 128,
+          "minimum": 8,
+          "maximum": 1024
+        },
+        "buffer_kb": {
+          "title": "Offline buffer (size)",
+          "type": "integer",
+          "default": 32,
+          "minimum": 4,
+          "maximum": 512,
+          "x-espos-unit": "KiB"
+        },
+        "drain_per_s": {
+          "title": "Backlog drain rate",
+          "description": "Buffered messages per second sent after a reconnect, so the server is not swamped.",
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200,
+          "x-espos-unit": "1/s"
+        },
+        "health_s": {
+          "title": "Device health interval",
+          "description": "Publish uptime, heap, RSSI, reconnects and reset reason this often. 0 = off.",
+          "type": "integer",
+          "default": 10,
+          "minimum": 0,
+          "maximum": 3600,
+          "x-espos-unit": "s"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Which SignalK server to talk to and how to obtain access. The device identity (clientId) and the token itself live in device state, not here."
+    },
+    "wifi": {
+      "type": "object",
+      "title": "WiFi",
+      "x-espos-version": 1,
+      "properties": {
+        "sta_enabled": {
+          "title": "Station enabled",
+          "description": "Connect to the configured networks. Off = radio idle (portal still available if enabled).",
+          "type": "boolean",
+          "default": true
+        },
+        "hostname": {
+          "title": "Hostname",
+          "description": "DHCP/mDNS hostname. Empty = espos-<last 4 hex of MAC>.",
+          "type": "string",
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9-]*$",
+          "x-espos-restartRequired": true
+        },
+        "ssid0": {
+          "title": "Network 1 SSID",
+          "type": "string",
+          "default": "",
+          "maxLength": 32
+        },
+        "psk0": {
+          "title": "Network 1 password",
+          "description": "Empty for an open network, else 8..63 characters (WPA).",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(.{8,63})?$",
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "bssid0": {
+          "title": "Network 1 BSSID pin",
+          "description": "Optional aa:bb:cc:dd:ee:ff to pin one access point (no roaming).",
+          "type": "string",
+          "default": "",
+          "maxLength": 17,
+          "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$"
+        },
+        "ssid1": {
+          "title": "Network 2 SSID",
+          "type": "string",
+          "default": "",
+          "maxLength": 32
+        },
+        "psk1": {
+          "title": "Network 2 password",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(.{8,63})?$",
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "bssid1": {
+          "title": "Network 2 BSSID pin",
+          "type": "string",
+          "default": "",
+          "maxLength": 17,
+          "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$"
+        },
+        "ssid2": {
+          "title": "Network 3 SSID",
+          "type": "string",
+          "default": "",
+          "maxLength": 32
+        },
+        "psk2": {
+          "title": "Network 3 password",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(.{8,63})?$",
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "bssid2": {
+          "title": "Network 3 BSSID pin",
+          "type": "string",
+          "default": "",
+          "maxLength": 17,
+          "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$"
+        },
+        "ssid3": {
+          "title": "Network 4 SSID",
+          "type": "string",
+          "default": "",
+          "maxLength": 32
+        },
+        "psk3": {
+          "title": "Network 4 password",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(.{8,63})?$",
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "bssid3": {
+          "title": "Network 4 BSSID pin",
+          "type": "string",
+          "default": "",
+          "maxLength": 17,
+          "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$"
+        },
+        "backoff_max_s": {
+          "title": "Reconnect backoff cap",
+          "description": "Exponential backoff between rounds over all networks, 1 s doubling up to this cap, ±25 % jitter.",
+          "type": "integer",
+          "default": 60,
+          "minimum": 5,
+          "maximum": 600,
+          "x-espos-unit": "s"
+        },
+        "dhcp_tmo_s": {
+          "title": "DHCP timeout",
+          "description": "Associated but no IP after this long counts as a failed attempt.",
+          "type": "integer",
+          "default": 15,
+          "minimum": 3,
+          "maximum": 120,
+          "x-espos-unit": "s"
+        },
+        "connect_tmo_s": {
+          "title": "Connect timeout",
+          "description": "Safety net if the driver never reports a result.",
+          "type": "integer",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 120,
+          "x-espos-unit": "s"
+        },
+        "portal_enabled": {
+          "title": "Provisioning access point",
+          "description": "Bring up the setup access point when no network is configured or nothing connects for a while.",
+          "type": "boolean",
+          "default": true
+        },
+        "portal_after_s": {
+          "title": "Portal after",
+          "description": "Seconds without a connection before the access point comes up (0 networks configured: immediately).",
+          "type": "integer",
+          "default": 90,
+          "minimum": 10,
+          "maximum": 3600,
+          "x-espos-unit": "s"
+        },
+        "portal_ssid": {
+          "title": "Access point SSID",
+          "description": "Empty = espOS-<last 4 hex of MAC>.",
+          "type": "string",
+          "default": "",
+          "maxLength": 32
+        },
+        "portal_psk": {
+          "title": "Access point password",
+          "description": "Empty = open network. 8..63 characters for WPA2.",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(.{8,63})?$",
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "ps_mode": {
+          "title": "Power save",
+          "description": "WiFi modem power save. 'none' keeps latency lowest.",
+          "type": "string",
+          "default": "none",
+          "maxLength": 4,
+          "enum": [
+            "none",
+            "min",
+            "max"
+          ],
+          "x-espos-restartRequired": true
+        }
+      },
+      "additionalProperties": false,
+      "description": "Station networks in priority order (slot 0 first), reconnect policy and the provisioning access point."
+    }
+  },
+  "additionalProperties": false
+}

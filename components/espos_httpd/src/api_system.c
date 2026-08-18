@@ -90,13 +90,13 @@ static esp_err_t info_get(httpd_req_t *req)
              "{\"app\":\"%s\",\"version\":\"%s\",\"idf_version\":\"%s\","
              "\"chip\":\"%s\",\"chip_revision\":%u,\"cores\":%u,"
              "\"uptime_s\":%" PRId64 ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32 ","
-             "\"reset_reason\":\"%s\",\"config_storage_reset\":%s,\"schema_etag\":\"%s\"}",
+             "\"reset_reason\":\"%s\",\"config_storage_reset\":%s,\"schema_etag\":\"%s\",\"ui_storage\":%s}",
              app->project_name, app->version, esp_get_idf_version(),
              chip_model_str(chip.model), (unsigned)chip.revision, (unsigned)chip.cores,
              uptime_s(), esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
              reset_reason_str(esp_reset_reason()),
              espos_config_storage_was_reset() ? "true" : "false",
-             espos_cfg_schema_etag);
+             espos_cfg_schema_etag, espos_httpd_static_mounted() ? "true" : "false");
     return espos_httpd_send_json(req, NULL, body);
 }
 
