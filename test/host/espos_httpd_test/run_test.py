@@ -383,6 +383,12 @@ class MockSignalK:
         self.requests = {}      # requestId -> dict(clientId, state, permission, token)
         self.tokens = {}        # token -> clientId (valid)
         self.log = []
+        self.deltas = []        # decoded delta documents received on the stream
+        self.ws_open = 0
+        self.ws_accept = True   # False → refuse the upgrade (simulates an unreachable stream)
+        self.ws_auth = None     # last Authorization header seen on the stream
+        self.meta = {}          # path -> meta dict
+        self.meta_puts = []
         mock = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -399,8 +405,99 @@ class MockSignalK:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _ws(self):
+                import base64, hashlib, struct
+                mock.ws_auth = self.headers.get("Authorization")
+                if not mock.ws_accept:
+                    return self._send(503, raw=b"no", ctype="text/plain")
+                key = self.headers.get("Sec-WebSocket-Key", "")
+                acc = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+                self.send_response(101)
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", acc)
+                self.end_headers()
+                sock = self.connection
+                sock.settimeout(1.0)
+                hello = json.dumps({"name": "signalk-server", "version": "2.31.1", "self": "vessels." + mock.self_urn}).encode()
+                sock.sendall(bytes([0x81, len(hello)]) + hello)
+                mock.ws_open += 1
+                buf = b""
+                try:
+                    while mock.ws_accept:
+                        try:
+                            chunk = sock.recv(4096)
+                        except socket.timeout:
+                            continue
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while len(buf) >= 2:
+                            fin_op, m_len = buf[0], buf[1]
+                            masked = m_len & 0x80
+                            ln = m_len & 0x7F
+                            off = 2
+                            if ln == 126:
+                                if len(buf) < 4:
+                                    break
+                                ln = struct.unpack(">H", buf[2:4])[0]
+                                off = 4
+                            elif ln == 127:
+                                if len(buf) < 10:
+                                    break
+                                ln = struct.unpack(">Q", buf[2:10])[0]
+                                off = 10
+                            need = off + (4 if masked else 0) + ln
+                            if len(buf) < need:
+                                break
+                            mask = buf[off:off + 4] if masked else b""
+                            payload = buf[off + (4 if masked else 0):need]
+                            if masked:
+                                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+                            buf = buf[need:]
+                            op = fin_op & 0x0F
+                            if op == 0x1:
+                                try:
+                                    mock.deltas.append(json.loads(payload.decode()))
+                                except Exception:
+                                    mock.deltas.append({"raw": payload.decode(errors="replace")})
+                            elif op == 0x8:
+                                raise ConnectionError("close")
+                            elif op == 0x9:
+                                sock.sendall(bytes([0x8A, len(payload)]) + payload)
+                except (ConnectionError, OSError):
+                    pass
+                finally:
+                    mock.ws_open -= 1
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+                self.close_connection = True
+
+            def do_PUT(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                if self.path.startswith("/signalk/v1/api/vessels/self/") and self.path.endswith("/meta"):
+                    auth = self.headers.get("Authorization", "")
+                    tok = auth[7:] if auth.startswith("Bearer ") else ""
+                    if mock.security and tok not in mock.tokens:
+                        return self._send(401, raw=b"Unauthorized", ctype="text/plain")
+                    path = self.path[len("/signalk/v1/api/vessels/self/"):-len("/meta")].replace("/", ".")
+                    mock.meta[path] = body.get("value")
+                    mock.meta_puts.append(path)
+                    return self._send(200, {"state": "COMPLETED", "statusCode": 200})
+                return self._send(404, {"error": "nope"})
+
             def do_GET(self):
                 mock.log.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path.startswith("/signalk/v1/stream"):
+                    return self._ws()
+                if self.path.startswith("/signalk/v1/api/vessels/self/") and self.path.endswith("/meta"):
+                    path = self.path[len("/signalk/v1/api/vessels/self/"):-len("/meta")].replace("/", ".")
+                    if path in mock.meta:
+                        return self._send(200, mock.meta[path])
+                    return self._send(404, {"error": "no meta"})
                 if self.path == "/signalk":
                     return self._send(200, {"endpoints": {"v1": {"version": "2.31.1"}}})
                 if self.path.startswith("/signalk/v1/requests/"):
@@ -853,6 +950,68 @@ class SkTests(unittest.TestCase):
         js = wait_sk(lambda j: j["token"]["state"] == "open", timeout=10)
         self.assertIsNotNone(js, sk_status())
         self.mock.ctl("security", "on")
+
+    def test_08b_stream_sends_deltas_and_reconciles_meta(self):
+        # ensure approved with a token again (test_08 left it "open"/re-requesting)
+        cid = sk_status()["client_id"]
+        self.mock.ctl("forget")
+        req("POST", "/api/v1/sk/request", None)
+        wait_sk(lambda j: j["token"]["state"] == "pending", timeout=10)
+        self.mock.ctl("approve", cid)
+        js = wait_sk(lambda j: j["token"]["state"] == "approved", timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        js = wait_sk(lambda j: j["ws"]["connected"], timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        self.assertTrue(self.mock.ws_auth.startswith("Bearer "))
+        # publish two values quickly → one delta with both; declared meta reconciled by PUT
+        n0 = len(self.mock.deltas)
+        st, _, _, js = req("POST", "/api/v1/sk/publish", {"path": "espos.test.a", "value": 1.5,
+                                                          "meta": {"units": "V"}, "period_ms": 1000})
+        self.assertEqual(st, 202, js)
+        st, _, _, js = req("POST", "/api/v1/sk/publish", {"path": "espos.test.b", "value": "hello"})
+        self.assertEqual(st, 202, js)
+        ok = wait_for(lambda: len(self.mock.deltas) > n0 or None, timeout=5)
+        self.assertTrue(ok, "no delta arrived")
+        d = self.mock.deltas[n0]
+        self.assertEqual(d["context"], "vessels.self")
+        upd = d["updates"][0]
+        self.assertEqual(upd["source"]["label"], "espos-1a2b")
+        vals = {v["path"]: v["value"] for v in upd["values"]}
+        self.assertEqual(vals.get("espos.test.a"), 1.5)
+        self.assertEqual(vals.get("espos.test.b"), "hello")
+        ok = wait_for(lambda: "espos.test.a" in self.mock.meta or None, timeout=5)
+        self.assertTrue(ok, "meta not reconciled")
+        self.assertEqual(self.mock.meta["espos.test.a"]["units"], "V")
+        self.assertEqual(self.mock.meta["espos.test.a"]["timeout"], 2.5)
+        # server-side edits win: a redeclare against existing meta does not PUT again
+        self.mock.meta["espos.test.a"] = {"units": "kV"}
+        puts0 = len(self.mock.meta_puts)
+        req("POST", "/api/v1/sk/publish", {"path": "espos.test.a", "value": 2, "meta": {"units": "V"}})
+        time.sleep(1.5)
+        self.assertEqual(len(self.mock.meta_puts), puts0)
+        self.assertEqual(self.mock.meta["espos.test.a"]["units"], "kV")
+        # health values arrive under espos.<label>.*
+        js = wait_for(lambda: any(v["path"].endswith(".uptime") for d in self.mock.deltas for v in d["updates"][0]["values"]) or None, timeout=15)
+        self.assertTrue(js, "no health delta")
+
+    def test_08c_offline_buffer_drains_in_order_after_reconnect(self):
+        js = wait_sk(lambda j: j["ws"]["connected"], timeout=15)
+        self.assertIsNotNone(js)
+        self.mock.ws_accept = False          # server drops the stream and refuses upgrades
+        js = wait_sk(lambda j: not j["ws"]["connected"], timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        n0 = len(self.mock.deltas)
+        for i in range(10):
+            req("POST", "/api/v1/sk/publish", {"path": "espos.test.seq", "value": i})
+            time.sleep(0.4)                  # well beyond the batch window: one message each
+        js = wait_sk(lambda j: j["ws"]["buffered"] >= 10, timeout=5)
+        self.assertIsNotNone(js, sk_status())
+        self.assertFalse(js["ws"]["connected"])
+        self.mock.ws_accept = True
+        js = wait_sk(lambda j: j["ws"]["connected"] and j["ws"]["buffered"] == 0, timeout=70)
+        self.assertIsNotNone(js, sk_status())
+        seq = [v["value"] for d in self.mock.deltas[n0:] for v in d["updates"][0]["values"] if v["path"] == "espos.test.seq"]
+        self.assertEqual(seq, list(range(10)))     # complete and in order
 
     def test_09_manual_host_config_wins_over_discovery(self):
         st, _, _, _ = req("PUT", "/api/v1/config", {"sk": {"server_host": "127.0.0.1", "server_port": self.mock.port}})

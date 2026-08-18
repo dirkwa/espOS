@@ -1,8 +1,8 @@
-# SignalK (`espos_sk`) — discovery and access token
+# SignalK (`espos_sk`) — discovery, access token, delta stream
 
-M3 scope: find the server, get and keep a token. Delta output and meta
-reconciliation are M4 and build on `espos_sk_get_token()` /
-`espos_sk_get_server()`.
+M3: find the server, get and keep a token. M4: stream published values as
+deltas over a WebSocket, buffer them while offline, reconcile metadata,
+publish device health.
 
 ## Discovery
 
@@ -73,9 +73,64 @@ Design points from the plan, all implemented:
 * Secrets: the token never appears in any API response or SSE event; the
   store lives in the same (optionally encrypted) NVS partition as the config.
 
+## Delta stream (M4)
+
+`espos_sk_publish_number/string/bool/json(path, value)` is the whole app
+API: thread-safe, never blocks, works before WiFi is up. Values are for
+`vessels.self`; the source label is `espos.<hostname>`.
+
+Pipeline (`sk_delta.c`, pure C, unit-tested; `sk_ws.c` = the transport
+task):
+
+1. **Batching window** (`sk.batch_ms`, default 100 ms): everything
+   published inside one window becomes one delta message with one update;
+   a path published twice in a window keeps the last value. Numbers use
+   the shortest round-trip representation.
+2. **Ring buffer** while the stream is down (`sk.buffer_msgs` /
+   `sk.buffer_kb`, default 128 messages / 32 KiB): oldest messages are
+   dropped first and counted (`ws.dropped`). Windows keep closing while
+   offline, so a path's history survives, not just its latest value.
+3. **Drain** after (re)connect at `sk.drain_per_s` (default 20/s) so the
+   server is not swamped by a backlog; new values queue behind the backlog
+   so ordering per path is preserved.
+
+The WebSocket task (`espos_skws`) runs when `sk.ws_enabled`, WiFi is up, a
+server is selected and the token state allows streaming (approved, or the
+server has security off). It connects to
+`ws://<host>:<port>/signalk/v1/stream?subscribe=none` with
+`Authorization: Bearer <token>`, consumes the hello, then sends deltas as
+text frames. A `401` on connect calls `espos_sk_report_unauthorized()` (the
+token machine re-verifies / re-requests); any other failure backs off with
+the shared WiFi backoff curve (`ws.next_retry_s`). Config changes to the
+stream keys are picked up live; `ws_enabled=false` closes the socket and
+keeps buffering.
+
+**Meta reconciliation.** `espos_sk_declare_meta(path, meta_json,
+period_ms)` records metadata for a NON-standard path (spec paths belong to
+the server). On every (re)connect the task `GET`s
+`/signalk/v1/api/vessels/self/<path>/meta`; if the server has none it
+`PUT`s ours, otherwise the server's copy — possibly edited by the user —
+wins. `period_ms > 0` adds `timeout` (2.5× the period, in seconds), the one
+field the device really owns. `ws.meta.declared/reconciled` show progress.
+
+**Device health.** Every `sk.health_s` (default 10 s, 0 = off) the task
+publishes `espos.<hostname>.{uptime,freeHeap,minFreeHeap,rssi,
+wifiReconnects,skReconnects,resetReason}` with declared meta, so a
+dashboard sees the device without any app code.
+
+Wire facts that cost time (signalk-server 2.31): client text frames must
+be sent with the FIN bit (`WS_TRANSPORT_OPCODES_TEXT |
+WS_TRANSPORT_OPCODES_FIN`) or the server closes the socket after the
+first frame; `subscribe=none` still delivers the hello; meta `GET` is
+`404` when unset and `PUT` takes `{"value": {…}}`.
+
 ## API
 
-* `GET /api/v1/sk/status` — token/server/discovery status (see api.md).
+* `GET /api/v1/sk/status` — token/server/discovery status plus the `ws`
+  stream object (see api.md).
+* `POST /api/v1/sk/publish {"path","value"[,"meta","period_ms"]}` — publish
+  over HTTP.
+* SSE `sk_ws` — the `ws` object on every stream change.
 * `GET /api/v1/sk/servers` — discovered servers, `selected` flag.
 * `POST /api/v1/sk/discover` — run a discovery pass now.
 * `POST /api/v1/sk/request` — request again (from denied/error/open).
@@ -87,10 +142,13 @@ Design points from the plan, all implemented:
 
 ## Testing
 
-* `test/host/espos_sk_test`: 17 Unity cases over the state machine.
-* `test/host/espos_httpd_test` `SkTests`: the real HTTP client against a
-  Python mock of the signalk-server security API (approve, deny, revoke,
-  forget, security off, manual token, manual host).
+* `test/host/espos_sk_test`: 29 Unity cases — token state machine, store,
+  delta batching / ring / drain.
+* `test/host/espos_httpd_test` `SkTests`: the real HTTP client and
+  WebSocket against a Python mock of the signalk-server security API and
+  stream endpoint (approve, deny, revoke, forget, security off, manual
+  token, manual host, deltas + meta reconciliation, offline buffering with
+  ordered drain).
 * Against a real signalk-server on the host: `node bin/signalk-server -c
   <fresh config dir>` from a checkout, `POST /skServer/enableSecurity
   {"userId","password","type":"admin"}`, restart, then approve with

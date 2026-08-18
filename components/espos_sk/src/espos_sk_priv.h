@@ -24,6 +24,17 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max);
 /* HTTP endpoints: api_sk.c */
 esp_err_t espos_sk_register_api(void);
 
+/* WebSocket delta stream + meta reconciliation + health (sk_ws.c). */
+esp_err_t espos_sk_ws_start(void);
+void espos_sk_ws_stop(void);
+void espos_sk_ws_config_changed(void);
+/* Meta GET/PUT (sk_http.c). *out_meta receives the JSON object text (malloc'ed) or NULL if none. */
+int espos_sk_http_get_meta(const espos_sk_server_t *srv, const char *token, const char *path, char **out_meta);
+int espos_sk_http_put_meta(const espos_sk_server_t *srv, const char *token, const char *path, const char *meta_json);
+/* JSON snippet for the status document. */
+char *espos_sk_ws_status_json(void);
+bool espos_sk_stream_allowed(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -19,7 +19,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 | M1        | Config store + minimal HTTP server + JSON Schema | ✅ implemented, host-tested |
 | M2        | WiFi state machine with reason codes             | ✅ implemented, host-tested, live on ESP32-P4 (BLE provisioning pending) |
 | M3        | SignalK discovery + token state machine          | ✅ implemented, host-tested against signalk-server 2.31, live on ESP32-P4 |
-| M4        | WebSocket deltas + meta reconciliation           | planned |
+| M4        | WebSocket deltas + meta reconciliation           | ✅ implemented, host-tested (mock stream), live on ESP32-P4 against signalk-server 2.31 |
 | M5        | Web UI (Vite SPA)                                | planned |
 | M6        | Signed OTA with rollback                         | planned |
 
@@ -45,8 +45,8 @@ Recorded here so nothing is silently applied (plan §7):
   2026-08-18. Discovery of `_signalk-ws._tcp` is folded into the
   `_signalk-http._tcp` browse (every server advertises both with the same
   TXT records; the ws endpoint comes from `GET /signalk`).
-* Delta buffering during offline periods (listed under M2) lands with the
-  delta pipeline in M4 — there is nothing to buffer before that.
+* Delta buffering during offline periods (listed under M2) landed with the
+  delta pipeline in M4 — there was nothing to buffer before that.
 
 ## Quick start
 

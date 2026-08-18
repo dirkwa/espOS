@@ -36,6 +36,13 @@ void app_main(void)
     ESP_ERROR_CHECK(espos_wifi_start());
     ESP_ERROR_CHECK(espos_sk_start());
 
+    /* Example app payload: a heartbeat counter under a custom path (with
+     * meta, because the server cannot know a non-standard path) and the
+     * configured scale — standard-looking but still ours. */
+    char hb_path[64];
+    snprintf(hb_path, sizeof(hb_path), "espos.%s.heartbeat", espos_wifi_short_id());
+    espos_sk_declare_meta(hb_path, "{\"description\":\"Example app heartbeat counter\"}", 1000);
+    uint32_t heartbeat = 0;
     char label[33];
     for (;;) {
         bool enabled = true;
@@ -47,6 +54,7 @@ void app_main(void)
         espos_config_get_str(ESPOS_CFG_NS_APP, ESPOS_CFG_APP_LABEL, label, sizeof(label), NULL);
         if (enabled) {
             ESP_LOGI(TAG, "%s: heartbeat (interval %" PRId32 " ms, scale %.3f)", label, interval, (double)scale);
+            espos_sk_publish_number(hb_path, (double)(heartbeat++) * scale);
         }
         vTaskDelay(pdMS_TO_TICKS(interval));
     }
