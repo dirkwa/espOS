@@ -69,6 +69,39 @@ esp_err_t espos_sk_publish_json(const char *path, const char *value_json);
 #define ESPOS_SK_MAX_META 16
 esp_err_t espos_sk_declare_meta(const char *path, const char *meta_json, uint32_t period_ms);
 
+/* ------------------------------------------------------- inbound (M7) */
+
+#include "espos_sk_parse.h"
+
+/**
+ * Subscribe to values (and meta) of vessels.self paths. `pattern` is an
+ * exact path or a family: "notifications.*", "environment.*", "*".
+ * period_ms is the server-side rate hint (0 = 1000). cb runs on the stream
+ * task with strings valid only during the call — copy, do not block, do
+ * not call espos_sk_* that could wait on the stream. Meta arrives as items
+ * with meta_json set (stream opened with sendMeta=all). Subscriptions
+ * survive reconnects and are (re)sent after every hello. Returns a
+ * handle > 0, or <0 (-ESP_ERR_NO_MEM style) when the table is full.
+ */
+typedef void (*espos_sk_sub_cb_t)(const espos_sk_update_t *u, void *arg);
+#define ESPOS_SK_MAX_SUBS 48
+int espos_sk_subscribe(const char *pattern, uint32_t period_ms, espos_sk_sub_cb_t cb, void *arg);
+esp_err_t espos_sk_unsubscribe(int handle);
+
+/**
+ * PUT a value (JSON text) to a vessels.self path over the stream. cb (may
+ * be NULL) gets the server's response — state COMPLETED/FAILED with
+ * statusCode — or state "TIMEOUT" after 10 s. Queued if the stream is
+ * momentarily busy; ESP_ERR_INVALID_STATE when not connected, ESP_ERR_NO_MEM
+ * when 8 requests are already in flight.
+ */
+typedef void (*espos_sk_put_cb_t)(const char *request_id, const char *state, int status_code, const char *message, void *arg);
+esp_err_t espos_sk_put(const char *path, const char *value_json, espos_sk_put_cb_t cb, void *arg);
+
+/** Send an arbitrary text frame on the stream (e.g. an inbound delta the
+ * server should ingest as-is). ESP_ERR_INVALID_STATE when not connected. */
+esp_err_t espos_sk_send_raw(const char *json);
+
 typedef struct {
     bool enabled;
     bool connected;
@@ -81,6 +114,11 @@ typedef struct {
     size_t pending, buffered, buffered_bytes;
     uint32_t dropped;
     size_t meta_declared, meta_reconciled;
+    uint32_t received;        /* value/meta items delivered to subscribers */
+    uint32_t frames;          /* text frames read */
+    size_t subs;              /* active subscriptions */
+    size_t puts_pending;
+    uint32_t puts_sent, puts_failed;
 } espos_sk_ws_status_t;
 esp_err_t espos_sk_ws_get_status(espos_sk_ws_status_t *out);
 

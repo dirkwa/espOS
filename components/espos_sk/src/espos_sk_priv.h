@@ -38,3 +38,10 @@ bool espos_sk_stream_allowed(void);
 #ifdef __cplusplus
 }
 #endif
+
+/* sk_inbound.c ↔ sk_ws.c */
+void espos_sk_inbound_set_connected(bool connected);
+char *espos_sk_inbound_take_frame(void);            /* malloc'ed; NULL when nothing to send */
+bool espos_sk_inbound_handle_frame(const char *json, size_t len, char *err_out, size_t err_size); /* false = server error frame */
+void espos_sk_inbound_tick(uint32_t now_ms);
+void espos_sk_inbound_stats(espos_sk_ws_status_t *st);

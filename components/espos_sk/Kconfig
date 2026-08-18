@@ -1,0 +1,13 @@
+menu "espOS SignalK"
+
+    config ESPOS_SK_RX_FRAME_MAX
+        int "Largest inbound stream frame kept (bytes)"
+        default 16384
+        range 2048 131072
+        help
+            Delta messages larger than this are dropped (logged). A
+            subscription burst after reconnect (values + meta for many
+            paths) can reach several KiB; raise on PSRAM boards that
+            subscribe to whole families.
+
+endmenu

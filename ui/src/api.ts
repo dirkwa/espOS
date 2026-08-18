@@ -49,6 +49,8 @@ export interface SkWs {
   enabled: boolean; connected: boolean; connected_s?: number; reconnects: number; sent: number; send_errors: number;
   next_retry_s?: number; pending: number; buffered: number; buffered_bytes: number; dropped: number; last_error: string;
   meta: { declared: number; reconciled: number };
+  in?: { subs: number; frames: number; received: number };
+  put?: { pending: number; ok: number; failed: number };
 }
 export interface SkStatus {
   token: { state: string; has_token: boolean; busy: boolean; approved_s?: number; pending_s?: number; pending_href?: string;

@@ -340,7 +340,8 @@ static void ws_task(void *arg)
     esp_transport_handle_t tcp = NULL, ws = NULL;
     bool connected = false;
     uint32_t next_health = 0;
-    char *buf = malloc(2048);
+    size_t cap = 4096;
+    char *buf = malloc(cap);
     char headers[ESPOS_SK_TOKEN_MAX + 32];
     espos_sk_server_t cur_srv = { 0 };
     char cur_token[ESPOS_SK_TOKEN_MAX] = { 0 };
@@ -366,6 +367,7 @@ static void ws_task(void *arg)
                 ESP_LOGI(TAG, "closing stream (%s)", !s.enabled ? "disabled" : !wifi_up ? "wifi down" : changed ? "server/token changed" : "no server");
                 esp_transport_close(ws);
                 connected = false;
+                espos_sk_inbound_set_connected(false);
                 lock();
                 s.st.connected = false;
                 if (s.delta) {
@@ -408,14 +410,14 @@ static void ws_task(void *arg)
                 tcp = esp_transport_tcp_init();
                 ws = esp_transport_ws_init(tcp);
             }
-            esp_transport_ws_set_path(ws, "/signalk/v1/stream?subscribe=none");
+            esp_transport_ws_set_path(ws, "/signalk/v1/stream?subscribe=none&sendMeta=all");
             if (token[0]) {
                 snprintf(headers, sizeof(headers), "Authorization: Bearer %s\r\n", token);
             } else {
                 headers[0] = '\0';
             }
             esp_transport_ws_set_headers(ws, headers[0] ? headers : NULL);
-            ESP_LOGI(TAG, "connecting to ws://%s:%u/signalk/v1/stream", srv.host, srv.port);
+            ESP_LOGI(TAG, "connecting to ws://%s:%u/signalk/v1/stream (subscribe=none, sendMeta=all)", srv.host, srv.port);
             int rc = esp_transport_connect(ws, srv.host, srv.port, 8000);
             if (rc < 0) {
                 int http = esp_transport_ws_get_upgrade_request_status(ws);
@@ -455,6 +457,7 @@ static void ws_task(void *arg)
             s.connected_since_ms = now_ms();
             unlock();
             ESP_LOGI(TAG, "stream connected");
+            espos_sk_inbound_set_connected(true);
             publish_status();
             /* meta first, so the server knows units before values arrive */
             reconcile_meta(&srv, token);
@@ -468,6 +471,28 @@ static void ws_task(void *arg)
         if (s.health_ms && (int32_t)(t - next_health) >= 0) {
             publish_health();
             next_health = t + s.health_ms;
+        }
+        espos_sk_inbound_tick(t);
+        /* control frames first: subscriptions, PUTs, raw sends */
+        char *frame = espos_sk_inbound_take_frame();
+        if (frame) {
+            ESP_LOGD(TAG, "tx %.160s", frame);
+            int w = esp_transport_ws_send_raw(ws, WS_TRANSPORT_OPCODES_TEXT | WS_TRANSPORT_OPCODES_FIN, frame, (int)strlen(frame), 3000);
+            free(frame);
+            if (w < 0) {
+                ESP_LOGW(TAG, "send failed; reconnecting");
+                lock();
+                s.st.send_errors++;
+                s.st.connected = false;
+                unlock();
+                set_error("send failed");
+                esp_transport_close(ws);
+                connected = false;
+                espos_sk_inbound_set_connected(false);
+                s.retry_at_ms = now_ms() + 1000;
+                publish_status();
+            }
+            continue;
         }
         char *msg = NULL;
         lock();
@@ -487,6 +512,7 @@ static void ws_task(void *arg)
                 set_error("send failed");
                 esp_transport_close(ws);
                 connected = false;
+                espos_sk_inbound_set_connected(false);
                 s.retry_at_ms = now_ms() + 1000;
                 publish_status();
                 continue;
@@ -513,20 +539,68 @@ static void ws_task(void *arg)
         }
         int pr = esp_transport_poll_read(ws, (int)wait);
         if (pr > 0) {
-            int r = esp_transport_read(ws, buf, 2047, 100);
-            if (r > 0) {
-                buf[r] = '\0';
-                ESP_LOGD(TAG, "rx %d bytes: %.200s", r, buf);
-                /* the server tells us when a message was refused (auth,
-                 * malformed): surface that instead of silently retrying */
-                if (strstr(buf, "errorMessage") || strstr(buf, "\"error\"")) {
-                    ESP_LOGW(TAG, "server: %.160s", buf);
+            /* Read one whole text frame: esp_transport_ws hands payload
+             * back in buffer-sized pieces, so gather until payload_len. */
+            size_t have = 0;
+            bool broken = false, complete = false;
+            while (!complete && !broken) {
+                if (have + 1 >= cap) {
+                    if (cap >= CONFIG_ESPOS_SK_RX_FRAME_MAX) {
+                        ESP_LOGW(TAG, "frame larger than %d bytes dropped", CONFIG_ESPOS_SK_RX_FRAME_MAX);
+                        /* drain the rest of this frame */
+                        int r = esp_transport_read(ws, buf, (int)cap - 1, 100);
+                        if (r <= 0) {
+                            broken = r < 0;
+                            break;
+                        }
+                        have = 0;
+                        if (esp_transport_ws_get_read_payload_len(ws) <= r) {
+                            complete = true;   /* nothing useful in buf */
+                            have = 0;
+                        }
+                        continue;
+                    }
+                    size_t ncap = cap * 2 > (size_t)CONFIG_ESPOS_SK_RX_FRAME_MAX ? (size_t)CONFIG_ESPOS_SK_RX_FRAME_MAX : cap * 2;
+                    char *nb = realloc(buf, ncap);
+                    if (!nb) {
+                        broken = true;
+                        break;
+                    }
+                    buf = nb;
+                    cap = ncap;
+                }
+                int r = esp_transport_read(ws, buf + have, (int)(cap - have - 1), have ? 1000 : 100);
+                if (r < 0) {
+                    broken = true;
+                    break;
+                }
+                if (r == 0) {
+                    if (have == 0) {
+                        break;      /* control frame (ping/pong) handled by the transport */
+                    }
+                    continue;
+                }
+                have += (size_t)r;
+                int total = esp_transport_ws_get_read_payload_len(ws);
+                if ((int)have >= total && esp_transport_ws_get_fin_flag(ws)) {
+                    complete = true;
+                } else if ((int)have >= total) {
+                    /* fragmented message: keep appending the next fragment */
+                    continue;
+                }
+            }
+            if (complete && have) {
+                buf[have] = '\0';
+                ESP_LOGD(TAG, "rx %u bytes: %.200s", (unsigned)have, buf);
+                char err[64];
+                if (!espos_sk_inbound_handle_frame(buf, have, err, sizeof(err))) {
+                    ESP_LOGW(TAG, "server: %s", err);
                     lock();
-                    snprintf(s.st.last_error, sizeof(s.st.last_error), "%.60s", buf);
+                    snprintf(s.st.last_error, sizeof(s.st.last_error), "%.60s", err);
                     unlock();
                 }
             }
-            if (r < 0) {
+            if (broken) {
                 ESP_LOGW(TAG, "stream closed by server");
                 lock();
                 s.st.connected = false;
@@ -534,10 +608,10 @@ static void ws_task(void *arg)
                 set_error("closed by server");
                 esp_transport_close(ws);
                 connected = false;
+                espos_sk_inbound_set_connected(false);
                 s.retry_at_ms = now_ms() + 1000;
                 publish_status();
             }
-            /* server hello / anything else: not needed */
         } else if (pr < 0) {
             lock();
             s.st.connected = false;
@@ -545,12 +619,14 @@ static void ws_task(void *arg)
             set_error("connection error");
             esp_transport_close(ws);
             connected = false;
+            espos_sk_inbound_set_connected(false);
             s.retry_at_ms = now_ms() + 1000;
             publish_status();
         }
     }
     if (connected) {
         esp_transport_close(ws);
+        espos_sk_inbound_set_connected(false);
     }
     if (ws) {
         esp_transport_destroy(ws);
@@ -590,6 +666,7 @@ esp_err_t espos_sk_ws_get_status(espos_sk_ws_status_t *out)
         out->meta_reconciled += s.meta[i].reconciled;
     }
     unlock();
+    espos_sk_inbound_stats(out);
     return ESP_OK;
 }
 
@@ -618,6 +695,14 @@ char *espos_sk_ws_status_json(void)
     cJSON *m = cJSON_AddObjectToObject(j, "meta");
     cJSON_AddNumberToObject(m, "declared", (double)st.meta_declared);
     cJSON_AddNumberToObject(m, "reconciled", (double)st.meta_reconciled);
+    cJSON *in = cJSON_AddObjectToObject(j, "in");
+    cJSON_AddNumberToObject(in, "subs", (double)st.subs);
+    cJSON_AddNumberToObject(in, "frames", st.frames);
+    cJSON_AddNumberToObject(in, "received", st.received);
+    cJSON *pu = cJSON_AddObjectToObject(j, "put");
+    cJSON_AddNumberToObject(pu, "pending", (double)st.puts_pending);
+    cJSON_AddNumberToObject(pu, "ok", st.puts_sent);
+    cJSON_AddNumberToObject(pu, "failed", st.puts_failed);
     char *txt = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     return txt;

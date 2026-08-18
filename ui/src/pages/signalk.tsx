@@ -82,6 +82,8 @@ export function SignalKPage() {
               <Row k="Sent">{ws.sent} messages <span class="muted">· {ws.reconnects} connects · {ws.send_errors} send errors</span></Row>
               <Row k="Buffered">{ws.buffered} messages <span class="muted">({fmtBytes(ws.buffered_bytes)}) · {ws.pending} pending · {ws.dropped} dropped</span></Row>
               <Row k="Metadata">{ws.meta.reconciled}/{ws.meta.declared} reconciled</Row>
+              {ws.in && <Row k="Inbound">{ws.in.subs} subscription{ws.in.subs === 1 ? "" : "s"} <span class="muted">· {ws.in.received} values received · {ws.in.frames} frames</span></Row>}
+              {ws.put && (ws.put.ok + ws.put.failed + ws.put.pending > 0) && <Row k="PUT requests">{ws.put.ok} ok <span class="muted">· {ws.put.failed} failed · {ws.put.pending} pending</span></Row>}
               {ws.last_error && <Row k="Last error"><span class="mono">{ws.last_error}</span></Row>}
               <div class="row" style="margin-top:.5rem">
                 <label><input type="checkbox" checked={!!cfg?.["ws_enabled"]} onChange={(e) => void save({ ws_enabled: (e.target as HTMLInputElement).checked }, "Stream setting saved.")} /> stream deltas</label>

@@ -137,6 +137,60 @@ static esp_err_t publish_post(httpd_req_t *req)
     return espos_httpd_send_json(req, "202 Accepted", "{\"status\":\"queued\"}");
 }
 
+/* PUT a value on the stream: {"path": "...", "value": <json>} → 202. The
+ * server's answer is asynchronous; it shows up in the ws.put counters and
+ * the log. Handy for scripts (anchor drop/raise, switching). */
+#include "esp_log.h"
+static const char *TAG = "espos_sk";
+static char s_last_put[160];
+
+static void put_done(const char *request_id, const char *state, int status_code, const char *message, void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "PUT %s: %s %d %s", request_id, state, status_code, message);
+    snprintf(s_last_put, sizeof(s_last_put), "{\"request_id\":\"%s\",\"state\":\"%s\",\"status_code\":%d,\"message\":\"%.60s\"}",
+             request_id, state, status_code, message);
+}
+
+static esp_err_t put_post(httpd_req_t *req)
+{
+    if (!espos_httpd_require_json(req)) {
+        return ESP_OK;
+    }
+    char *body = NULL;
+    size_t len = 0;
+    if (espos_httpd_read_body(req, &body, &len) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    cJSON *j = cJSON_ParseWithLength(body, len);
+    free(body);
+    const cJSON *path = j ? cJSON_GetObjectItem(j, "path") : NULL;
+    const cJSON *value = j ? cJSON_GetObjectItem(j, "value") : NULL;
+    if (!cJSON_IsString(path) || !path->valuestring[0] || !value) {
+        cJSON_Delete(j);
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", "expected {\"path\": \"...\", \"value\": ...}");
+    }
+    char *vt = cJSON_PrintUnformatted(value);
+    esp_err_t err = espos_sk_put(path->valuestring, vt ? vt : "null", put_done, NULL);
+    free(vt);
+    cJSON_Delete(j);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return espos_httpd_send_error(req, "503 Service Unavailable", "not_connected", "stream not connected");
+    }
+    if (err == ESP_ERR_NO_MEM) {
+        return espos_httpd_send_error(req, "429 Too Many Requests", "busy", "too many PUTs in flight");
+    }
+    if (err != ESP_OK) {
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", esp_err_to_name(err));
+    }
+    return espos_httpd_send_json(req, "202 Accepted", "{\"status\":\"sent\"}");
+}
+
+static esp_err_t put_last_get(httpd_req_t *req)
+{
+    return espos_httpd_send_json(req, NULL, s_last_put[0] ? s_last_put : "null");
+}
+
 static void sse_hello(int client, void *arg)
 {
     (void)arg;
@@ -161,6 +215,8 @@ esp_err_t espos_sk_register_api(void)
         { .uri = "/api/v1/sk/token", .method = HTTP_POST, .handler = token_post },
         { .uri = "/api/v1/sk/forget", .method = HTTP_POST, .handler = forget_post },
         { .uri = "/api/v1/sk/publish", .method = HTTP_POST, .handler = publish_post },
+        { .uri = "/api/v1/sk/put", .method = HTTP_POST, .handler = put_post },
+        { .uri = "/api/v1/sk/put", .method = HTTP_GET, .handler = put_last_get },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         esp_err_t err = espos_httpd_register(&uris[i]);

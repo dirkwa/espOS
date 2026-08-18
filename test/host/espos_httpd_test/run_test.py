@@ -389,6 +389,34 @@ class MockSignalK:
     """Just enough of signalk-server's security API for the token flow, plus
     /__test/* controls. Runs in a thread on an ephemeral port."""
 
+    @staticmethod
+    def ws_send(sock, doc):
+        import struct
+        data = json.dumps(doc).encode()
+        if len(data) < 126:
+            hdr = bytes([0x81, len(data)])
+        elif len(data) < 65536:
+            hdr = bytes([0x81, 126]) + struct.pack(">H", len(data))
+        else:
+            hdr = bytes([0x81, 127]) + struct.pack(">Q", len(data))
+        try:
+            sock.sendall(hdr + data)
+        except OSError:
+            pass
+
+    def push(self, doc):
+        """Send a frame (delta or anything) to every open stream client."""
+        for sock in list(self.ws_clients):
+            MockSignalK.ws_send(sock, doc)
+
+    def push_delta(self, values=None, meta=None, source="mock.1", context=None):
+        upd = {"$source": source, "timestamp": "2026-08-18T10:00:00.000Z"}
+        if values:
+            upd["values"] = [{"path": p, "value": v} for p, v in values.items()]
+        if meta:
+            upd["meta"] = [{"path": p, "value": v} for p, v in meta.items()]
+        self.push({"context": context or ("vessels." + self.self_urn), "updates": [upd]})
+
     def __init__(self, self_urn="urn:mrn:signalk:uuid:0e6d1a1a-1111-4111-8111-000000000099"):
         self.self_urn = self_urn
         self.security = True
@@ -402,6 +430,12 @@ class MockSignalK:
         self.ws_auth = None     # last Authorization header seen on the stream
         self.meta = {}          # path -> meta dict
         self.meta_puts = []
+        self.subs = []          # subscribe frames received on the stream
+        self.unsubs = []
+        self.puts = []          # {"requestId","path","value"} received via the stream
+        self.put_reply = {"state": "COMPLETED", "statusCode": 200}   # what the mock answers a PUT with
+        self.raw_frames = []    # non-delta, non-put frames from the client
+        self.ws_clients = []    # live stream sockets (for pushing deltas)
         mock = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -435,6 +469,7 @@ class MockSignalK:
                 hello = json.dumps({"name": "signalk-server", "version": "2.31.1", "self": "vessels." + mock.self_urn}).encode()
                 sock.sendall(bytes([0x81, len(hello)]) + hello)
                 mock.ws_open += 1
+                mock.ws_clients.append(sock)
                 buf = b""
                 try:
                     while mock.ws_accept:
@@ -471,9 +506,22 @@ class MockSignalK:
                             op = fin_op & 0x0F
                             if op == 0x1:
                                 try:
-                                    mock.deltas.append(json.loads(payload.decode()))
+                                    doc = json.loads(payload.decode())
                                 except Exception:
-                                    mock.deltas.append({"raw": payload.decode(errors="replace")})
+                                    doc = {"raw": payload.decode(errors="replace")}
+                                if "subscribe" in doc:
+                                    mock.subs.append(doc)
+                                elif "unsubscribe" in doc:
+                                    mock.unsubs.append(doc)
+                                elif "put" in doc:
+                                    mock.puts.append({"requestId": doc.get("requestId"), **doc["put"]})
+                                    if mock.put_reply is not None:
+                                        rep = dict(mock.put_reply, requestId=doc.get("requestId"))
+                                        MockSignalK.ws_send(sock, rep)
+                                elif "updates" in doc:
+                                    mock.deltas.append(doc)
+                                else:
+                                    mock.raw_frames.append(doc)
                             elif op == 0x8:
                                 raise ConnectionError("close")
                             elif op == 0x9:
@@ -482,6 +530,8 @@ class MockSignalK:
                     pass
                 finally:
                     mock.ws_open -= 1
+                    if sock in mock.ws_clients:
+                        mock.ws_clients.remove(sock)
                     try:
                         sock.close()
                     except OSError:
@@ -1084,6 +1134,166 @@ class OtaRollbackTimeoutTests(unittest.TestCase):
         self.assertIsNotNone(js, req("GET", "/api/v1/ota/status")[3])
         self.assertIn("rollback", js["last_error"])
         self.assertIn("rolling back", "".join(self.h.log).lower())
+
+
+class SkInboundTests(unittest.TestCase):
+    """M7: subscriptions, meta delivery, PUT requests, raw frames, resubscribe on reconnect."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockSignalK()
+        cls.mock.security = False          # open server: streams right away
+        servers = f"127.0.0.1,{cls.mock.port},{cls.mock.self_urn},mockboat"
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_SK_SERVERS": servers})
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}, "sk": {"check_s": 10}})
+        js = wait_sk(lambda j: j["ws"]["connected"], timeout=25)
+        assert js, sk_status()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.mock.stop()
+
+    def rx(self):
+        return req("GET", "/__harness/sk/rx")[3]
+
+    def wait_rx(self, n, timeout=5):
+        return wait_for(lambda: (lambda r: r if r["count"] >= n else None)(self.rx()), timeout=timeout)
+
+    def test_01_subscribe_sends_frame_and_receives_values_and_meta(self):
+        st, _, _, js = req("POST", "/__harness/sk/sub", {"pattern": "navigation.*", "period_ms": 500})
+        self.assertEqual(st, 200)
+        h = js["handle"]
+        self.assertGreater(h, 0)
+        sub = wait_for(lambda: self.mock.subs[-1] if self.mock.subs else None, timeout=5)
+        self.assertIsNotNone(sub, "device must send a subscribe frame")
+        self.assertEqual(sub["context"], "vessels.self")
+        self.assertEqual(sub["subscribe"][0]["path"], "navigation.*")
+        self.assertEqual(sub["subscribe"][0]["period"], 500)
+        self.assertEqual(sub["subscribe"][0]["policy"], "instant")
+        # the stream was opened with sendMeta=all
+        self.assertTrue(any("sendMeta=all" in p for m, p, a in self.mock.log if m == "GET" and "/stream" in p))
+        self.mock.push_delta({"navigation.speedOverGround": 3.25, "navigation.position": {"latitude": 54.1, "longitude": 10.2},
+                              "environment.depth.belowKeel": 4.0},
+                             meta={"navigation.speedOverGround": {"units": "m/s", "zones": [{"lower": 0, "state": "normal"}]}})
+        r = self.wait_rx(3)
+        self.assertIsNotNone(r, self.rx())
+        paths = [i["path"] for i in r["items"]]
+        self.assertIn("navigation.speedOverGround", paths)
+        self.assertIn("navigation.position", paths)
+        self.assertNotIn("environment.depth.belowKeel", paths)          # not subscribed
+        sog = [i for i in r["items"] if i["path"] == "navigation.speedOverGround"]
+        self.assertEqual(sog[0]["value"], 3.25)
+        self.assertEqual(sog[0]["source"], "mock.1")
+        self.assertEqual(sog[1]["meta"]["units"], "m/s")               # meta item after values
+        pos = [i for i in r["items"] if i["path"] == "navigation.position"][0]
+        self.assertEqual(pos["value"], {"latitude": 54.1, "longitude": 10.2})
+        st, _, _, sk = req("GET", "/api/v1/sk/status")
+        self.assertEqual(sk["ws"]["in"]["subs"], 1)
+        self.assertGreaterEqual(sk["ws"]["in"]["received"], 3)
+        self.assertGreaterEqual(sk["ws"]["in"]["frames"], 2)             # hello + delta at least
+        type(self).h1 = h
+
+    def test_02_exact_path_and_wildcard_prefix_dispatch(self):
+        req("DELETE", "/__harness/sk/rx")
+        st, _, _, js = req("POST", "/__harness/sk/sub", {"pattern": "notifications.*"})
+        st, _, _, js2 = req("POST", "/__harness/sk/sub", {"pattern": "environment.mode"})
+        wait_for(lambda: len(self.mock.subs) >= 2 or None, timeout=5)
+        # incremental frame carries only the new patterns
+        last = self.mock.subs[-1]["subscribe"]
+        self.assertEqual(sorted(x["path"] for x in last), ["environment.mode", "notifications.*"])
+        self.assertEqual(last[0]["period"], 1000)                        # default period
+        self.mock.push_delta({"notifications.mob": {"state": "emergency", "message": "MOB"},
+                              "notifications.anchor.dragging": {"state": "alarm"},
+                              "environment.mode": "night", "environment.modeX": "no"})
+        r = self.wait_rx(3)
+        self.assertIsNotNone(r, self.rx())
+        paths = sorted(i["path"] for i in r["items"])
+        self.assertEqual(paths, ["environment.mode", "notifications.anchor.dragging", "notifications.mob"])
+        # a null value comes through as null (anchor raised etc.)
+        req("DELETE", "/__harness/sk/rx")
+        self.mock.push_delta({"navigation.anchor.position": None})
+        r = self.wait_rx(1)
+        self.assertIsNotNone(r)
+        self.assertIsNone(r["items"][0]["value"])
+
+    def test_03_put_round_trip_and_failure(self):
+        st, _, _, js = req("POST", "/__harness/sk/put", {"path": "navigation.anchor.maxRadius", "value": 42.5})
+        self.assertEqual(st, 200, js)
+        res = wait_for(lambda: req("GET", "/__harness/sk/put")[3], timeout=5)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["state"], "COMPLETED")
+        self.assertEqual(res["status_code"], 200)
+        put = self.mock.puts[-1]
+        self.assertEqual(put["path"], "navigation.anchor.maxRadius")
+        self.assertEqual(put["value"], 42.5)
+        self.assertEqual(put["requestId"], res["request_id"])
+        self.assertEqual(len(put["requestId"]), 36)
+        # object and null values, verbatim
+        req("POST", "/__harness/sk/put", {"path": "navigation.anchor.position", "value": {"latitude": 1.5, "longitude": 2.5}})
+        wait_for(lambda: req("GET", "/__harness/sk/put")[3], timeout=5)
+        self.assertEqual(self.mock.puts[-1]["value"], {"latitude": 1.5, "longitude": 2.5})
+        req("POST", "/__harness/sk/put", {"path": "navigation.anchor.position", "value": None})
+        wait_for(lambda: req("GET", "/__harness/sk/put")[3], timeout=5)
+        self.assertIsNone(self.mock.puts[-1]["value"])
+        # server-side failure is reported as such
+        self.mock.put_reply = {"state": "FAILED", "statusCode": 405, "message": "no PUT handler"}
+        req("POST", "/__harness/sk/put", {"path": "some.path", "value": 1})
+        res = wait_for(lambda: req("GET", "/__harness/sk/put")[3], timeout=5)
+        self.assertEqual(res["state"], "FAILED")
+        self.assertEqual(res["status_code"], 405)
+        self.assertEqual(res["message"], "no PUT handler")
+        self.mock.put_reply = {"state": "COMPLETED", "statusCode": 200}
+        st, _, _, sk = req("GET", "/api/v1/sk/status")
+        self.assertEqual(sk["ws"]["put"]["ok"], 3)
+        self.assertEqual(sk["ws"]["put"]["failed"], 1)
+        self.assertEqual(sk["ws"]["put"]["pending"], 0)
+
+    def test_04_put_timeout(self):
+        self.mock.put_reply = None                    # server never answers
+        req("POST", "/__harness/sk/put", {"path": "slow.path", "value": 1})
+        res = wait_for(lambda: req("GET", "/__harness/sk/put")[3], timeout=15, step=0.5)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["state"], "TIMEOUT")
+        self.mock.put_reply = {"state": "COMPLETED", "statusCode": 200}
+
+    def test_05_raw_frame(self):
+        frame = json.dumps({"context": "vessels.self", "updates": [{"values": [{"path": "notifications.mob", "value": {"state": "normal"}}]}]})
+        st, _, _, js = req("POST", "/__harness/sk/put", {"raw": frame})
+        self.assertEqual(st, 200)
+        d = wait_for(lambda: self.mock.deltas[-1] if self.mock.deltas and self.mock.deltas[-1].get("updates", [{}])[0].get("values", [{}])[0].get("path") == "notifications.mob" else None, timeout=5)
+        self.assertIsNotNone(d)
+
+    def test_06_unsubscribe_and_resubscribe_after_reconnect(self):
+        st, _, _, js = req("POST", "/__harness/sk/sub", {"unsubscribe": self.h1})
+        self.assertEqual(js["result"], "ESP_OK")
+        un = wait_for(lambda: self.mock.unsubs[-1] if self.mock.unsubs else None, timeout=5)
+        self.assertIsNotNone(un)
+        self.assertEqual(un["unsubscribe"][0]["path"], "navigation.*")
+        # drop the stream: everything still subscribed must be re-sent in one frame
+        n_before = len(self.mock.subs)
+        self.mock.ws_accept = False
+        wait_sk(lambda j: not j["ws"]["connected"], timeout=10)
+        self.mock.ws_accept = True
+        js = wait_sk(lambda j: j["ws"]["connected"], timeout=25)
+        self.assertIsNotNone(js, sk_status())
+        sub = wait_for(lambda: self.mock.subs[-1] if len(self.mock.subs) > n_before else None, timeout=5)
+        self.assertIsNotNone(sub)
+        self.assertEqual(sorted(x["path"] for x in sub["subscribe"]), ["environment.mode", "notifications.*"])
+        st, _, _, sk = req("GET", "/api/v1/sk/status")
+        self.assertEqual(sk["ws"]["in"]["subs"], 2)
+
+    def test_07_large_frame_is_reassembled(self):
+        req("DELETE", "/__harness/sk/rx")
+        req("POST", "/__harness/sk/sub", {"pattern": "big.*"})
+        wait_for(lambda: len(self.mock.subs) or None, timeout=5)
+        time.sleep(0.5)
+        # ~9 KiB delta: many values in one frame (larger than the 4 KiB initial buffer)
+        vals = {f"big.path{i:03d}": {"text": "x" * 40, "n": i} for i in range(120)}
+        self.mock.push_delta(vals)
+        r = self.wait_rx(64, timeout=8)     # probe keeps 64
+        self.assertIsNotNone(r, self.rx()["count"])
+        self.assertEqual(r["count"], 120)
 
 
 class WifiFailureTests(unittest.TestCase):

@@ -22,6 +22,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 | M4        | WebSocket deltas + meta reconciliation           | ✅ implemented, host-tested (mock stream), live on ESP32-P4 against signalk-server 2.31 |
 | M5        | Web UI (Vite SPA) + logs + core dump             | ✅ implemented, developed against a mock, verified served from LittleFS on ESP32-P4 |
 | M6        | Signed OTA with rollback, manifest               | ✅ implemented, host-tested (sim port), verified on ESP32-P4: manifest → install → confirm; unsigned image rejected; broken image rolled back by the bootloader |
+| M7        | SignalK inbound: subscriptions, meta, PUT        | ✅ implemented (added for the cockpit port, not in the original plan), host-tested, verified against signalk-server 2.31 on ESP32-P4 |
 
 ## Decisions and additions vs. the plan
 

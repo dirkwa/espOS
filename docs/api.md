@@ -266,7 +266,9 @@ oldest stream is evicted (clients reconnect via `retry`).
   "ws": {"enabled": true, "connected": true, "connected_s": 300, "reconnects": 1,
          "sent": 1234, "send_errors": 0, "pending": 0,
          "buffered": 0, "buffered_bytes": 0, "dropped": 0, "last_error": "",
-         "meta": {"declared": 8, "reconciled": 8}}
+         "meta": {"declared": 8, "reconciled": 8},
+         "in": {"subs": 2, "frames": 590, "received": 586},
+         "put": {"pending": 0, "ok": 3, "failed": 1}}
 }
 ```
 `token.state` ∈ `no_server requesting pending verifying approved denied
@@ -277,6 +279,8 @@ open error`; `pending_href`/`pending_s` while pending; `server.source` ∈
 window, `buffered`/`buffered_bytes` = messages held in the offline ring,
 `dropped` = messages the ring had to discard (oldest first),
 `next_retry_s` while disconnected, `meta` = declared / reconciled counts.
+`in` (M7): active subscriptions, text frames read, value/meta items
+delivered; `put` (M7): requests in flight, answered OK, failed/timed out.
 
 ### `GET /sk/servers` — M3
 
@@ -310,6 +314,14 @@ path/value; `503 not_ready` before the SignalK component is up. Queued
 does not mean delivered: the value goes into the current batching window
 and, if the stream is down, into the offline ring (see `ws` in
 `/sk/status`).
+
+### `POST /sk/put`, `GET /sk/put` — M7
+
+`{"path": "navigation.anchor.maxRadius", "value": 30}` → `202
+{"status":"sent"}` (`503 not_connected` without a stream, `429 busy` with
+8 in flight, `400 validation`). The server answers asynchronously; `GET
+/sk/put` returns the last answer `{"request_id","state","status_code",
+"message"}` or `null`.
 
 SSE events: `sk` (the status document, on connect and on change),
 `sk_servers` (the servers document after each discovery pass), `sk_ws`
