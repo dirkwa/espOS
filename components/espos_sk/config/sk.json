@@ -17,6 +17,18 @@
      "title": "Requested permissions", "description": "readwrite is needed to publish deltas."},
     {"name": "check_s", "type": "int", "default": 60, "min": 10, "max": 3600, "unit": "s", "title": "Token check interval",
      "description": "How often an approved token is verified against the server (detects revocation)."},
-    {"name": "discover_s", "type": "int", "default": 60, "min": 15, "max": 3600, "unit": "s", "title": "Discovery interval"}
+    {"name": "discover_s", "type": "int", "default": 60, "min": 15, "max": 3600, "unit": "s", "title": "Discovery interval"},
+
+    {"name": "ws_enabled", "type": "bool", "default": true, "title": "Stream deltas",
+     "description": "Keep a WebSocket to the server open and send published values as deltas."},
+    {"name": "batch_ms", "type": "int", "default": 100, "min": 10, "max": 5000, "unit": "ms", "title": "Delta batching window",
+     "description": "Values published within this window go out as one delta message."},
+    {"name": "buffer_msgs", "type": "int", "default": 128, "min": 8, "max": 1024, "title": "Offline buffer (messages)",
+     "description": "Delta messages kept while the server is unreachable; oldest are dropped first."},
+    {"name": "buffer_kb", "type": "int", "default": 32, "min": 4, "max": 512, "unit": "KiB", "title": "Offline buffer (size)"},
+    {"name": "drain_per_s", "type": "int", "default": 20, "min": 1, "max": 200, "unit": "1/s", "title": "Backlog drain rate",
+     "description": "Buffered messages per second sent after a reconnect, so the server is not swamped."},
+    {"name": "health_s", "type": "int", "default": 10, "min": 0, "max": 3600, "unit": "s", "title": "Device health interval",
+     "description": "Publish uptime, heap, RSSI, reconnects and reset reason this often. 0 = off."}
   ]
 }

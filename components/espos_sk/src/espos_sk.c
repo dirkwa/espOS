@@ -552,6 +552,14 @@ static char *status_json_from(const espos_sk_tok_status_t *st, const char *sourc
     } else {
         cJSON_AddStringToObject(srv, "source", "none");
     }
+    char *wsj = espos_sk_ws_status_json();
+    if (wsj) {
+        cJSON *w = cJSON_Parse(wsj);
+        free(wsj);
+        if (w) {
+            cJSON_AddItemToObject(root, "ws", w);
+        }
+    }
     cJSON *disc = cJSON_AddObjectToObject(root, "discovery");
     lock();
     cJSON_AddStringToObject(root, "client_id", s.client_id);
@@ -696,6 +704,19 @@ const char *espos_sk_client_id(void)
     return s.client_id;
 }
 
+/* The stream may run when the token is approved, or when the server has
+ * security disabled (OPEN: no token needed). */
+bool espos_sk_stream_allowed(void)
+{
+    if (!s.lock) {
+        return false;
+    }
+    lock();
+    bool ok = s.snap.state == ESPOS_SK_TOK_APPROVED || s.snap.state == ESPOS_SK_TOK_OPEN;
+    unlock();
+    return ok;
+}
+
 /* -------------------------------------------------------- lifecycle */
 
 static void on_config_change(const char *ns, const char *key, void *arg)
@@ -704,6 +725,9 @@ static void on_config_change(const char *ns, const char *key, void *arg)
     (void)arg;
     if (strcmp(ns, ESPOS_CFG_NS_SK) == 0) {
         post_cmd(CMD_CONFIG, NULL);
+        espos_sk_ws_config_changed();
+    } else if (strcmp(ns, ESPOS_CFG_NS_WIFI) == 0) {
+        espos_sk_ws_config_changed(); /* hostname → source label */
     }
 }
 
@@ -740,7 +764,7 @@ esp_err_t espos_sk_start(void)
         s.started = false;
         return ESP_ERR_NO_MEM;
     }
-    return ESP_OK;
+    return espos_sk_ws_start();
 }
 
 esp_err_t espos_sk_stop(void)
@@ -749,6 +773,7 @@ esp_err_t espos_sk_stop(void)
         return ESP_OK;
     }
     espos_config_unsubscribe(on_config_change, NULL);
+    espos_sk_ws_stop();
     post_cmd(CMD_STOP, NULL);
     for (int i = 0; i < 100 && s.task; i++) {
         vTaskDelay(pdMS_TO_TICKS(100));

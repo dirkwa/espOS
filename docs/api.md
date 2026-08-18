@@ -185,6 +185,7 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 
 | `sk`        | the `/sk/status` document            | on connect and every token/server change |
 | `sk_servers`| the `/sk/servers` document           | on connect and after each discovery pass |
+| `sk_ws`     | the `ws` object of `/sk/status`      | stream connect/disconnect, error, drops |
 
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
 oldest stream is evicted (clients reconnect via `retry`).
@@ -202,12 +203,21 @@ oldest stream is evicted (clients reconnect via `retry`).
   "server": {"host": "192.168.1.10", "port": 80, "self": "urn:mrn:signalk:uuid:…",
              "source": "discovered", "name": "boat", "swname": "signalk-server", "swvers": "2.31.1"},
   "client_id": "…uuid…", "description": "espOS espos-1a2b", "permissions": "readwrite",
-  "discovery": {"enabled": true, "count": 2, "last_s": 12}
+  "discovery": {"enabled": true, "count": 2, "last_s": 12},
+  "ws": {"enabled": true, "connected": true, "connected_s": 300, "reconnects": 1,
+         "sent": 1234, "send_errors": 0, "pending": 0,
+         "buffered": 0, "buffered_bytes": 0, "dropped": 0, "last_error": "",
+         "meta": {"declared": 8, "reconciled": 8}}
 }
 ```
 `token.state` ∈ `no_server requesting pending verifying approved denied
 open error`; `pending_href`/`pending_s` while pending; `server.source` ∈
 `discovered manual none`. The token itself is never returned.
+
+`ws` (M4) is the delta stream: `pending` = values in the open batching
+window, `buffered`/`buffered_bytes` = messages held in the offline ring,
+`dropped` = messages the ring had to discard (oldest first),
+`next_retry_s` while disconnected, `meta` = declared / reconciled counts.
 
 ### `GET /sk/servers` — M3
 
@@ -225,8 +235,26 @@ Body `{"token": "<jwt>"}` → `202 {"status": "verifying"}`; the token is
 verified against `/signalk/v1/api/self` and kept if it works. `400
 validation` for a bad body.
 
+### `POST /sk/publish` — M4
+
+Publish a value for a `vessels.self` path — the C publish API over HTTP,
+for scripts and the setup page:
+
+```json
+{"path": "espos.demo.count", "value": 42,
+ "meta": {"units": "1", "description": "demo"}, "period_ms": 1000}
+```
+`meta`/`period_ms` are optional and go through `espos_sk_declare_meta()`
+(same rules: non-standard paths only, `period_ms` adds `timeout`). `202
+{"status":"queued"}`; `400 validation` for a bad body or an over-long
+path/value; `503 not_ready` before the SignalK component is up. Queued
+does not mean delivered: the value goes into the current batching window
+and, if the stream is down, into the offline ring (see `ws` in
+`/sk/status`).
+
 SSE events: `sk` (the status document, on connect and on change),
-`sk_servers` (the servers document after each discovery pass).
+`sk_servers` (the servers document after each discovery pass), `sk_ws`
+(the `ws` object on every stream state change).
 
 ## Planned (shape reserved, not implemented)
 

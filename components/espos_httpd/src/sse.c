@@ -34,7 +34,8 @@ static const char *TAG = "espos_sse";
 typedef struct {
     httpd_req_t *req;   /* async copy, NULL if slot free */
     int fd;
-    TickType_t since;   /* for evicting the oldest stream when full */
+    uint32_t since;     /* admission sequence: evicts the oldest stream when full
+                         * (ticks tie for clients admitted within one tick) */
 } client_t;
 
 static struct {
@@ -43,6 +44,7 @@ static struct {
     struct { espos_httpd_sse_connect_cb_t cb; void *arg; } on_connect[MAX_CONNECT_CBS];
     TimerHandle_t ping;
     httpd_handle_t server;
+    uint32_t admitted;
 } s;
 
 static void lock(void)
@@ -225,7 +227,7 @@ static esp_err_t events_get(httpd_req_t *req)
     }
     s.clients[slot].req = copy;
     s.clients[slot].fd = httpd_req_to_sockfd(copy);
-    s.clients[slot].since = xTaskGetTickCount();
+    s.clients[slot].since = ++s.admitted;
     unlock();
     ESP_LOGI(TAG, "client %d connected (fd %d)", slot, s.clients[slot].fd);
     for (int i = 0; i < MAX_CONNECT_CBS; i++) {

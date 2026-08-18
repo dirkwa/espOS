@@ -200,3 +200,51 @@ void espos_sk_http_verify(const espos_sk_server_t *srv, const char *token, espos
     free(resp);
     ESP_LOGD(TAG, "verify → %d %s", out->http_status, out->self);
 }
+
+/* -------------------------------------------------------------- meta */
+
+static void path_to_url(const char *path, char *out, size_t size)
+{
+    /* dots become slashes: environment.wind.speedApparent → environment/wind/speedApparent */
+    size_t o = snprintf(out, size, "/signalk/v1/api/vessels/self/");
+    for (; *path && o + 1 < size; path++) {
+        out[o++] = *path == '.' ? '/' : *path;
+    }
+    snprintf(out + o, size - o, "/meta");
+}
+
+int espos_sk_http_get_meta(const espos_sk_server_t *srv, const char *token, const char *path, char **out_meta)
+{
+    char url[192];
+    path_to_url(path, url, sizeof(url));
+    *out_meta = NULL;
+    char *resp = NULL;
+    int status = perform(srv, HTTP_METHOD_GET, url, NULL, token, &resp);
+    if (status == 200 && resp) {
+        cJSON *j = cJSON_Parse(resp);
+        if (cJSON_IsObject(j) && j->child) {
+            *out_meta = resp; /* non-empty object: hand the text over */
+            resp = NULL;
+        }
+        cJSON_Delete(j);
+    }
+    free(resp);
+    return status;
+}
+
+int espos_sk_http_put_meta(const espos_sk_server_t *srv, const char *token, const char *path, const char *meta_json)
+{
+    char url[192];
+    path_to_url(path, url, sizeof(url));
+    size_t n = strlen(meta_json) + 16;
+    char *body = malloc(n);
+    if (!body) {
+        return 0;
+    }
+    snprintf(body, n, "{\"value\":%s}", meta_json);
+    char *resp = NULL;
+    int status = perform(srv, HTTP_METHOD_PUT, url, body, token, &resp);
+    free(body);
+    free(resp);
+    return status;
+}
