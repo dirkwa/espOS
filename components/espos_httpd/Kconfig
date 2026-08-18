@@ -19,7 +19,7 @@ menu "espOS HTTP server"
 
     config ESPOS_HTTPD_MAX_URI_HANDLERS
         int "Maximum number of URI handlers"
-        default 48
+        default 64
         range 8 128
 
     config ESPOS_HTTPD_SSE_MAX_CLIENTS

@@ -19,6 +19,7 @@
 #include "espos_httpd.h"
 #include "espos_wifi.h"
 #include "espos_sk.h"
+#include "espos_ota.h"
 
 static const char *TAG = "app";
 
@@ -30,6 +31,11 @@ static void on_config_change(const char *ns, const char *key, void *arg)
 
 void app_main(void)
 {
+#ifdef ESPOS_BROKEN_BUILD
+    /* Test hook: an image that dies before it can confirm itself → rollback. */
+    ESP_LOGE("app", "ESPOS_BROKEN_BUILD: aborting on purpose");
+    abort();
+#endif
     ESP_ERROR_CHECK(espos_log_init());     /* first: keep the boot log for /api/v1/logs */
     ESP_ERROR_CHECK(espos_config_init(NULL, NULL));
     ESP_ERROR_CHECK(espos_config_subscribe(on_config_change, NULL));
@@ -37,6 +43,7 @@ void app_main(void)
     ESP_ERROR_CHECK(espos_httpd_start());
     ESP_ERROR_CHECK(espos_wifi_start());
     ESP_ERROR_CHECK(espos_sk_start());
+    ESP_ERROR_CHECK(espos_ota_start());
 
     /* Example app payload: a heartbeat counter under a custom path (with
      * meta, because the server cannot know a non-standard path) and the

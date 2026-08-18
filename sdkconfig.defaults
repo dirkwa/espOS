@@ -22,8 +22,19 @@ CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
 # ---- Core dump to flash (surfaced by the UI in M5). IDF 6 is ELF+SHA256 only.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
-# ---- OTA rollback (M6 relies on it; harmless before)
+# ---- OTA (M6): rollback on failed boot, signed images verified on update.
+# The signing key is `secure_boot_signing_key.pem` in the project root
+# (git-ignored; a development key is generated on first build — see
+# docs/ota.md, keep the real one safe). Its public part is compiled into
+# the app; images signed by anything else are rejected by esp_ota_end().
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="secure_boot_signing_key.pem"
+# Plain-http image sources are acceptable because every image is signed.
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
 # ---- Security (production): enable in a release overlay, see docs/security.md
 # CONFIG_SECURE_FLASH_ENC_ENABLED=y

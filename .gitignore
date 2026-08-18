@@ -26,3 +26,7 @@ secrets/
 ui/node_modules/
 ui/dist/
 ui/dist-gz/
+
+# App-signing key (development key is generated on first build; a real one is a secret)
+secure_boot_signing_key.pem
+*.pem

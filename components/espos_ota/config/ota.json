@@ -1,0 +1,21 @@
+{
+  "namespace": "ota",
+  "version": 1,
+  "title": "Firmware updates",
+  "description": "Over-the-air updates: where to look for new firmware and how careful to be about a freshly installed image.",
+  "keys": [
+    {"name": "manifest_url", "type": "string", "default": "", "maxLength": 160, "title": "Manifest URL",
+     "description": "http(s) URL of a version manifest (docs/ota.md). Empty = manual updates from a URL only."},
+    {"name": "channel", "type": "string", "default": "stable", "maxLength": 15, "title": "Channel",
+     "description": "Which channel of the manifest to follow, e.g. stable or beta."},
+    {"name": "auto_check", "type": "bool", "default": true, "title": "Check automatically",
+     "description": "Fetch the manifest after boot and every check interval."},
+    {"name": "check_h", "type": "int", "default": 24, "min": 1, "max": 168, "unit": "h", "title": "Check interval"},
+    {"name": "auto_install", "type": "bool", "default": false, "title": "Install automatically",
+     "description": "Install a newer build from the manifest as soon as it is found (device reboots). Off = only show it."},
+    {"name": "allow_insecure", "type": "bool", "default": false, "title": "Skip TLS certificate check",
+     "description": "Accept any https certificate (self-signed boat servers). Images are still signature-checked."},
+    {"name": "confirm_tmo_s", "type": "int", "default": 600, "min": 30, "max": 3600, "unit": "s", "title": "Rollback timeout",
+     "description": "A freshly installed image must reach the network within this time, else the device rolls back to the previous firmware."}
+  ]
+}

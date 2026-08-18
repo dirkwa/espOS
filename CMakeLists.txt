@@ -18,6 +18,21 @@ if(NOT ESPOS_IDF_ACTUAL STREQUAL ESPOS_IDF_VERSION)
     endif()
 endif()
 
+# App-signing key (see sdkconfig.defaults / docs/ota.md). Never committed.
+# Missing → generate a DEVELOPMENT key so the build works out of the box;
+# devices flashed with it will only accept updates signed by that same key.
+set(ESPOS_SIGNING_KEY "${CMAKE_CURRENT_LIST_DIR}/secure_boot_signing_key.pem")
+if(NOT EXISTS "${ESPOS_SIGNING_KEY}")
+    message(WARNING "espOS: no secure_boot_signing_key.pem — generating a development RSA-3072 signing key. "
+                    "For real deployments create and keep your own (docs/ota.md).")
+    execute_process(
+        COMMAND ${PYTHON} -m espsecure generate_signing_key --version 2 --scheme rsa3072 "${ESPOS_SIGNING_KEY}"
+        RESULT_VARIABLE espos_key_rc OUTPUT_QUIET)
+    if(NOT espos_key_rc EQUAL 0)
+        message(FATAL_ERROR "espOS: could not generate secure_boot_signing_key.pem (espsecure missing?)")
+    endif()
+endif()
+
 project(espos)
 
 # UI bundle → LittleFS "storage" partition image, flashed with `idf.py flash`.

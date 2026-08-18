@@ -11,7 +11,9 @@ delta stream, discovered servers, manual server), **Config** (every
 namespace rendered from `GET /config/schema`: types, ranges, enums,
 secrets, restart-required marker, export/import JSON, reset section),
 **Logs** (live log ring with filter, follow, download, runtime log level),
-**OTA** (placeholder until M6).
+**OTA** (running image and slot state, confirm/rollback, manifest check
+with the available build, install with progress, install from a URL,
+update-source settings).
 
 ## Working on it — no hardware needed
 
