@@ -184,8 +184,24 @@ esp_err_t espos_httpd_register_static(httpd_handle_t h)
     if (err == ESP_OK) {
         size_t total = 0, used = 0;
         esp_littlefs_info(conf.partition_label, &total, &used);
-        ESP_LOGI(TAG, "ui storage mounted at %s (%u/%u KiB used)", s_www, (unsigned)(used / 1024), (unsigned)(total / 1024));
-        s_mounted = true;
+        /* Mounted but empty is the common miss: the partition was formatted
+         * on first boot because the build never packed a UI image. Say so
+         * loudly and report ui_storage=false, or "mounted" reads as "the UI
+         * is there" while the device serves the embedded placeholder. */
+        char index[80];
+        snprintf(index, sizeof(index), "%s/index.html.gz", s_www);
+        bool have_index = is_file(index);
+        if (!have_index) {
+            snprintf(index, sizeof(index), "%s/index.html", s_www);
+            have_index = is_file(index);
+        }
+        if (have_index) {
+            ESP_LOGI(TAG, "ui storage mounted at %s (%u/%u KiB used)", s_www, (unsigned)(used / 1024), (unsigned)(total / 1024));
+            s_mounted = true;
+        } else {
+            ESP_LOGW(TAG, "ui storage at %s has no index.html: serving the embedded page "
+                          "(build the UI: cd ui && npm ci && npm run build)", s_www);
+        }
     } else {
         ESP_LOGW(TAG, "ui storage not mounted (%s): serving the embedded page", esp_err_to_name(err));
     }
