@@ -136,7 +136,7 @@ export function startMock(port = 8484) {
     token: { state: "no_server", has_token: false, busy: false, last_http_status: 0, last_error: "", counts: { requests: 0, approved: 0, denied: 0, unauthorized: 0 } },
     server: { source: "none" }, client_id: "9cf791de-aa92-4830-a958-0388a42ef72b", description: "espOS espos-1a2b", permissions: "readwrite",
     discovery: { enabled: true, count: 0, last_s: null },
-    ws: { enabled: true, connected: false, reconnects: 0, sent: 0, send_errors: 0, pending: 0, buffered: 0, buffered_bytes: 0, dropped: 0, last_error: "", meta: { declared: 3, reconciled: 0 } },
+    ws: { enabled: true, connected: false, reconnects: 0, sent: 0, send_errors: 0, pending: 0, buffered: 0, buffered_bytes: 0, dropped: 0, last_error: "", meta: { declared: 3, reconciled: 0 }, in: { subs: 2, frames: 0, received: 0 }, put: { pending: 0, ok: 0, failed: 0 } },
   };
   let discovered = [];
   let discoverAt = 0;
@@ -194,7 +194,7 @@ export function startMock(port = 8484) {
     sk.ws.meta.reconciled = sk.ws.meta.declared;
     emit("sk_ws", sk.ws); skEmit();
     logAndMark("I", "espos_skws", `stream connected to ${sk.server.host}:${sk.server.port}`);
-    wsTimer = setInterval(() => { sk.ws.sent += 2; sk.ws.connected_s += 5; }, 5000);
+    wsTimer = setInterval(() => { sk.ws.sent += 2; sk.ws.connected_s += 5; sk.ws.in.frames += 9; sk.ws.in.received += 12; }, 5000);
   }
   function skForget() {
     Object.assign(sk.token, { state: "no_server", has_token: false, busy: false, last_http_status: 0, last_error: "" });
@@ -356,6 +356,8 @@ export function startMock(port = 8484) {
         return json(res, 202, { status: "verifying" });
       }
       if (r === "/sk/publish" && m === "POST") { if (!needJson(req, res)) return; sk.ws.pending++; return json(res, 202, { status: "queued" }); }
+      if (r === "/sk/put" && m === "POST") { if (!needJson(req, res)) return; if (!sk.ws.connected) return err(res, 503, "not_connected", "stream not connected"); sk.ws.put.ok++; return json(res, 202, { status: "sent" }); }
+      if (r === "/sk/put" && m === "GET") return json(res, 200, sk.ws.put.ok ? { request_id: "9cf791de-0000-4000-8000-000000000001", state: "COMPLETED", status_code: 200, message: "" } : null);
       // ---- ota
       if (r === "/ota/status" && m === "GET") return json(res, 200, otaStatus());
       if (r === "/ota/check" && m === "POST") { if (!needJson(req, res)) return; if (["checking", "downloading", "ready"].includes(ota.state)) return err(res, 409, "busy", "an update or check is in progress"); otaCheck(); return json(res, 202, { status: "checking" }); }

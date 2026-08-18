@@ -42,7 +42,10 @@
       "name": "mode",
       "type": "string",
       "default": "auto",
-      "enum": ["auto", "manual"],
+      "enum": [
+        "auto",
+        "manual"
+      ],
       "title": "Mode"
     },
     {
@@ -60,6 +63,14 @@
       "maxLength": 64,
       "title": "Calibration table",
       "description": "Opaque bytes, base64 over the API."
+    },
+    {
+      "name": "watch_path",
+      "type": "string",
+      "default": "",
+      "maxLength": 95,
+      "title": "Watch path",
+      "description": "A SignalK path or family (e.g. navigation.position, notifications.*) the example app subscribes to and logs. Empty = off."
     }
   ]
 }

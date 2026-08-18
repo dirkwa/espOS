@@ -1,8 +1,10 @@
-# SignalK (`espos_sk`) — discovery, access token, delta stream
+# SignalK (`espos_sk`) — discovery, access token, delta stream, inbound
 
 M3: find the server, get and keep a token. M4: stream published values as
 deltas over a WebSocket, buffer them while offline, reconcile metadata,
-publish device health.
+publish device health. M7: subscribe to paths and families, receive values
+and meta, send PUT requests and raw frames — what a display or controller
+needs on top of a sensor.
 
 ## Discovery
 
@@ -124,10 +126,59 @@ WS_TRANSPORT_OPCODES_FIN`) or the server closes the socket after the
 first frame; `subscribe=none` still delivers the hello; meta `GET` is
 `404` when unset and `PUT` takes `{"value": {…}}`.
 
+## Inbound (M7)
+
+```c
+int h = espos_sk_subscribe("navigation.*", 1000, on_update, NULL);   /* family */
+espos_sk_subscribe("environment.mode", 0, on_update, NULL);           /* exact */
+espos_sk_unsubscribe(h);
+espos_sk_put("navigation.anchor.maxRadius", "30", on_put_done, NULL);
+espos_sk_send_raw("{\"context\":\"vessels.self\",\"updates\":[…]}");
+```
+
+* **Subscriptions** are exact paths or families (`prefix.*`, `prefix*`,
+  `*`). The stream is opened with `subscribe=none&sendMeta=all`; after the
+  hello (and after every reconnect) one `{"context":"vessels.self",
+  "subscribe":[{"path","period","format":"delta","policy":"instant",
+  "minPeriod"}]}` frame carries every subscription; new ones while
+  connected go out incrementally, `espos_sk_unsubscribe` sends
+  `unsubscribe` when nothing else covers the pattern. Up to
+  `ESPOS_SK_MAX_SUBS` (48).
+* **Delivery**: `sk_parse.c` (pure C, cJSON) turns each frame into items —
+  `path`, `value_json` (verbatim JSON text: numbers, strings, objects,
+  `null`), `timestamp`, `$source`/`source.label`, `context` — plus meta
+  items (`meta_json` set, value NULL) when the server sends `meta`. The
+  callback runs on the stream task; copy what you need and return (a
+  display marshals to its UI thread — never block, never call an
+  `espos_sk_*` function that could wait on the stream). Frames are
+  reassembled up to `CONFIG_ESPOS_SK_RX_FRAME_MAX` (16 KiB); larger ones
+  are dropped with a log line.
+* **PUT**: `{"context":"vessels.self","requestId":<uuid4>,"put":{"path",
+  "value"}}`; the response (`state` COMPLETED/FAILED, `statusCode`,
+  `message`) is matched by requestId and handed to the callback; no answer
+  in 10 s → `"TIMEOUT"`. Up to 8 in flight; `ESP_ERR_INVALID_STATE` when
+  the stream is down (nothing is queued across reconnects — a control
+  action must not fire minutes later). A real server without a handler
+  answers `COMPLETED` with `statusCode 405 "PUT not supported for …"`.
+* **Raw frames** (`espos_sk_send_raw`) go out ahead of buffered deltas —
+  e.g. an inbound `notifications.*` delta with `state:"normal"` to
+  acknowledge an alarm.
+* Status: `ws.in {subs, frames, received}`, `ws.put {pending, ok,
+  failed}`; REST `POST /api/v1/sk/put {"path","value"}` (202; last
+  answer under `GET /api/v1/sk/put`) for scripts.
+* The example app subscribes to `app.watch_path` and logs each update.
+
+Verified 2026-08-18 against signalk-server 2.31 on the ESP32-P4: 586
+updates in ~40 s of `navigation.*` from N2K sources, satellitesInView
+objects of several KiB reassembled, PUT round trip (405 from a server
+without handlers).
+
 ## API
 
 * `GET /api/v1/sk/status` — token/server/discovery status plus the `ws`
   stream object (see api.md).
+* `POST /api/v1/sk/put {"path","value"}` / `GET /api/v1/sk/put` — PUT over
+  the stream and the last answer.
 * `POST /api/v1/sk/publish {"path","value"[,"meta","period_ms"]}` — publish
   over HTTP.
 * SSE `sk_ws` — the `ws` object on every stream change.
@@ -142,13 +193,15 @@ first frame; `subscribe=none` still delivers the hello; meta `GET` is
 
 ## Testing
 
-* `test/host/espos_sk_test`: 29 Unity cases — token state machine, store,
-  delta batching / ring / drain.
+* `test/host/espos_sk_test`: 32 Unity cases — token state machine, store,
+  delta batching / ring / drain, frame parser and path patterns.
 * `test/host/espos_httpd_test` `SkTests`: the real HTTP client and
   WebSocket against a Python mock of the signalk-server security API and
   stream endpoint (approve, deny, revoke, forget, security off, manual
   token, manual host, deltas + meta reconciliation, offline buffering with
-  ordered drain).
+  ordered drain); `SkInboundTests`: subscribe frames, value/meta delivery,
+  exact vs family dispatch, PUT round trip / failure / timeout, raw frames,
+  unsubscribe + resubscribe after reconnect, 9 KiB frame reassembly.
 * Against a real signalk-server on the host: `node bin/signalk-server -c
   <fresh config dir>` from a checkout, `POST /skServer/enableSecurity
   {"userId","password","type":"admin"}`, restart, then approve with

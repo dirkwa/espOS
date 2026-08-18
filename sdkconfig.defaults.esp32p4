@@ -28,3 +28,9 @@ CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP=y
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_FREERTOS_HZ=1000
+
+# esp_hosted's startup allocations nearly fill RETENT_RAM before the main
+# task exists; a 3.5 KB main stack could then land in the 7 KB SPM/TCM
+# region, where the first flash access asserts (cache_utils.c
+# esp_task_stack_is_sane_cache_disabled). A stack larger than SPM cannot.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
