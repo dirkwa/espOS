@@ -56,12 +56,18 @@ idf.py --preview set-target linux && idf.py build
 cd ../espos_log_test
 idf.py --preview set-target linux && idf.py build
 ./build/espos_log_test.elf                 # log ring: hook, wrap, paging
+
+cd ../espos_ota_test
+idf.py --preview set-target linux && idf.py build
+./build/espos_ota_test.elf                 # manifest selection, version compare
 ```
 
 `run_test.py` also covers M5's firmware side (`UiAndLogsTests`): static
 serving from a directory (`ESPOS_WWW_DIR`, gzip, SPA fallback, cache
 headers), `/logs` paging and the `logs` SSE event, `/logs/level`, and the
-core-dump endpoints' host behaviour (absent).
+core-dump endpoints' host behaviour (absent); and M6 (`OtaTests`,
+`OtaRollbackTimeoutTests`): the OTA task against the sim port with a
+throwaway firmware server.
 
 Multi-target caveat: `managed_components/` is synced to the current target's
 dependency set (ESP32-P4 pulls extra components), so build targets one after

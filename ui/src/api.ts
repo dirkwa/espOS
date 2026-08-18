@@ -69,6 +69,15 @@ export interface Coredump {
   exc_cause?: number; exc_vaddr?: string; backtrace?: string[]; backtrace_corrupted?: boolean;
   mcause?: number; mtval?: string; ra?: string; sp?: string; stackdump_bytes?: number; summary_error?: string;
 }
+export interface OtaStatus {
+  state: "idle" | "checking" | "available" | "downloading" | "verifying" | "ready" | "failed";
+  last_error: string;
+  running: { version: string; project: string; target: string; slot: string; image_state: string; pending_verify: boolean; confirmed: boolean;
+    other_slot: string; other_version: string; rolled_back: boolean; built: string; idf: string };
+  manifest: { url: string; channel: string; auto_check: boolean; auto_install: boolean; last_check_s: number | null; next_check_s: number | null };
+  progress: { received: number; total: number };
+  available: { version: string; url: string; size: number; sha256: string; notes: string; newer: boolean } | null;
+}
 export type ConfigDoc = Record<string, Record<string, unknown>>;
 export interface JsonSchemaProp {
   title?: string; description?: string; type: "string" | "integer" | "number" | "boolean";
@@ -94,6 +103,7 @@ export const skStore = new Store<SkStatus>();
 export const skServersStore = new Store<SkServersDoc>();
 export const skWsStore = new Store<SkWs>();
 export const logsSeqStore = new Store<number>();
+export const otaStore = new Store<OtaStatus>();
 export const configChangeStore = new Store<{ ns: string; key: string; n: number }>();
 export const linkStore = new Store<"connecting" | "open" | "lost">();
 
@@ -122,6 +132,7 @@ export function connectEvents() {
   on("sk", skStore, (d) => { if (d.ws) skWsStore.set(d.ws); });
   on("sk_servers", skServersStore);
   on("sk_ws", skWsStore);
+  on("ota", otaStore);
   es.addEventListener("logs", (e) => logsSeqStore.set((JSON.parse((e as MessageEvent).data) as { next: number }).next));
   es.addEventListener("config", (e) => {
     const d = JSON.parse((e as MessageEvent).data) as { ns: string; key: string };

@@ -21,7 +21,7 @@ Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 | M3        | SignalK discovery + token state machine          | ✅ implemented, host-tested against signalk-server 2.31, live on ESP32-P4 |
 | M4        | WebSocket deltas + meta reconciliation           | ✅ implemented, host-tested (mock stream), live on ESP32-P4 against signalk-server 2.31 |
 | M5        | Web UI (Vite SPA) + logs + core dump             | ✅ implemented, developed against a mock, verified served from LittleFS on ESP32-P4 |
-| M6        | Signed OTA with rollback                         | planned |
+| M6        | Signed OTA with rollback, manifest               | ✅ implemented, host-tested (sim port), verified on ESP32-P4: manifest → install → confirm; unsigned image rejected; broken image rolled back by the bootloader |
 
 ## Decisions and additions vs. the plan
 
@@ -54,6 +54,14 @@ Recorded here so nothing is silently applied (plan §7):
   Beyond the M5 bullets: `PUT /api/v1/logs/level` (runtime log level) and
   `GET /api/v1/system/coredump/raw` (download for `espcoredump.py`), both
   small and needed to make logs/crashes actually useful from a browser.
+* M6 signature verification is *signed apps without Secure Boot*
+  (`SECURE_SIGNED_APPS_NO_SECURE_BOOT`, RSA-3072, verified on update by the
+  running app's compiled-in public key) rather than hardware Secure Boot:
+  it is what the plan asks for ("against a compiled-in public key") without
+  burning eFuses. The signing key is generated on first build when missing
+  (git-ignored) so a checkout builds; real deployments bring their own
+  (docs/ota.md). Plain-http image sources are allowed for the same reason.
+  ESP32 (original) builds pin chip rev ≥ 3 for the RSA scheme.
 
 ## Quick start
 

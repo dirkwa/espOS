@@ -93,4 +93,6 @@ jobs:
             cd ../espos_sk_test && idf.py --preview set-target linux && idf.py build &&
             ./build/espos_sk_test.elf &&
             cd ../espos_log_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_log_test.elf"
+            ./build/espos_log_test.elf &&
+            cd ../espos_ota_test && idf.py --preview set-target linux && idf.py build &&
+            ./build/espos_ota_test.elf"

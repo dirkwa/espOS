@@ -244,6 +244,7 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 | `sk_servers`| the `/sk/servers` document           | on connect and after each discovery pass |
 | `sk_ws`     | the `ws` object of `/sk/status`      | stream connect/disconnect, error, drops |
 | `logs`      | `{"next": <seq>}`                     | at most every 500 ms when new log lines arrived; fetch `/logs?after=` |
+| `ota`       | the `/ota/status` document           | on connect, state changes, every ~32 KiB of download |
 
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
 oldest stream is evicted (clients reconnect via `retry`).
@@ -314,8 +315,38 @@ SSE events: `sk` (the status document, on connect and on change),
 `sk_servers` (the servers document after each discovery pass), `sk_ws`
 (the `ws` object on every stream state change).
 
+## OTA — M6
+
+### `GET /ota/status`
+
+```json
+{"state": "idle", "last_error": "",
+ "running": {"version": "0.6.1", "project": "espos", "target": "esp32p4", "slot": "ota_1",
+             "image_state": "valid", "pending_verify": false, "confirmed": true,
+             "other_slot": "ota_0", "other_version": "0.6.0", "rolled_back": false,
+             "built": "Aug 18 2026 14:20:25", "idf": "v6.0.2"},
+ "manifest": {"url": "http://…/manifest.json", "channel": "stable", "auto_check": true,
+              "auto_install": false, "last_check_s": 120, "next_check_s": 86280},
+ "progress": {"received": 0, "total": 0},
+ "available": {"version": "0.6.2", "url": "http://…/espos-esp32p4-0.6.2.bin", "size": 0,
+               "sha256": "", "notes": "…", "newer": true}}
+```
+`state` ∈ `idle checking available downloading verifying ready failed`
+(`ready` = installed, rebooting in ~1.5 s). `image_state` ∈ `valid
+pending_verify new invalid aborted undefined`; `pending_verify` is true
+while a fresh image has not confirmed itself; `rolled_back` when the other
+slot holds an image that failed. `available` is `null` until a manifest
+check found something. `last_check_s`/`next_check_s` are `null` before the
+first check / when auto-check is off.
+
+### `POST /ota/check`, `POST /ota`, `POST /ota/confirm`, `POST /ota/rollback`
+
+JSON content type required; `202 {"status": …}`. `POST /ota` with
+`{"url": "http(s)://…"}` installs that image, with `{}` the *available*
+build (`404 not_found` if none). `409 busy` while a check or install is
+running; `400 validation` for a non-http(s) URL. Progress and the outcome
+arrive via `GET /ota/status` and the `ota` SSE event.
+
 ## Planned (shape reserved, not implemented)
 
-| Endpoint                     | Milestone | Notes                                          |
-|------------------------------|-----------|------------------------------------------------|
-| `POST /ota`, `GET /ota/status` | M6      | update from URL / manifest                     |
+Nothing — M1–M6 are implemented. Future additions go here first.

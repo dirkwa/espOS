@@ -90,6 +90,64 @@
       "additionalProperties": false,
       "description": "Built-in web server serving the UI and the REST API."
     },
+    "ota": {
+      "type": "object",
+      "title": "Firmware updates",
+      "x-espos-version": 1,
+      "properties": {
+        "manifest_url": {
+          "title": "Manifest URL",
+          "description": "http(s) URL of a version manifest (docs/ota.md). Empty = manual updates from a URL only.",
+          "type": "string",
+          "default": "",
+          "maxLength": 160
+        },
+        "channel": {
+          "title": "Channel",
+          "description": "Which channel of the manifest to follow, e.g. stable or beta.",
+          "type": "string",
+          "default": "stable",
+          "maxLength": 15
+        },
+        "auto_check": {
+          "title": "Check automatically",
+          "description": "Fetch the manifest after boot and every check interval.",
+          "type": "boolean",
+          "default": true
+        },
+        "check_h": {
+          "title": "Check interval",
+          "type": "integer",
+          "default": 24,
+          "minimum": 1,
+          "maximum": 168,
+          "x-espos-unit": "h"
+        },
+        "auto_install": {
+          "title": "Install automatically",
+          "description": "Install a newer build from the manifest as soon as it is found (device reboots). Off = only show it.",
+          "type": "boolean",
+          "default": false
+        },
+        "allow_insecure": {
+          "title": "Skip TLS certificate check",
+          "description": "Accept any https certificate (self-signed boat servers). Images are still signature-checked.",
+          "type": "boolean",
+          "default": false
+        },
+        "confirm_tmo_s": {
+          "title": "Rollback timeout",
+          "description": "A freshly installed image must reach the network within this time, else the device rolls back to the previous firmware.",
+          "type": "integer",
+          "default": 600,
+          "minimum": 30,
+          "maximum": 3600,
+          "x-espos-unit": "s"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Over-the-air updates: where to look for new firmware and how careful to be about a freshly installed image."
+    },
     "sk": {
       "type": "object",
       "title": "SignalK server",

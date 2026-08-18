@@ -23,7 +23,8 @@ function loadSchema() {
   try {
     const gen = path.join(root, "tools", "espos_gen_config.py");
     const descs = ["main/config/app.json", "components/espos_httpd/config/httpd.json",
-      "components/espos_wifi/config/wifi.json", "components/espos_sk/config/sk.json"].map((p) => path.join(root, p));
+      "components/espos_wifi/config/wifi.json", "components/espos_sk/config/sk.json",
+      "components/espos_ota/config/ota.json"].map((p) => path.join(root, p));
     const out = mkdtempSync(path.join(tmpdir(), "espos-mock-"));
     const r = spawnSync("python3", [gen, "--schema-out", path.join(out, "s.json"), "--c-out", path.join(out, "c.c"),
       "--h-out", path.join(out, "h.h"), ...descs], { stdio: "ignore" });
@@ -204,6 +205,46 @@ export function startMock(port = 8484) {
     if (sk.server.source !== "none") skRequest();
   }
 
+  // ---- OTA
+  const ota = {
+    state: "idle", last_error: "",
+    running: { version: "0.5.0-mock", project: "espos", target: "esp32c6", slot: "ota_0", image_state: "valid", pending_verify: false, confirmed: true, other_slot: "ota_1", other_version: "0.4.9", rolled_back: false, built: "Aug 18 2026 12:00:00", idf: "v6.0.2" },
+    manifest: { url: "", channel: "stable", auto_check: true, auto_install: false, last_check_s: null, next_check_s: null },
+    progress: { received: 0, total: 0 }, available: null,
+  };
+  let checkAt = 0;
+  const otaStatus = () => { const c = effective().ota; ota.manifest.url = c.manifest_url; ota.manifest.channel = c.channel; ota.manifest.auto_check = c.auto_check; ota.manifest.auto_install = c.auto_install; ota.manifest.last_check_s = checkAt ? Math.round((Date.now() - checkAt) / 1000) : null; ota.manifest.next_check_s = checkAt && c.auto_check ? c.check_h * 3600 - ota.manifest.last_check_s : null; return ota; };
+  const otaEmit = () => emit("ota", otaStatus());
+  function otaCheck() {
+    const c = effective().ota;
+    if (!c.manifest_url) { Object.assign(ota, { state: "failed", last_error: "no manifest URL configured" }); return otaEmit(); }
+    Object.assign(ota, { state: "checking", last_error: "" }); otaEmit();
+    setTimeout(() => {
+      checkAt = Date.now();
+      ota.available = { version: "0.5.1", url: new URL("espos-esp32c6-0.5.1.bin", c.manifest_url).href, size: 1180000, sha256: "", notes: "mock: bug fixes", newer: true };
+      ota.state = "available"; otaEmit();
+      logAndMark("I", "espos_ota", "manifest: 0.5.1 available (running 0.5.0-mock)");
+    }, 900);
+  }
+  function otaInstall(url) {
+    if (url.includes("unsigned")) {
+      Object.assign(ota, { state: "downloading", progress: { received: 0, total: 900000 } }); otaEmit();
+      setTimeout(() => { Object.assign(ota, { state: "failed", last_error: "image rejected: bad signature or corrupt (ESP_ERR_OTA_VALIDATE_FAILED)" }); otaEmit(); }, 2500);
+      return;
+    }
+    Object.assign(ota, { state: "downloading", last_error: "", progress: { received: 0, total: 1180000 } }); otaEmit();
+    const t = setInterval(() => {
+      ota.progress.received = Math.min(ota.progress.total, ota.progress.received + 120000); otaEmit();
+      if (ota.progress.received >= ota.progress.total) {
+        clearInterval(t);
+        ota.state = "ready"; otaEmit();
+        logAndMark("W", "espos_ota", "update installed, rebooting");
+        setTimeout(() => { Object.assign(ota, { state: "idle", available: null, progress: { received: 0, total: 0 } }); ota.running.version = "0.5.1"; ota.running.slot = "ota_1"; ota.running.other_slot = "ota_0"; ota.running.other_version = "0.5.0-mock"; ota.running.pending_verify = true; ota.running.confirmed = false; ota.running.image_state = "pending_verify"; otaEmit();
+          setTimeout(() => { ota.running.pending_verify = false; ota.running.confirmed = true; ota.running.image_state = "valid"; otaEmit(); logAndMark("I", "espos_ota", "new image confirmed (network up), rollback cancelled"); }, 5000); }, 2000);
+      }
+    }, 400);
+  }
+
   // ---- HTTP
   const json = (res, status, body, headers = {}) => {
     const data = JSON.stringify(body);
@@ -315,6 +356,21 @@ export function startMock(port = 8484) {
         return json(res, 202, { status: "verifying" });
       }
       if (r === "/sk/publish" && m === "POST") { if (!needJson(req, res)) return; sk.ws.pending++; return json(res, 202, { status: "queued" }); }
+      // ---- ota
+      if (r === "/ota/status" && m === "GET") return json(res, 200, otaStatus());
+      if (r === "/ota/check" && m === "POST") { if (!needJson(req, res)) return; if (["checking", "downloading", "ready"].includes(ota.state)) return err(res, 409, "busy", "an update or check is in progress"); otaCheck(); return json(res, 202, { status: "checking" }); }
+      if (r === "/ota" && m === "POST") {
+        if (!needJson(req, res)) return;
+        if (["checking", "downloading", "ready"].includes(ota.state)) return err(res, 409, "busy", "an update or check is in progress");
+        let doc; try { doc = JSON.parse((await body(req)) || "{}"); } catch { doc = null; }
+        if (!doc || typeof doc !== "object") return err(res, 400, "validation", "expected a JSON object");
+        if (doc.url) { if (!/^https?:\/\//.test(doc.url)) return err(res, 400, "validation", "expected an http(s) URL"); otaInstall(doc.url); }
+        else if (ota.available) otaInstall(ota.available.url);
+        else return err(res, 404, "not_found", "no update known; check first");
+        return json(res, 202, { status: "installing" });
+      }
+      if (r === "/ota/confirm" && m === "POST") { if (!needJson(req, res)) return; ota.running.pending_verify = false; ota.running.confirmed = true; ota.running.image_state = "valid"; otaEmit(); return json(res, 202, { status: "confirmed" }); }
+      if (r === "/ota/rollback" && m === "POST") { if (!needJson(req, res)) return; logAndMark("W", "espos_ota", "rollback requested"); Object.assign(ota, { state: "failed", last_error: "rollback requested" }); otaEmit(); return json(res, 202, { status: "rolling_back" }); }
       // ---- logs
       if (r === "/logs" && m === "GET") {
         const after = Number(url.searchParams.get("after") ?? 0);
@@ -340,6 +396,7 @@ export function startMock(port = 8484) {
         res.write(`event: wifi\ndata: ${JSON.stringify(wifiStatus())}\n\n`);
         res.write(`event: sk\ndata: ${JSON.stringify(skStatus())}\n\n`);
         res.write(`event: sk_servers\ndata: ${JSON.stringify(serversDoc())}\n\n`);
+        res.write(`event: ota\ndata: ${JSON.stringify(otaStatus())}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(": ping\n\n"), 15000);
         req.on("close", () => { clients.delete(res); clearInterval(ping); });

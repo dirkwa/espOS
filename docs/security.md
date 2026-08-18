@@ -43,3 +43,17 @@ support encryption (host tests always run unencrypted).
 * All JSON input is validated against the descriptor before any write.
 * Config values are validated on *read* too, so a hostile or stale NVS
   content cannot push out-of-range values into the application.
+
+## Firmware updates (M6)
+
+Every app image is signed (RSA-3072, `SECURE_SIGNED_APPS_NO_SECURE_BOOT`)
+and the running firmware verifies the signature of any update it writes
+against its compiled-in public key, so a device on the network only takes
+firmware from whoever holds `secure_boot_signing_key.pem` — regardless of
+whether the image came over `http://` or `https://`. This does **not**
+stop someone with the USB port (no hardware Secure Boot, no flash
+encryption); those remain release-overlay options. Rollback protection is
+the bootloader's `APP_ROLLBACK_ENABLE` plus the confirm-on-network policy
+in `espos_ota` (docs/ota.md). Keep the signing key out of the repository:
+it is git-ignored, and a missing key yields a *development* key with a
+loud CMake warning.

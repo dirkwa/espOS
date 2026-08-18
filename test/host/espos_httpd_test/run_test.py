@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -76,12 +77,23 @@ class Harness:
         if not ready:
             self.stop()
             raise RuntimeError("harness did not become ready:\n" + "".join(self.log))
+        # Keep draining stdout so the harness never blocks on a full pipe and
+        # tests can grep self.log.
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
         for _ in range(100):
             if not free_port_check(PORT):
                 return
             time.sleep(0.05)
         self.stop()
         raise RuntimeError("harness port never opened:\n" + "".join(self.log))
+
+    def _drain(self):
+        try:
+            for line in self.proc.stdout:
+                self.log.append(line)
+        except (ValueError, OSError):
+            pass
 
     def stop(self):
         if self.proc.poll() is None:
@@ -340,7 +352,6 @@ class ApiTests(unittest.TestCase):
     def test_10_concurrent_requests(self):
         # interleaved PUT/GET from several threads: every response must be
         # well-formed and every GET must observe a value some PUT wrote
-        import threading
         errors = []
         labels = [f"w{i}" for i in range(6)]
 
@@ -371,7 +382,6 @@ class ApiTests(unittest.TestCase):
 # ------------------------------------------------------------ SignalK mock
 
 import http.server
-import threading
 import uuid as _uuid
 
 
@@ -773,7 +783,7 @@ class WifiTests(unittest.TestCase):
         self.assertEqual(first[1][0], "wifi")
         # the oldest reader now sees EOF (its socket was shut down)
         got = list(readers[0].events(timeout=2))
-        self.assertTrue(all(e in ("retry", "wifi", "sk", "sk_servers", "comment") for e, _ in got))
+        self.assertTrue(all(e in ("retry", "wifi", "sk", "sk_servers", "sk_ws", "ota", "logs", "comment") for e, _ in got), got)
         readers[0].sock.settimeout(1.0)
         try:
             eof = readers[0].sock.recv(10) == b""
@@ -901,6 +911,179 @@ class UiAndLogsTests(unittest.TestCase):
         self.assertEqual(st, 404)
         st, _, _, js = req("DELETE", "/api/v1/system/coredump")
         self.assertEqual(st, 200)
+
+
+class FirmwareServer:
+    """Serves a manifest and fake images (sim format: first line 'ESPOS-IMAGE <project> <version>')."""
+
+    def __init__(self):
+        self.files = {}
+        srv = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def handle(self):
+                try:
+                    super().handle()
+                except ConnectionResetError:
+                    pass            # keep-alive socket reset by an aborting client
+
+            def do_GET(self):
+                body = srv.files.get(self.path)
+                if body is None:
+                    self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass            # the device aborts rejected images mid-download
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        self.base = f"http://127.0.0.1:{self.port}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def image(self, path, project="espos", version="0.7.0", size=40000, badsig=False):
+        head = f"ESPOS-IMAGE {project} {version}{' BADSIG' if badsig else ''}\n".encode()
+        self.files[path] = head + b"x" * (size - len(head))
+
+    def manifest(self, path, builds, app="espos"):
+        self.files[path] = json.dumps({"schema": 1, "app": app, "builds": builds}).encode()
+
+    def stop(self):
+        self.httpd.shutdown()
+
+
+class OtaTests(unittest.TestCase):
+    """espos_ota against the sim port: manifest check, install from manifest/URL,
+    rejected images, SSE, confirm-on-network policy."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fw = FirmwareServer()
+        cls.fw.image("/fw/espos-0.7.0.bin", version="0.7.0")
+        cls.fw.image("/fw/other.bin", project="otherapp")
+        cls.fw.image("/fw/badsig.bin", badsig=True)
+        cls.fw.files["/fw/notimage.bin"] = b"<html>nope</html>"
+        cls.fw.manifest("/fw/manifest.json", [
+            {"version": "0.7.0", "target": "linux", "url": "espos-0.7.0.bin", "size": 40000, "notes": "test build"},
+            {"version": "0.6.0", "target": "linux", "url": "old.bin"},
+            {"version": "9.9.9", "target": "esp32p4", "url": "p4.bin"},
+        ])
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_OTA_PENDING": "1", "ESPOS_SIM_WIFI": "connect"})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.fw.stop()
+
+    def ota(self):
+        return req("GET", "/api/v1/ota/status")[3]
+
+    def wait_state(self, *states, timeout=15):
+        return wait_for(lambda: (lambda o: o if o["state"] in states else None)(self.ota()), timeout=timeout)
+
+    def test_01_status_and_pending_image_confirms_once_connected(self):
+        js = self.ota()
+        self.assertEqual(js["running"]["version"], "0.6.0")
+        self.assertEqual(js["running"]["target"], "linux")
+        self.assertEqual(js["running"]["slot"], "ota_0")
+        self.assertIsNone(js["available"])
+        # boots PENDING_VERIFY; WiFi is unconfigured → no confirmation yet
+        self.assertTrue(js["running"]["pending_verify"])
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+        js = wait_for(lambda: (lambda o: o if o["running"]["confirmed"] else None)(self.ota()), timeout=15)
+        self.assertIsNotNone(js, "image must confirm once the network is up")
+        self.assertFalse(js["running"]["pending_verify"])
+        self.assertEqual(js["running"]["image_state"], "valid")
+
+    def test_02_check_without_manifest_fails_cleanly(self):
+        st, _, _, js = req("POST", "/api/v1/ota/check")
+        self.assertEqual(st, 202)
+        js = self.wait_state("failed")
+        self.assertIsNotNone(js)
+        self.assertIn("no manifest URL", js["last_error"])
+
+    def test_03_manifest_check_finds_newer_build(self):
+        sse = SseReader()
+        st, _, _, js = req("PUT", "/api/v1/config", {"ota": {"manifest_url": self.fw.base + "/fw/manifest.json"}})
+        self.assertEqual(st, 200)
+        st, _, _, js = req("POST", "/api/v1/ota/check")
+        self.assertEqual(st, 202)
+        js = self.wait_state("available")
+        self.assertIsNotNone(js, self.ota())
+        self.assertEqual(js["available"]["version"], "0.7.0")
+        self.assertEqual(js["available"]["url"], self.fw.base + "/fw/espos-0.7.0.bin")   # relative → resolved
+        self.assertTrue(js["available"]["newer"])
+        self.assertEqual(js["available"]["notes"], "test build")
+        self.assertIsNotNone(js["manifest"]["last_check_s"])
+        events = [e for e, _ in sse.events(timeout=1.5)]
+        sse.close()
+        self.assertIn("ota", events)
+
+    def test_04_install_available_downloads_with_progress(self):
+        st, _, _, js = req("POST", "/api/v1/ota", {})
+        self.assertEqual(st, 202)
+        prog = wait_for(lambda: (lambda o: o if o["state"] == "downloading" and o["progress"]["received"] > 0 else None)(self.ota()), timeout=10)
+        self.assertIsNotNone(prog, self.ota())
+        self.assertEqual(prog["progress"]["total"], 40000)
+        # a second install while busy is refused
+        st, _, _, js = req("POST", "/api/v1/ota", {"url": self.fw.base + "/fw/espos-0.7.0.bin"})
+        self.assertEqual(st, 409)
+        self.assertEqual(js["error"], "busy")
+        js = self.wait_state("ready", "idle", timeout=20)
+        self.assertIsNotNone(js, self.ota())
+        # sim "reboots" and comes back idle
+        js = self.wait_state("idle", timeout=5)
+        self.assertIsNotNone(js)
+        self.assertIn("reboot", "".join(self.h.log[-40:]).lower())
+
+    def test_05_rejected_images(self):
+        for path, expect in (("/fw/other.bin", "this device runs"), ("/fw/badsig.bin", "rejected"),
+                             ("/fw/notimage.bin", "not a firmware image"), ("/fw/missing.bin", "HTTP 404")):
+            st, _, _, js = req("POST", "/api/v1/ota", {"url": self.fw.base + path})
+            self.assertEqual(st, 202, (path, js))
+            js = self.wait_state("failed", timeout=15)
+            self.assertIsNotNone(js, (path, self.ota()))
+            self.assertIn(expect, js["last_error"], path)
+        st, _, _, js = req("POST", "/api/v1/ota", {"url": "ftp://x/y"})
+        self.assertEqual(st, 400)
+
+    def test_06_manual_rollback(self):
+        st, _, _, js = req("POST", "/api/v1/ota/rollback")
+        self.assertEqual(st, 202)
+        js = wait_for(lambda: (lambda o: o if o["running"]["rolled_back"] else None)(self.ota()), timeout=5)
+        self.assertIsNotNone(js)
+        self.assertEqual(js["running"]["image_state"], "invalid")
+
+
+class OtaRollbackTimeoutTests(unittest.TestCase):
+    """A pending image that never reaches the network is rolled back after ota.confirm_tmo_s."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_OTA_PENDING": "1", "ESPOS_SIM_WIFI": "fail:99"})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    def test_01_rollback_after_timeout(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"ota": {"confirm_tmo_s": 30}, "wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+        self.assertEqual(st, 200)
+        js = req("GET", "/api/v1/ota/status")[3]
+        self.assertTrue(js["running"]["pending_verify"])
+        js = wait_for(lambda: (lambda o: o if o["running"]["rolled_back"] else None)(req("GET", "/api/v1/ota/status")[3]), timeout=45, step=1)
+        self.assertIsNotNone(js, req("GET", "/api/v1/ota/status")[3])
+        self.assertIn("rollback", js["last_error"])
+        self.assertIn("rolling back", "".join(self.h.log).lower())
 
 
 class WifiFailureTests(unittest.TestCase):
