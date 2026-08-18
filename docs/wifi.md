@@ -139,5 +139,31 @@ pushed as the `wifi` SSE event on every change (and once on connect).
   `esp_wifi_remote`, P4-only dependencies in `main/idf_component.yml`;
   pinout in `sdkconfig.defaults.esp32p4`). Same `esp_wifi_*` API; the MAC is
   read from the driver, not eFuse.
+
+  Two settings on that transport are load-bearing, both pinned in
+  `sdkconfig.defaults.esp32p4`:
+
+  * **`CONFIG_WIFI_RMT_RX_BA_WIN=6`.** IDF defaults this to 6 but raises it
+    to 16 as soon as a project enables PSRAM
+    (`SPIRAM_TRY_ALLOCATE_WIFI_LWIP`) — which any board with a display
+    will. At 16 the SDIO Rx path overruns under sustained inbound TCP: the
+    link wedges, `H_SDIO_DRV` spams *"task still writing Rx data to
+    queue!"*, every RPC to the C6 times out, and WiFi stays dead until the
+    host reboots — while the state machine still reports `CONNECTED`,
+    because the disconnect event never crosses the jammed link
+    (espressif/esp-hosted-mcu#184). Measured on a Waveshare 7B with
+    repeated ~30 KB HTTP reads: wedged after 85 requests at 16, survived
+    400 at 6. Note the knob is `WIFI_RMT_*` — with hosted WiFi the radio is
+    remote, so the local `ESP_WIFI_RX_BA_WIN` does not reach it.
+  * **`CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y` must stay
+    on.** The C6 slave firmware is fixed in streaming mode and the host has
+    to match, or the transport asserts at boot: *"SDIO mode mismatch: slave
+    is in streaming mode, but host is in packet mode. Aborting."*
+
+  Since a wedged transport cannot be recovered from the host (there is no
+  reconnect API, and the RPC that would carry one is exactly what times
+  out), an application that must survive it unattended should reboot on
+  its own liveness signal — real traffic, not `ESPOS_WIFI_ST_CONNECTED`,
+  which keeps reporting success.
 * Not yet: BLE provisioning (`espressif/network_provisioning`, planned as a
   follow-up), country code, static IP.
