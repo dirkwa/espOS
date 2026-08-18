@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Host stand-in for mDNS discovery: servers come from the environment,
  *   ESPOS_SIM_SK_SERVERS="host,port,self,name;host,port,self,name"

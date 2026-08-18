@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Storage backend interface for espos_config.
  *

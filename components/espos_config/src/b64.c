@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include "espos_config_priv.h"
 
 static const char k_alpha[] =

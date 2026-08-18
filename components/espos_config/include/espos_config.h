@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_config — NVS-backed, schema-described configuration store.
  *

@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Static UI. Files come from the LittleFS "storage" partition (mounted at
  * CONFIG_ESPOS_HTTPD_WWW_DIR); the build gzips the Vite bundle into it, so

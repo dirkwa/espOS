@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * WebSocket delta stream: one task keeps ws://<server>/signalk/v1/stream
  * open with the access token, sends batched deltas from the delta engine

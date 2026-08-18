@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * In-memory config backend: used by host tests and available on device for
  * diagnostics. Not persistent. Linear lists — sizes are tiny.

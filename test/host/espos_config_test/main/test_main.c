@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include <stdio.h>
 #include <stdlib.h>
 #include "unity.h"

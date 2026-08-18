@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Server-Sent Events at GET /api/v1/events. Components publish named
  * events with a JSON payload; every connected browser/UI receives

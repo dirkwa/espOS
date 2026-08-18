@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Device state that must not travel with an exported configuration: the
  * persistent clientId, the access token (keyed by the server's self URN)

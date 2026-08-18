@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_sk core: one task owns discovery, server selection and the token
  * state machine. Everything else (HTTP handlers, config changes, other

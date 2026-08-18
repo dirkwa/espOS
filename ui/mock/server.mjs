@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 //
 // espOS API mock for UI development: implements docs/api.md well enough to
 // exercise every page without a device — config with schema validation of

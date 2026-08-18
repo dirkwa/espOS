@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 // The one place that knows the REST contract (docs/api.md): typed fetch
 // helpers, the SSE connection and a tiny subscribable store per event.
 import { useEffect, useState } from "preact/hooks";

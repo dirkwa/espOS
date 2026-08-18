@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 #
 # Included by the IDF build system for every project that has espos_config in
 # its component list, before any component CMakeLists.txt is processed. It

@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Host (linux target) port: a scripted stand-in for the WiFi driver so the
  * state machine, the status JSON and the HTTP/SSE plumbing run in host

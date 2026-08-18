@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include "test_common.h"
 
 /* Namespace "mig" is at version 3. Simulated history:

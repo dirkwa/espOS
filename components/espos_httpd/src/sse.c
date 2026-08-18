@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * SSE over esp_http_server: the request is detached with
  * httpd_req_async_handler_begin() so the server task is free again, and the

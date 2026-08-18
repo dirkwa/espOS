@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Device port: esp_wifi / esp_netif / esp_event glue for the state
  * machine. On ESP32-P4 the same calls reach the C6 co-processor through

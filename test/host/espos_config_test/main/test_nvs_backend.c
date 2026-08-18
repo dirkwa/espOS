@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * The real NVS backend on the host, on top of IDF's file-backed flash
  * emulation (partition table from partitions.csv in this test app).

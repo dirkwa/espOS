@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 idf_component_register(
     SRCS test_main.c test_core.c test_json.c test_migrations.c test_b64.c test_nvs_backend.c
     INCLUDE_DIRS "."

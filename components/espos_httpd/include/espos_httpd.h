@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_httpd — the device's HTTP server (esp_http_server) and the versioned
  * REST API under /api/v1. Other espOS components register their endpoints

@@ -94,4 +94,18 @@ docs/                      contracts and guides
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+espOS is **source available, not open source**. See [LICENSE.md](LICENSE.md)
+(SPDX headers use `LicenseRef-Source-Available-No-Redistribution`).
+
+**You may**, free of charge: run it on your own boat or fleet, private or
+commercial; use it for internal company operations; modify it for your own
+use; use it in education and research; and provide professional services
+around it.
+
+**You may not**: redistribute it, or publish a modified version of it — as
+source, firmware images or otherwise. Verbatim copies of official releases
+may be mirrored and cached.
+
+Third-party components pulled in by the build (ESP-IDF, the Espressif
+component registry, `joltwallet/littlefs`, npm packages) keep their own
+licenses.

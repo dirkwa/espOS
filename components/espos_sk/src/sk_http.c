@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Blocking HTTP calls of the access-request protocol (esp_http_client).
  * Bodies are small JSON documents; responses are capped at 4 KiB.

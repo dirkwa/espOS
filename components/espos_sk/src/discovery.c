@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * mDNS discovery of SignalK servers (_signalk-http._tcp) and advertisement
  * of this device. Device build; the host uses discovery_sim.c.

@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Token state machine tests: every transition of the M3 diagram, including
  * 404 on poll, reboot mid-approval (store round trip), token revoked while

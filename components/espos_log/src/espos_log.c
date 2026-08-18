@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Log ring: a byte ring of [u16 len][text] records behind esp_log's
  * vprintf hook. The hook formats once into a stack buffer, strips ANSI

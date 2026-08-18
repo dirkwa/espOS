@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * OTA task: manifest checks, installs, and the confirm/rollback policy for
  * a freshly booted image. One task, one command queue; blocking downloads

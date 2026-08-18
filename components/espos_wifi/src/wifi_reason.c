@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include "espos_wifi_sm.h"
 
 const char *espos_wifi_state_str(espos_wifi_state_t s)

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 """Unit tests for espos_gen_config.py (run: python3 -m unittest discover -s tools -p 'test_*.py')."""
 import json
 import os

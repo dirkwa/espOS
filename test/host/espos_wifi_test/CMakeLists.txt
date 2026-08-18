@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 #
 # Host unit tests for the espos_wifi state machine (pure C, fake port, manual clock).
 #   idf.py --preview set-target linux && idf.py build && ./build/espos_wifi_test.elf

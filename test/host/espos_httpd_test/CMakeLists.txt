@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 #
 # Host (linux target) integration test for the REST API: the real espos_httpd
 # on the FreeRTOS POSIX simulator with the NVS backend on emulated flash.

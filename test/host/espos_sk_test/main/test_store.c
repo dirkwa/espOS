@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Persistent SK state on real NVS (host flash emulation): clientId is
  * generated once and kept, token/pending survive a "reboot", empties erase.

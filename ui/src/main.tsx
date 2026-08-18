@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 import { render } from "preact";
 import { App } from "./app";
 import { connectEvents } from "./api";

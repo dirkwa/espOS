@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 idf_build_get_property(target IDF_TARGET)
 set(priv_reqs esp_timer esp_app_format esp_system esp_event espos_log espressif__cjson)
 if(NOT target STREQUAL "linux")

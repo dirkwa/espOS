@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 cmake_minimum_required(VERSION 3.22)
 
 # Pinned in .idf-version; the build fails loudly on a mismatched IDF so that a

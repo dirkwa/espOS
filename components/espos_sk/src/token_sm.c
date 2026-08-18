@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * SignalK access-token state machine (see espos_sk_token_sm.h). Runs on one
  * task; the port performs HTTP asynchronously and reports back with events.

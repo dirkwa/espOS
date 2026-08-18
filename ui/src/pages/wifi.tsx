@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 import { useEffect, useState } from "preact/hooks";
 import { get, put, post, useStore, wifiStore, scanStore, errText, type ScanDoc, type ConfigDoc, type PutResult } from "../api";
 import { Badge, Row, Msg, navigate } from "../app";

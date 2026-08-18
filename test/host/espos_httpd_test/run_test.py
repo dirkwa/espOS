@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 """
 Drives build/espos_httpd_test.elf through the REST API contract in docs/api.md.
 Standard library only. Exit code 0 == all checks passed.

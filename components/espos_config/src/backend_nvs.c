@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * NVS backend for espos_config. Type mapping:
  *   bool   → u8        int → i32        float → u32 (IEEE-754 bits)

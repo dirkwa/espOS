@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_wifi state machine. Single-threaded by contract: the owner
  * serialises espos_wifi_sm_event() calls (mutex on device, plain calls in

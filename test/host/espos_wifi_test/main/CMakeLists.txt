@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 # Compiles the state machine sources directly: no espos_config/httpd needed.
 set(wifi_src "${CMAKE_CURRENT_LIST_DIR}/../../../../components/espos_wifi")
 idf_component_register(

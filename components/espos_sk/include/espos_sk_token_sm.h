@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * SignalK access-token state machine — pure C. Drives the access-request
  * flow of the SignalK security API:

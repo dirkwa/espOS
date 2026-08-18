@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 // Shell: nav + a hand-rolled history router (no router dependency).
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentType } from "preact";

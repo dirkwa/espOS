@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 set(ESPOS_CONFIG_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
 set(ESPOS_CONFIG_GEN_C "${ESPOS_CONFIG_GEN_DIR}/espos_config_gen.c")
 set(ESPOS_CONFIG_GEN_H "${ESPOS_CONFIG_GEN_DIR}/include/espos_cfg_keys.h")

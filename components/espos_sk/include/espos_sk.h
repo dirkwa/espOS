@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_sk — SignalK server discovery and access-token management (M3);
  * WebSocket delta output and meta reconciliation follow in M4.

@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Host stand-in: downloads really happen (esp_http_client works on linux)
  * but nothing is written; the "flash" state is a few variables driven by

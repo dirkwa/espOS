@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 import { defineConfig, type Plugin } from "vite";
 import preact from "@preact/preset-vite";
 import { startMock } from "./mock/server.mjs";

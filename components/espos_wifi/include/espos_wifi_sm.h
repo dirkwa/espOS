@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_wifi state machine — pure C, no esp_wifi calls. The driver side is
  * injected through espos_wifi_port_t so the machine runs unchanged on the

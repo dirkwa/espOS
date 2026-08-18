@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espOS example application: bring up the config store and the HTTP server,
  * then log a heartbeat at the configured interval. This is the "app on top of

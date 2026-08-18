@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 idf_build_get_property(target IDF_TARGET)
 set(srcs src/wifi_sm.c src/wifi_reason.c src/espos_wifi.c src/api_wifi.c)
 set(priv_reqs espressif__cjson)

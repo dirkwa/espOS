@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * State machine tests. A fake port records driver calls and owns a manual
  * clock; "tick(ms)" advances time and fires the armed timer when due, so

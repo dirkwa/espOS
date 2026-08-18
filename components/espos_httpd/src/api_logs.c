@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * /api/v1/logs — the log ring, paged by sequence number, streamed in
  * pages so a large ring never has to be materialised in RAM; the ring

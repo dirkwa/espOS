@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 // dist/ → dist-gz/: every file gzipped (level 9) as <name>.gz, nothing else.
 // The firmware serves <path>.gz with Content-Encoding: gzip; the LittleFS
 // image is built from dist-gz/ (see the root CMakeLists.txt).

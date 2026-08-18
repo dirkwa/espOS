@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * espos_wifi core: owns the state machine behind a mutex, loads the "wifi"
  * config namespace, follows config changes, exposes status/scan JSON and

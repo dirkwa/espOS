@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
  * Host harness: config store on emulated NVS + real REST server. The port
  * comes from ESPOS_TEST_PORT (default 18080). run_test.py drives it.

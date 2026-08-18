@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "espOS device web UI (Preact + Vite), served gzipped from the LittleFS storage partition",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE.md",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node scripts/gzip-dist.mjs",
