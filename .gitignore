@@ -21,3 +21,8 @@ provisioning/
 *.nvs.bin
 secrets/
 *.secret
+
+# UI build output and dependencies (built in CI / locally: `npm ci && npm run build` in ui/)
+ui/node_modules/
+ui/dist/
+ui/dist-gz/

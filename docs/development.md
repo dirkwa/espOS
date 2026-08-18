@@ -25,6 +25,14 @@ for t in esp32 esp32s3 esp32c3 esp32c6 esp32p4; do
 done
 ```
 
+## Web UI
+
+`ui/` is a Vite project; `npm ci && npm run build` there produces
+`ui/dist-gz/`, which the firmware build packs into `build/storage.bin`
+(flashed by `idf.py flash`). Skipping it is fine — the device serves the
+embedded placeholder page. `npm run dev` runs the UI against an API mock;
+see [ui.md](ui.md).
+
 ## Host tests (no hardware)
 
 ```sh
@@ -43,8 +51,17 @@ idf.py --preview set-target linux && idf.py build
 
 cd ../espos_sk_test
 idf.py --preview set-target linux && idf.py build
-./build/espos_sk_test.elf                  # SignalK token state machine
+./build/espos_sk_test.elf                  # SignalK token state machine, store, delta pipeline
+
+cd ../espos_log_test
+idf.py --preview set-target linux && idf.py build
+./build/espos_log_test.elf                 # log ring: hook, wrap, paging
 ```
+
+`run_test.py` also covers M5's firmware side (`UiAndLogsTests`): static
+serving from a directory (`ESPOS_WWW_DIR`, gzip, SPA fallback, cache
+headers), `/logs` paging and the `logs` SSE event, `/logs/level`, and the
+core-dump endpoints' host behaviour (absent).
 
 Multi-target caveat: `managed_components/` is synced to the current target's
 dependency set (ESP32-P4 pulls extra components), so build targets one after

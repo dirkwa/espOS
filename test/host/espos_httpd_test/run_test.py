@@ -4,14 +4,17 @@
 Drives build/espos_httpd_test.elf through the REST API contract in docs/api.md.
 Standard library only. Exit code 0 == all checks passed.
 """
+import gzip
 import http.client
 import itertools
 import json
 import os
 import select
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -792,6 +795,112 @@ class WifiTests(unittest.TestCase):
         js = wait_for(lambda: (lambda r: r[3] if r[3]["state"] == "connected" else None)(req("GET", "/api/v1/wifi/status")))
         self.assertIsNotNone(js)
         self.assertEqual(js["connect_count"], 2)
+
+
+class UiAndLogsTests(unittest.TestCase):
+    """M5 firmware side: static UI from a directory, log ring, coredump (absent on host)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.www = tempfile.mkdtemp(prefix="espos-www-")
+        os.makedirs(os.path.join(cls.www, "assets"))
+        with open(os.path.join(cls.www, "index.html"), "wb") as f:
+            f.write(b"<html>SPA</html>")
+        with gzip.open(os.path.join(cls.www, "assets", "app-abc123.js.gz"), "wb") as f:
+            f.write(b"console.log('hi')")
+        with open(os.path.join(cls.www, "plain.txt"), "wb") as f:
+            f.write(b"plain")
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_WWW_DIR": cls.www})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        shutil.rmtree(cls.www, ignore_errors=True)
+
+    def test_01_index_and_spa_fallback(self):
+        st, hd, raw, _ = req("GET", "/")
+        self.assertEqual(st, 200)
+        self.assertEqual(raw, b"<html>SPA</html>")
+        self.assertIn("text/html", hd["Content-Type"])
+        self.assertEqual(hd["Cache-Control"], "no-cache")
+        for route in ("/wifi", "/config/sk", "/index.html"):
+            st, hd, raw, _ = req("GET", route)
+            self.assertEqual((route, st), (route, 200))
+            self.assertEqual(raw, b"<html>SPA</html>")
+        # a missing file with an extension is a real 404 (JSON, per contract)
+        st, hd, raw, js = req("GET", "/missing.png")
+        self.assertEqual(st, 404)
+        self.assertEqual(js["error"], "not_found")
+        # the API namespace never falls back to the SPA
+        st, hd, raw, js = req("GET", "/api/v1/nope")
+        self.assertEqual(st, 404)
+        self.assertEqual(js["error"], "not_found")
+        # no directory traversal
+        st, _, _, _ = req("GET", "/../etc/passwd")
+        self.assertEqual(st, 404)
+
+    def test_02_gzip_asset_and_plain(self):
+        st, hd, raw, _ = req("GET", "/assets/app-abc123.js")
+        self.assertEqual(st, 200)
+        self.assertEqual(hd.get("Content-Encoding"), "gzip")
+        self.assertIn("javascript", hd["Content-Type"])
+        self.assertIn("immutable", hd["Cache-Control"])
+        self.assertEqual(gzip.decompress(raw), b"console.log('hi')")
+        st, hd, raw, _ = req("GET", "/plain.txt")
+        self.assertEqual(st, 200)
+        self.assertNotIn("Content-Encoding", hd)
+        self.assertEqual(raw, b"plain")
+        st, _, _, js = req("GET", "/api/v1/system/info")
+        self.assertTrue(js["ui_storage"])
+
+    def test_03_logs_ring_and_paging(self):
+        st, _, _, js = req("GET", "/api/v1/logs")
+        self.assertEqual(st, 200)
+        self.assertGreater(js["next"], js["first"])
+        self.assertEqual(js["from"], js["first"])
+        self.assertEqual(len(js["lines"]), js["next"] - js["first"])
+        self.assertTrue(any("espos_httpd" in l for l in js["lines"]))
+        self.assertFalse(any("\x1b" in l for l in js["lines"]))     # no colour codes
+        # paging: after + limit
+        st, _, _, page = req("GET", f"/api/v1/logs?after={js['first']}&limit=2")
+        self.assertEqual(page["from"], js["first"] + 1)
+        self.assertEqual(page["lines"], js["lines"][1:3])
+        # a config change is logged → shows up after the last seq
+        req("PUT", "/api/v1/config", {"httpd": {"port": PORT}})
+        js2 = wait_for(lambda: (lambda r: r[3] if r[3]["next"] > js["next"] else None)(req("GET", f"/api/v1/logs?after={js['next'] - 1}")))
+        self.assertIsNotNone(js2)
+        self.assertEqual(js2["from"], js["next"])
+        # a too-old "after" is reported as a gap and clamped
+        st, _, _, g = req("GET", "/api/v1/logs?after=0")
+        self.assertFalse(g["gap"])       # 0 is "from the start", not a gap
+        self.assertEqual(g["from"], g["first"])
+
+    def test_04_logs_level(self):
+        st, _, _, js = req("PUT", "/api/v1/logs/level", {"tag": "espos_httpd", "level": "debug"})
+        self.assertEqual(st, 200)
+        self.assertEqual(js, {"tag": "espos_httpd", "level": "debug"})
+        st, _, _, js = req("PUT", "/api/v1/logs/level", {"level": "bogus"})
+        self.assertEqual(st, 400)
+        self.assertEqual(js["error"], "validation")
+        st, _, _, js = req("PUT", "/api/v1/logs/level", {"tag": "espos_httpd", "level": "info"})
+        self.assertEqual(st, 200)
+
+    def test_05_logs_sse_event(self):
+        sse = SseReader()
+        req("PUT", "/api/v1/logs/level", {"tag": "espos_sse_probe", "level": "info"})   # any request that logs
+        req("PUT", "/api/v1/config", {"httpd": {"port": PORT}})
+        seen = [e for e, _ in sse.events(timeout=3)]
+        sse.close()
+        self.assertIn("logs", seen)
+
+    def test_06_coredump_absent_on_host(self):
+        st, _, _, js = req("GET", "/api/v1/system/coredump")
+        self.assertEqual(st, 404)
+        self.assertEqual(js["error"], "not_found")
+        st, _, _, js = req("GET", "/api/v1/system/coredump/raw")
+        self.assertEqual(st, 404)
+        st, _, _, js = req("DELETE", "/api/v1/system/coredump")
+        self.assertEqual(st, 200)
 
 
 class WifiFailureTests(unittest.TestCase):

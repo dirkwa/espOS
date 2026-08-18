@@ -1,0 +1,8 @@
+## espOS HTTP server: registry dependencies (exact-pinned, see docs/development.md)
+dependencies:
+  idf: ">=6.0.0"
+  espressif/cjson: "==1.7.19~2"
+  joltwallet/littlefs:
+    version: "==1.22.3"
+    rules:
+      - if: "target != linux"

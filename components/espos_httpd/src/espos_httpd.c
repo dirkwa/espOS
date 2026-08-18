@@ -17,6 +17,7 @@
 #include "espos_httpd.h"
 #include "espos_httpd_priv.h"
 #include "espos_httpd_sse.h"
+#include "espos_log.h"
 
 static const char *TAG = "espos_httpd";
 static httpd_handle_t s_server;
@@ -45,6 +46,10 @@ esp_err_t espos_httpd_register(const httpd_uri_t *uri)
 /* Map esp_http_server's own error responses onto the JSON error contract. */
 static esp_err_t json_err_handler(httpd_req_t *req, httpd_err_code_t err)
 {
+    /* Anything unrouted that is not the API is a UI file or an SPA route. */
+    if (err == HTTPD_404_NOT_FOUND && req->method == HTTP_GET && strncmp(req->uri, "/api/", 5) != 0) {
+        return espos_httpd_static_serve(req);
+    }
     const char *status, *code, *msg;
     switch (err) {
     case HTTPD_404_NOT_FOUND:
@@ -82,6 +87,7 @@ esp_err_t espos_httpd_start(void)
     if (s_server) {
         return ESP_OK;
     }
+    espos_log_init();   /* idempotent; apps call it earlier to catch boot logs */
     int32_t port = 80;
     (void)espos_config_get_i32(ESPOS_CFG_NS_HTTPD, ESPOS_CFG_HTTPD_PORT, &port);
 
@@ -136,6 +142,8 @@ esp_err_t espos_httpd_start(void)
     }
     ESP_ERROR_CHECK(espos_httpd_register_config_api(s_server));
     ESP_ERROR_CHECK(espos_httpd_register_system_api(s_server));
+    ESP_ERROR_CHECK(espos_httpd_register_logs_api(s_server));
+    ESP_ERROR_CHECK(espos_httpd_register_coredump_api(s_server));
     ESP_ERROR_CHECK(espos_httpd_register_static(s_server));
     ESP_ERROR_CHECK(espos_httpd_register_sse(s_server));
     /* config changes are pushed to UIs as "config" events */

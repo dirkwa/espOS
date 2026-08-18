@@ -16,15 +16,40 @@ jobs:
           python-version: "3.12"
       - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
 
+  ui:
+    name: web ui (vite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+        working-directory: ui
+      - run: npm run build
+        working-directory: ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: espos-ui
+          path: ui/dist-gz
+          if-no-files-found: error
+
   firmware:
     name: build ${{ matrix.target }}
     runs-on: ubuntu-latest
+    needs: ui
     strategy:
       fail-fast: false
       matrix:
         target: [esp32, esp32s3, esp32c3, esp32c6, esp32p4]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: espos-ui
+          path: ui/dist-gz
       - name: read pinned IDF version
         id: idf
         run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
@@ -41,6 +66,7 @@ jobs:
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/ota_data_initial.bin
+            build/storage.bin
           if-no-files-found: error
 
   host-tests:
@@ -65,4 +91,6 @@ jobs:
             cd ../espos_wifi_test && idf.py --preview set-target linux && idf.py build &&
             ./build/espos_wifi_test.elf &&
             cd ../espos_sk_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_sk_test.elf"
+            ./build/espos_sk_test.elf &&
+            cd ../espos_log_test && idf.py --preview set-target linux && idf.py build &&
+            ./build/espos_log_test.elf"

@@ -114,9 +114,10 @@ application/schema+json`. Sent with an `ETag`; a request with a matching
   "chip": "esp32c6", "chip_revision": 1, "cores": 1,
   "uptime_s": 42, "free_heap": 210000, "min_free_heap": 190000,
   "reset_reason": "poweron", "config_storage_reset": false,
-  "schema_etag": "6acfba355e183b19"
+  "schema_etag": "6acfba355e183b19", "ui_storage": true
 }
 ```
+`ui_storage` (M5) is true when the LittleFS UI partition is mounted.
 `config_storage_reset` is true when the NVS partition had to be erased at
 boot (corrupt/incompatible) and every value is a default.
 `reset_reason` ∈ `poweron external software panic int_wdt task_wdt wdt
@@ -127,6 +128,29 @@ deepsleep brownout sdio usb jtag efuse power_glitch cpu_lockup unknown`.
 `202 {"status": "rebooting"}` — the device restarts ~500 ms after
 responding.
 
+### `GET /system/coredump` — M5
+
+Summary of the core dump saved by the last panic, `404 not_found` when
+there is none:
+
+```json
+{"present": true, "size": 18848, "valid": true, "task": "httpd", "pc": "0x4003530c",
+ "app_elf_sha256": "adef2c527", "version": 1179908,
+ "mcause": 7, "mtval": "0x00000010", "ra": "0x40035308", "sp": "0x4ff45580", "stackdump_bytes": 448}
+```
+RISC-V targets carry `mcause/mtval/ra/sp/stackdump_bytes`; Xtensa targets
+`exc_cause`, `exc_vaddr`, `backtrace` (array of PCs) and
+`backtrace_corrupted`. `app_elf_sha256` identifies the build that crashed
+(compare with `idf.py` output / `esp_app_desc`).
+
+`GET /system/coredump/raw` streams the image as `application/octet-stream`
+for `espcoredump.py --chip <target> info_corefile -c coredump.bin -t raw
+build/espos.elf` (needs the ELF of exactly that build). `DELETE
+/system/coredump` erases it (`{"status": "erased"}`).
+
+`POST /system/crash` (only with `CONFIG_ESPOS_HTTPD_DEBUG_CRASH=y`, off by
+default) panics on purpose to test the path.
+
 ### `POST /system/factory-reset` — M1
 
 Arms the reboot (further writes get `503`), erases the whole NVS partition,
@@ -134,11 +158,44 @@ responds `202 {"status": "factory_reset", "rebooting": true}`, then reboots.
 WiFi credentials and the SignalK token live in NVS too, so this returns the
 device to provisioning.
 
-## Static UI
+## Logs — M5
 
-`GET /` and `GET /index.html` serve the UI (M1: an embedded placeholder
-page; M5: the built bundle). Unknown paths under `/api/` return `404
-{"error": "not_found"}`.
+### `GET /logs`
+
+The in-RAM log ring (`CONFIG_ESPOS_LOG_RING_SIZE`, 16 KiB), paged by
+sequence number: `?after=<seq>` returns lines with a higher sequence
+(default: from the oldest kept), `?limit=<n>` (default 200, max 1000).
+
+```json
+{"first": 1, "next": 101, "dropped": 0, "size": 16384, "used": 5911, "gap": false, "from": 1,
+ "lines": ["I (500) espos_config: ready: 4 namespace(s), schema 8851b3f24a88fe45", "…"]}
+```
+`lines[i]` has sequence `from + i`; poll on with `after = next - 1`.
+`gap` is true when `after` was older than the ring still holds (lines were
+overwritten in between); `first`/`dropped` say how many. Lines are the
+console lines without colour codes, truncated at
+`CONFIG_ESPOS_LOG_LINE_MAX` (256). Streamed in chunks, so a full ring never
+has to fit in RAM twice.
+
+### `PUT /logs/level`
+
+`{"level": "debug", "tag": "espos_sk"}` (`tag` optional, default `*`;
+`level` ∈ `none error warn info debug verbose`) → `200 {"tag","level"}`;
+`400 validation` otherwise. Runtime only (`esp_log_level_set`), not
+persisted.
+
+## Static UI — M5
+
+Everything that is not `/api/…` is served from the LittleFS `storage`
+partition (the gzipped Vite bundle, see [ui.md](ui.md)): `<path>.gz` is
+preferred and sent with `Content-Encoding: gzip` (`curl --compressed`),
+`/assets/*` (content-hashed) with `Cache-Control: public, max-age=31536000,
+immutable`, everything else `no-cache`. An extension-less path that does
+not exist falls back to `/index.html` (SPA routes such as `/wifi`); a
+missing file with an extension is `404 {"error": "not_found"}`, as is
+anything unknown under `/api/`. When the partition has no `index.html` the
+placeholder page embedded in the firmware is served instead
+(`ui_storage: false` in `/system/info`).
 
 ## WiFi
 
@@ -186,6 +243,7 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 | `sk`        | the `/sk/status` document            | on connect and every token/server change |
 | `sk_servers`| the `/sk/servers` document           | on connect and after each discovery pass |
 | `sk_ws`     | the `ws` object of `/sk/status`      | stream connect/disconnect, error, drops |
+| `logs`      | `{"next": <seq>}`                     | at most every 500 ms when new log lines arrived; fetch `/logs?after=` |
 
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
 oldest stream is evicted (clients reconnect via `retry`).
@@ -260,6 +318,4 @@ SSE events: `sk` (the status document, on connect and on change),
 
 | Endpoint                     | Milestone | Notes                                          |
 |------------------------------|-----------|------------------------------------------------|
-| `GET /logs`                  | M5        | log ring buffer                                |
-| `GET /system/coredump`       | M5        | last crash summary                             |
 | `POST /ota`, `GET /ota/status` | M6      | update from URL / manifest                     |

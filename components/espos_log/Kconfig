@@ -1,0 +1,19 @@
+menu "espOS log ring"
+
+    config ESPOS_LOG_RING_SIZE
+        int "Log ring buffer size (bytes)"
+        default 16384
+        range 2048 262144
+        help
+            Recent log lines are kept in RAM for GET /api/v1/logs. Oldest
+            lines are overwritten first.
+
+    config ESPOS_LOG_LINE_MAX
+        int "Longest stored line (bytes)"
+        default 256
+        range 64 1024
+        help
+            Longer lines are truncated when stored (console output is
+            unaffected).
+
+endmenu

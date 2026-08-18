@@ -19,3 +19,13 @@ if(NOT ESPOS_IDF_ACTUAL STREQUAL ESPOS_IDF_VERSION)
 endif()
 
 project(espos)
+
+# UI bundle → LittleFS "storage" partition image, flashed with `idf.py flash`.
+# Built by `npm run build` in ui/ (dist-gz/); without it the device serves the
+# embedded placeholder page and the image step is skipped (not an error).
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ui/dist-gz/index.html.gz")
+    littlefs_create_partition_image(storage "${CMAKE_CURRENT_LIST_DIR}/ui/dist-gz" FLASH_IN_PROJECT)
+    message(STATUS "espOS: UI bundle from ui/dist-gz will be flashed to 'storage'")
+else()
+    message(STATUS "espOS: ui/dist-gz missing — run 'npm run build' in ui/ to include the web UI")
+endif()
