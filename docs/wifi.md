@@ -121,6 +121,54 @@ connected_s` only in `connected`, `backoff_ms` only in `backoff`, `portal.ip`
 and `portal.clients` only while the portal is active. The same document is
 pushed as the `wifi` SSE event on every change (and once on connect).
 
+## Co-processor link watchdog (esp_hosted boards)
+
+On boards where the radio lives on a second chip — ESP32-P4 host with an
+ESP32-C6 over SDIO, and similar — the host↔co-processor transport can
+wedge while the WiFi state machine still reports `connected`. The host
+log fills with
+
+```
+rpc_core: Timeout waiting for Resp for [0x126](Req_WifiStaGetApInfo)
+```
+
+and nothing else: the RPC channel is gone, so the host cannot even ask
+whether it is associated. Upstream tracks this as
+[esp-hosted-mcu#197](https://github.com/espressif/esp-hosted-mcu/issues/197)
+and [#220](https://github.com/espressif/esp-hosted-mcu/issues/220).
+
+esp_hosted raises `ESP_HOSTED_EVENT_TRANSPORT_FAILURE` for faults it can
+detect itself (a dropped SDIO read, an all-ones `PKT_LEN`), and with
+`CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y` — the default, which
+espOS keeps — that reboots the device. **A silently wedged link raises no
+event at all**, because there is nothing to detect, only an absence.
+
+`espos_wifi_hosted_watchdog_start()` supplies the missing signal. It
+enables the co-processor heartbeat (20 s) and watches for it. The
+heartbeat travels over the same RPC channel that dies, so its absence
+*is* the fault detector. After three missed beats the transport is
+reinitialised in place — `esp_hosted_deinit()` → `esp_hosted_init()` →
+`esp_hosted_connect_to_slave()` — which takes seconds and keeps config,
+sockets-above and UI state, rather than costing a full boot.
+
+It starts automatically from `espos_wifi_start()`; there is nothing to
+call. On native-radio and simulator builds it compiles to a stub
+returning `ESP_ERR_NOT_SUPPORTED`. A non-OK return means wedges will not
+be *detected* — not that WiFi is broken.
+
+Applications should keep their own reboot watchdog as the outer
+backstop: if `esp_hosted_init()` itself fails, the timer is deliberately
+left disarmed (no heartbeat will ever re-arm it) and only a reboot
+recovers. `transport_recoveries` appears in the status document once it
+is non-zero, so a link that keeps wedging is visible without a serial
+console.
+
+Caveat, stated plainly: Espressif has not confirmed that a deinit/init
+cycle clears this wedge class. The one measured data point upstream
+(#220: 43 wedges over 21 h, zero after the 2.12.12 SDIO fix) used a full
+`esp_restart()`. Treat the in-place recovery as the cheap first attempt,
+not a guarantee.
+
 ## Design notes
 
 * The state machine (`wifi_sm.c`) is pure C over an injected port and runs
