@@ -344,6 +344,34 @@ static void snapshot_locked(espos_wifi_status_t *out)
     snprintf(out->portal_ip, sizeof(out->portal_ip), "%s", s.drv->portal_ip ? s.drv->portal_ip : "");
 }
 
+esp_err_t espos_wifi_refresh_rssi(void)
+{
+    if (!s.lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s.drv || !s.drv->rssi) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    lock();
+    bool connected = (s.sm.st.state == ESPOS_WIFI_ST_CONNECTED);
+    unlock();
+    if (!connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* MAY BLOCK. On co-processor boards this is an RPC to the radio and
+     * can take the transport timeout to fail. Never call it from a UI,
+     * render or event task — that is exactly the bug this API exists to
+     * keep out of espos_wifi_get_status(). */
+    int8_t r = s.drv->rssi();
+    if (!r) {
+        return ESP_FAIL;
+    }
+    lock();
+    s.sm.st.link.rssi = r;
+    unlock();
+    return ESP_OK;
+}
+
 esp_err_t espos_wifi_get_status(espos_wifi_status_t *out)
 {
     if (!out || !s.lock) {
@@ -352,12 +380,22 @@ esp_err_t espos_wifi_get_status(espos_wifi_status_t *out)
     lock();
     snapshot_locked(out);
     unlock();
-    if (out->sm.state == ESPOS_WIFI_ST_CONNECTED && s.drv->rssi) {
-        int8_t r = s.drv->rssi(); /* driver call outside the lock */
-        if (r) {
-            out->rssi = r;
-        }
-    }
+    /* Deliberately no driver call here.
+     *
+     * This used to ask the driver for a live RSSI. On co-processor
+     * boards (esp_hosted: P4 host, C6 radio) that is a synchronous RPC
+     * across the SDIO link, and callers poll status from wherever they
+     * like — including a UI or render task once a second. When the link
+     * wedges, every one of those calls blocks for the RPC timeout and
+     * the caller's task stalls with it; a status label on a display
+     * task is enough to freeze the whole UI. Worse, the timeout path in
+     * esp_hosted destroys an already-NULL semaphore
+     * (rpc_core.c, wait_for_sync_response) and asserts, so a transport
+     * wedge turns into a panic on whichever task happened to ask.
+     *
+     * A status snapshot must never depend on the radio answering.
+     * out->rssi is the value cached at association and refreshed by
+     * espos_wifi_refresh_rssi(), both on the event task. */
     return ESP_OK;
 }
 
