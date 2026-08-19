@@ -4,10 +4,18 @@ set(srcs src/wifi_sm.c src/wifi_reason.c src/espos_wifi.c src/api_wifi.c)
 set(priv_reqs espressif__cjson)
 if(target STREQUAL "linux")
     # Host: scripted driver stand-in, no esp_wifi/lwIP on the simulator.
-    list(APPEND srcs src/port_sim.c)
+    list(APPEND srcs src/port_sim.c src/hosted_watchdog.c)
 else()
-    list(APPEND srcs src/port_idf.c src/portal_dns.c)
-    list(APPEND priv_reqs esp_wifi esp_netif esp_event lwip)
+    list(APPEND srcs src/port_idf.c src/portal_dns.c src/hosted_watchdog.c)
+    list(APPEND priv_reqs esp_wifi esp_netif esp_event esp_timer lwip)
+    # esp_hosted is only present on co-processor targets (P4 + C6 and
+    # friends); the watchdog compiles to stubs without it. Declaring the
+    # dependency unconditionally would break every native-radio build, so
+    # key off the managed component actually being checked out.
+    idf_build_get_property(project_dir PROJECT_DIR)
+    if(EXISTS "${project_dir}/managed_components/espressif__esp_hosted/CMakeLists.txt")
+        list(APPEND priv_reqs espressif__esp_hosted)
+    endif()
 endif()
 idf_component_register(
     SRCS ${srcs}

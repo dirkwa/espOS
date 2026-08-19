@@ -59,6 +59,24 @@ esp_err_t espos_wifi_scan_json(char **out_json);
 /** Device-unique short id, "1a2b" (last two MAC bytes), for default names. */
 const char *espos_wifi_short_id(void);
 
+/* Co-processor link watchdog (esp_hosted builds only; a no-op elsewhere).
+ *
+ * A wedged host<->co-processor transport takes the radio down while the
+ * WiFi state machine still reports CONNECTED, so nothing above notices.
+ * This watches the co-processor heartbeat — which travels over the same
+ * RPC channel that dies — and reinitialises the transport when it stops,
+ * without rebooting the device.
+ *
+ * Safe to call on every boot; returns ESP_ERR_NOT_SUPPORTED when the
+ * build has no hosted co-processor. A non-OK return means wedges will
+ * NOT be detected, not that WiFi is broken. */
+esp_err_t espos_wifi_hosted_watchdog_start(void);
+
+/* Times the transport was reinitialised since boot. 0 on non-hosted
+ * builds. Surfaced in the WiFi status document so a link that keeps
+ * wedging is visible without a serial console. */
+uint32_t espos_wifi_hosted_recoveries(void);
+
 #ifdef __cplusplus
 }
 #endif
