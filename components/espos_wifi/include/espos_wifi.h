@@ -40,6 +40,23 @@ typedef struct {
 
 esp_err_t espos_wifi_get_status(espos_wifi_status_t *out);
 
+/** Refresh the cached RSSI from the radio.
+ *
+ * **MAY BLOCK.** On co-processor boards (esp_hosted) this is a
+ * synchronous RPC across the host<->radio link and takes the transport
+ * timeout to fail when that link is wedged. Call it from an application
+ * task that can afford to wait — never from a UI, render or event task.
+ *
+ * espos_wifi_get_status() deliberately does NOT do this: a status
+ * snapshot must never depend on the radio answering. Without calling
+ * this, `rssi` is the value captured at association, which is accurate
+ * enough for a status line and costs nothing.
+ *
+ * ESP_ERR_NOT_SUPPORTED if the driver has no RSSI source,
+ * ESP_ERR_INVALID_STATE if not connected, ESP_FAIL if the radio did not
+ * answer. */
+esp_err_t espos_wifi_refresh_rssi(void);
+
 /** Serialise the status as the JSON document of docs/api.md (malloc'ed). */
 esp_err_t espos_wifi_status_json(char **out_json);
 
