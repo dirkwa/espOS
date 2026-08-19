@@ -146,28 +146,41 @@ event at all**, because there is nothing to detect, only an absence.
 `espos_wifi_hosted_watchdog_start()` supplies the missing signal. It
 enables the co-processor heartbeat (20 s) and watches for it. The
 heartbeat travels over the same RPC channel that dies, so its absence
-*is* the fault detector. After three missed beats the transport is
-reinitialised in place — `esp_hosted_deinit()` → `esp_hosted_init()` →
-`esp_hosted_connect_to_slave()` — which takes seconds and keeps config,
-sockets-above and UI state, rather than costing a full boot.
+*is* the fault detector. After three missed beats the device restarts.
 
 It starts automatically from `espos_wifi_start()`; there is nothing to
 call. On native-radio and simulator builds it compiles to a stub
 returning `ESP_ERR_NOT_SUPPORTED`. A non-OK return means wedges will not
 be *detected* — not that WiFi is broken.
 
-Applications should keep their own reboot watchdog as the outer
-backstop: if `esp_hosted_init()` itself fails, the timer is deliberately
-left disarmed (no heartbeat will ever re-arm it) and only a reboot
-recovers. `transport_recoveries` appears in the status document once it
-is non-zero, so a link that keeps wedging is visible without a serial
-console.
+### Why a restart and not a transport re-init
 
-Caveat, stated plainly: Espressif has not confirmed that a deinit/init
-cycle clears this wedge class. The one measured data point upstream
-(#220: 43 wedges over 21 h, zero after the 2.12.12 SDIO fix) used a full
-`esp_restart()`. Treat the in-place recovery as the cheap first attempt,
-not a guarantee.
+The first version of this called `esp_hosted_deinit()` →
+`esp_hosted_init()` → `esp_hosted_connect_to_slave()`, to recover in
+seconds while keeping config and UI state. That is what the upstream
+`host_hosted_events` example does, and it looked strictly better than a
+reboot.
+
+It is not, because that pair **asserts rather than returning an error**
+when it cannot re-allocate:
+
+```
+assert failed: sdio_mempool_create sdio_drv.c:258 (buf_mp_g)
+```
+
+`sdio_mempool_destroy()` runs on deinit and `sdio_mempool_create()` on
+init; if the pool cannot be re-allocated — fragmentation, or the old one
+not fully released — the assert fires on whatever task called it. On a
+panel that was the `esp_timer` task, so the "graceful recovery" panicked
+the system. Error handling on the return value cannot help: the assert
+fires first.
+
+The transport is already broken when recovery runs, so the recovery path
+must not have a failure mode of its own. `esp_restart()` always works.
+A device that restarts 60 s after its radio link dies is strictly better
+than one sitting unreachable until someone power-cycles it, which is the
+behaviour this replaces — and that, not the in-place repair, was always
+the valuable half.
 
 ## Design notes
 
