@@ -31,6 +31,11 @@
 #include "espos_wifi.h"
 #include "espos_wifi_sm.h"
 
+/* Steady-state RX buffer. Grows to CONFIG_ESPOS_SK_RX_FRAME_MAX for a big
+ * frame, then shrinks straight back so a one-off burst is not a permanent
+ * internal-RAM cost. */
+#define RX_BUF_MIN 4096
+
 static const char *TAG = "espos_skws";
 
 typedef struct {
@@ -340,7 +345,7 @@ static void ws_task(void *arg)
     esp_transport_handle_t tcp = NULL, ws = NULL;
     bool connected = false;
     uint32_t next_health = 0;
-    size_t cap = 4096;
+    size_t cap = RX_BUF_MIN;
     char *buf = malloc(cap);
     char headers[ESPOS_SK_TOKEN_MAX + 32];
     espos_sk_server_t cur_srv = { 0 };
@@ -598,6 +603,22 @@ static void ws_task(void *arg)
                     lock();
                     snprintf(s.st.last_error, sizeof(s.st.last_error), "%.60s", err);
                     unlock();
+                }
+                /* Give the growth back. One oversized frame — a server's
+                 * notification backfill at connect is the usual one — would
+                 * otherwise pin the buffer at its peak for the life of the
+                 * connection. On boards where internal RAM is the scarce
+                 * resource (PSRAM makes the total look healthy while the
+                 * largest free internal block is what actually runs out)
+                 * that is a permanent cost paid for a transient burst.
+                 * Shrink failures are ignored: keeping the larger buffer is
+                 * correct behaviour, not an error. */
+                if (cap > RX_BUF_MIN) {
+                    char *sb = realloc(buf, RX_BUF_MIN);
+                    if (sb) {
+                        buf = sb;
+                        cap = RX_BUF_MIN;
+                    }
                 }
             }
             if (broken) {
