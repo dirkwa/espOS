@@ -52,6 +52,23 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 #
 # Note the knob is WIFI_RMT_* (esp_wifi_remote): with hosted WiFi the
 # radio is remote, so the local ESP_WIFI_RX_BA_WIN has no effect on it.
+# esp_hosted's SDIO RX buffers are 64-byte-aligned DMA allocations that grow to
+# fit the largest frame seen. Without this they come from
+# MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA — a far tighter pool than plain internal
+# RAM, and one nothing routinely measures. On a P4 panel a 9216-byte request
+# failed while the usual internal-RAM metric still read a healthy 26 KB:
+#
+#   W H_SDIO_DRV: RX buffer alloc failed (len=9216); dropping read
+#
+# The co-processor link then died, its heartbeat stopped, and the device
+# restarted roughly a minute later on a 6-20 minute cycle.
+#
+# The P4's GDMA reaches PSRAM through cache (SOC_PSRAM_DMA_CAPABLE=1), which is
+# the case this option exists for. hosted_malloc_align() tries DMA-capable
+# SPIRAM first and still falls back to internal RAM, so it degrades rather than
+# breaks. Do NOT set this on a target whose DMA cannot reach PSRAM.
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+
 CONFIG_WIFI_RMT_RX_BA_WIN=6
 
 # Streaming mode must stay ON: the C6 slave firmware is fixed in streaming

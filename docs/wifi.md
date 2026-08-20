@@ -121,6 +121,28 @@ connected_s` only in `connected`, `backoff_ms` only in `backoff`, `portal.ip`
 and `portal.clients` only while the portal is active. The same document is
 pushed as the `wifi` SSE event on every change (and once on connect).
 
+### DMA-capable buffers on the P4
+
+`sdkconfig.defaults.esp32p4` sets `CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`.
+
+esp_hosted's SDIO RX buffers are 64-byte-aligned DMA allocations that grow
+to fit the largest frame seen. Without that option they come from
+`MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`, which is a far tighter pool than
+plain internal RAM — and one nothing routinely measures. A panel logged a
+healthy 26 KB largest internal block while a 9216-byte DMA-capable request
+failed, after which the link died and the heartbeat watchdog restarted the
+device every 6-20 minutes.
+
+The P4's GDMA reaches PSRAM through cache (`SOC_PSRAM_DMA_CAPABLE=1`).
+`hosted_malloc_align()` tries DMA-capable SPIRAM first and still falls back
+to internal RAM, so it degrades rather than breaks. **Do not set this on a
+target whose DMA cannot reach PSRAM.**
+
+If you instrument this, measure **both** pools —
+`MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA` and
+`MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA`. Reporting only one is how the
+original failure stayed invisible.
+
 ## Co-processor link watchdog (esp_hosted boards)
 
 On boards where the radio lives on a second chip — ESP32-P4 host with an
