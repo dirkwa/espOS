@@ -56,7 +56,7 @@ export interface SkStatus {
   token: { state: string; has_token: boolean; busy: boolean; approved_s?: number; pending_s?: number; pending_href?: string;
     next_action_s?: number; last_check_s?: number; last_http_status: number; last_error: string;
     counts: { requests: number; approved: number; denied: number; unauthorized: number } };
-  server: { host?: string; port?: number; self?: string; source: "discovered" | "manual" | "none"; name?: string; swname?: string; swvers?: string };
+  server: { host?: string; port?: number; self?: string; source: "discovered" | "manual" | "pinned" | "none"; name?: string; swname?: string; swvers?: string };
   ws?: SkWs; client_id: string; description: string; permissions: string;
   discovery: { enabled: boolean; count: number; last_s: number | null };
 }

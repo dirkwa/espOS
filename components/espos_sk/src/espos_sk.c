@@ -59,7 +59,7 @@ static struct {
     uint16_t cfg_port;
     bool have_server;
     espos_sk_server_t server;
-    char server_source[12];          /* "manual" | "discovered" | "" */
+    char server_source[12];          /* "manual" | "discovered" | "pinned" | "" */
 
     /* shared snapshot */
     espos_sk_tok_status_t snap;
@@ -307,6 +307,7 @@ static void run_discovery(void)
      * matters. */
     const char *keep = s.sm.store.token[0] ? s.sm.store.token_self :
                        (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
+    bool keep_reserved = false;
     if (keep[0]) {
         for (size_t i = 0; i < s.server_count; i++) {
             if (strcmp(s.servers[i].self, keep) != 0) {
@@ -327,12 +328,18 @@ static void run_discovery(void)
             }
             avoid[m] = s.avoid_until_ms[i];
             m++;
+            keep_reserved = true;
             break;
         }
     }
     for (size_t i = 0; i < n && m < ESPOS_SK_MAX_SERVERS; i++) {
-        if (keep[0] && m > 0 && strcmp(found[i].self, keep) == 0) {
-            continue;   /* already reserved above */
+        /* Skip only what the reservation above actually took. Testing
+         * m > 0 instead would drop the anchored server whenever the
+         * reservation did NOT run — the empty-s.servers[] case on a
+         * fresh boot with a token restored from NVS, which is exactly
+         * when it must not be lost. */
+        if (keep_reserved && strcmp(found[i].self, keep) == 0) {
+            continue;
         }
         merged[m] = found[i];
         merged[m].seen_ms = t;
