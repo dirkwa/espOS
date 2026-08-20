@@ -54,11 +54,12 @@ static struct {
     bool discovery_enabled;
     uint32_t discover_interval_ms;
     char cfg_self[ESPOS_SK_SELF_MAX];
+    bool cfg_pin;
     char cfg_host[ESPOS_SK_HOST_MAX];
     uint16_t cfg_port;
     bool have_server;
     espos_sk_server_t server;
-    char server_source[12];          /* "manual" | "discovered" | "" */
+    char server_source[12];          /* "manual" | "discovered" | "pinned" | "" */
 
     /* shared snapshot */
     espos_sk_tok_status_t snap;
@@ -150,6 +151,7 @@ static void load_cfg(void)
 {
     espos_config_get_bool(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_DISCOVERY, &s.discovery_enabled);
     espos_config_get_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_SELF, s.cfg_self, sizeof(s.cfg_self), NULL);
+    espos_config_get_bool(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_PIN, &s.cfg_pin);
     espos_config_get_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_HOST, s.cfg_host, sizeof(s.cfg_host), NULL);
     int32_t v = 80;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_PORT, &v);
@@ -238,6 +240,15 @@ static void select_server(void)
                 }
             }
         }
+        /* Pinned: keep the server already in use even when this round of
+         * discovery did not see it. Re-election is what moves a helm
+         * display onto a different vessel's server mid-passage; some
+         * installations would rather wait for their own to answer again. */
+        if (idx < 0 && s.cfg_pin && s.have_server && s.server.host[0]) {
+            chosen = s.server;
+            source = "pinned";
+            have = true;
+        }
         if (idx >= 0) {
             snprintf(chosen.host, sizeof(chosen.host), "%s", s.servers[idx].host);
             chosen.port = s.servers[idx].port;
@@ -284,7 +295,52 @@ static void run_discovery(void)
      * dropped out of one query (mDNS is lossy) for two intervals. */
     uint32_t avoid[ESPOS_SK_MAX_SERVERS] = { 0 };
     size_t m = 0;
+    /* The server our token belongs to is kept unconditionally.
+     *
+     * Fresh results used to fill the array first, so on a network
+     * advertising ESPOS_SK_MAX_SERVERS or more the carry-over loop below
+     * — the whole defence against mDNS being lossy — could not run at
+     * all. One missed answer then evicted the anchored server, the
+     * anchor lookup in select_server() found nothing, and a perfectly
+     * reachable server was dropped with "no server". Reserving its slot
+     * first means a full list can never cost us the one entry that
+     * matters. */
+    const char *keep = s.sm.store.token[0] ? s.sm.store.token_self :
+                       (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
+    bool keep_reserved = false;
+    if (keep[0]) {
+        for (size_t i = 0; i < s.server_count; i++) {
+            if (strcmp(s.servers[i].self, keep) != 0) {
+                continue;
+            }
+            /* Prefer this round's fresher copy if mDNS did answer for it. */
+            bool fresh = false;
+            for (size_t k = 0; k < n; k++) {
+                if (strcmp(found[k].self, keep) == 0) {
+                    merged[m] = found[k];
+                    merged[m].seen_ms = t;
+                    fresh = true;
+                    break;
+                }
+            }
+            if (!fresh) {
+                merged[m] = s.servers[i];
+            }
+            avoid[m] = s.avoid_until_ms[i];
+            m++;
+            keep_reserved = true;
+            break;
+        }
+    }
     for (size_t i = 0; i < n && m < ESPOS_SK_MAX_SERVERS; i++) {
+        /* Skip only what the reservation above actually took. Testing
+         * m > 0 instead would drop the anchored server whenever the
+         * reservation did NOT run — the empty-s.servers[] case on a
+         * fresh boot with a token restored from NVS, which is exactly
+         * when it must not be lost. */
+        if (keep_reserved && strcmp(found[i].self, keep) == 0) {
+            continue;
+        }
         merged[m] = found[i];
         merged[m].seen_ms = t;
         for (size_t k = 0; k < s.server_count; k++) { /* carry the avoid stamp over */
@@ -296,8 +352,8 @@ static void run_discovery(void)
     }
     for (size_t i = 0; i < s.server_count && m < ESPOS_SK_MAX_SERVERS; i++) {
         bool dup = false;
-        for (size_t k = 0; k < n; k++) {
-            if (strcmp(found[k].host, s.servers[i].host) == 0 && found[k].port == s.servers[i].port) {
+        for (size_t k = 0; k < m; k++) {   /* against what we kept, including the reserved anchor */
+            if (strcmp(merged[k].host, s.servers[i].host) == 0 && merged[k].port == s.servers[i].port) {
                 dup = true;
                 break;
             }
@@ -375,8 +431,10 @@ static void handle_cmd(const cmd_t *c)
  * the machine hostage when others are available: sidestep it for a while. */
 static void maybe_rotate_unreachable(void)
 {
+    /* cfg_self and cfg_pin both mean "this server or none": rotating away
+     * would defeat the setting the moment the server had a bad minute. */
     if (s.sm.st.state != ESPOS_SK_TOK_ERROR || s.sm.st.last_http_status != 0 ||
-        strcmp(s.server_source, "discovered") != 0 || s.cfg_self[0]) {
+        strcmp(s.server_source, "discovered") != 0 || s.cfg_self[0] || s.cfg_pin) {
         return;
     }
     lock();

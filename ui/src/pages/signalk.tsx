@@ -98,6 +98,19 @@ export function SignalKPage() {
             {hostSel ? <>Manual server <b>{hostSel}:{String(cfg?.["server_port"])}</b> is pinned. </> : selfSel ? <>Pinned to server <span class="mono">{selfSel}</span>. </> : "Automatic: the first master server found is used and kept. "}
             {servers?.last_s !== null && servers?.last_s !== undefined && <>Last discovery {servers.last_s}s ago.</>}
           </p>
+          {!hostSel && !selfSel && (
+            <div class="row">
+              <label>
+                <input type="checkbox" checked={!!cfg?.["server_pin"]}
+                       onChange={(e) => void save({ server_pin: (e.target as HTMLInputElement).checked }, "Server selection saved.")} />
+                {" "}stay on the chosen server
+              </label>
+              <span class="muted small">
+                Keep using the server in use even if discovery stops seeing it, instead of
+                moving to another one. Useful where several vessels' servers are visible.
+              </span>
+            </div>
+          )}
           <table>
             <thead><tr><th>Name</th><th>Address</th><th>Version</th><th></th></tr></thead>
             <tbody>
