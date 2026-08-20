@@ -54,7 +54,6 @@ static const char *TAG = "espos_hostedwd";
 #define TIMEOUT_US          ((int64_t)HEARTBEAT_SEC * MISSED_BEATS_LIMIT * 1000000)
 
 static esp_timer_handle_t s_timer;
-static volatile bool s_recovering;
 static uint32_t s_last_beat;
 static bool s_seen_beat;
 
@@ -89,10 +88,6 @@ static void arm_timer(void)
 static void recover(void *arg)
 {
     (void)arg;
-    if (s_recovering) {
-        return;
-    }
-    s_recovering = true;
     ESP_LOGE(TAG, "no co-processor heartbeat for %d s — the radio link is gone, restarting",
              HEARTBEAT_SEC * MISSED_BEATS_LIMIT);
     /* esp_restart() is safe from the timer task and always succeeds;
@@ -126,21 +121,27 @@ static void on_hosted_event(void *arg, esp_event_base_t base, int32_t id, void *
          * CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y it restarts
          * the system and we never get here; with it disabled, recover
          * now instead of waiting out the heartbeat timeout. */
-        ESP_LOGW(TAG, "transport failure reported");
-        if (s_timer && !s_recovering) {
-            esp_timer_stop(s_timer);
-            esp_timer_start_once(s_timer, 0);
-        }
+        /* With CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y (the
+         * default espOS keeps) esp_hosted restarts the system itself and
+         * we never reach here. With it disabled, act now rather than
+         * waiting out the heartbeat timeout. */
+        ESP_LOGE(TAG, "transport failure reported — restarting");
+        esp_restart();
         break;
     case ESP_HOSTED_EVENT_CP_INIT:
-        /* The co-processor restarted underneath us — its heartbeat
-         * config went with it. */
-        ESP_LOGW(TAG, "co-processor restarted");
-        if (!s_recovering) {
-            esp_hosted_configure_heartbeat(true, HEARTBEAT_SEC);
-            s_seen_beat = false;
-            arm_timer();
-        }
+        /* The co-processor restarted underneath us, so its heartbeat
+         * config went with it and no beat will ever arrive again.
+         *
+         * Re-enabling it here would mean an RPC from the event loop
+         * task — blocking, on a link that has just proved unreliable,
+         * which is exactly the mistake that made a wedged transport
+         * panic the UI task. Restart instead: a co-processor that
+         * reset under a running host is not a state worth nursing, and
+         * the heartbeat is re-enabled cleanly on the next boot. The
+         * timer is left running, so if this event ever fires spuriously
+         * on a healthy link the beats keep it disarmed. */
+        ESP_LOGE(TAG, "co-processor restarted underneath us — restarting");
+        esp_restart();
         break;
     default:
         break;
@@ -168,12 +169,20 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
         s_timer = NULL;
         return err;
     }
+    /* Blocking RPC, but this runs once from espos_wifi_start() on the
+     * app task at boot, where the link is known good and blocking is
+     * expected. Never call it from the event loop or a UI task. */
     err = esp_hosted_configure_heartbeat(true, HEARTBEAT_SEC);
     if (err != ESP_OK) {
-        /* Not fatal: WiFi works, we just cannot see it wedge. Say so
-         * plainly rather than implying the watchdog is armed. */
+        /* Not fatal: WiFi works, we just cannot see it wedge. Unwind
+         * fully so a later retry actually retries — leaving s_timer set
+         * would make the next call return ESP_OK with detection off,
+         * which is worse than failing. */
         ESP_LOGW(TAG, "co-processor heartbeat unavailable (%s) — "
                       "wedge detection is OFF", esp_err_to_name(err));
+        esp_event_handler_unregister(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID, on_hosted_event);
+        esp_timer_delete(s_timer);
+        s_timer = NULL;
         return err;
     }
     arm_timer();

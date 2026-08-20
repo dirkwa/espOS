@@ -1100,7 +1100,13 @@ class OtaTests(unittest.TestCase):
                              ("/fw/notimage.bin", "not a firmware image"), ("/fw/missing.bin", "HTTP 404")):
             st, _, _, js = req("POST", "/api/v1/ota", {"url": self.fw.base + path})
             self.assertEqual(st, 202, (path, js))
-            js = self.wait_state("failed", timeout=15)
+            # Wait for THIS attempt's error, not just for state==failed: the
+            # state is still "failed" from the previous iteration, so a slow
+            # runner can satisfy wait_state() before the new attempt has
+            # replaced last_error, and the assert then reads a stale value.
+            js = wait_for(lambda: (lambda o: o if o["state"] == "failed"
+                                   and expect in (o.get("last_error") or "") else None)(self.ota()),
+                          timeout=15)
             self.assertIsNotNone(js, (path, self.ota()))
             self.assertIn(expect, js["last_error"], path)
         st, _, _, js = req("POST", "/api/v1/ota", {"url": "ftp://x/y"})
