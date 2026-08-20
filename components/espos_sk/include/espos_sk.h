@@ -15,7 +15,13 @@
 extern "C" {
 #endif
 
-#define ESPOS_SK_MAX_SERVERS 6
+/* A boat network can carry more SignalK servers than you would guess: a
+ * plotter, a spare Pi, a laptop running one for development, plus every
+ * neighbouring vessel in the marina. Measured on one: 9 advertisements.
+ * When the list is smaller than what is advertised, which entries survive
+ * depends on mDNS answer order, which is not stable — so the server the
+ * device is actually paired with can silently drop out. */
+#define ESPOS_SK_MAX_SERVERS 12
 
 typedef struct {
     char host[ESPOS_SK_HOST_MAX];   /* IPv4 dotted or hostname */
