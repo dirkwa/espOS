@@ -181,9 +181,6 @@ static void load_cfg(void)
 
 /* ---------------------------------------------------- server choice */
 
-/* Pick the server per config: manual host wins; else the discovered server
- * with the preferred self; else the first discovered "master"; else the
- * first discovered. Task-private. */
 /* Discovery is pointless once a manual host is configured: the address is
  * already known, select_server() ignores discovered entries entirely, and
  * browsing on regardless only spends radio time and mDNS traffic to
@@ -194,6 +191,9 @@ static inline bool discovery_wanted(void)
     return s.discovery_enabled && !s.cfg_host[0];
 }
 
+/* Pick the server per config: manual host wins; else the discovered server
+ * with the preferred self; else the first discovered "master"; else the
+ * first discovered. Task-private. */
 static void select_server(void)
 {
     espos_sk_server_t chosen = { 0 };
@@ -407,7 +407,14 @@ static void handle_cmd(const cmd_t *c)
         }
         break;
     case CMD_DISCOVER:
-        if (discovery_wanted()) {
+        /* Deliberately NOT discovery_wanted(): this is an explicit request
+         * from POST /sk/discover, and the endpoint has already answered
+         * "discovering". A manual host suppresses the periodic browse, but
+         * silently doing nothing here would make the web UI's Discover
+         * button lie — it is also the one way to see what else is on the
+         * network while pinned to an address. Only the config switch turns
+         * it off entirely. */
+        if (s.discovery_enabled) {
             run_discovery();
         }
         s.discover_due_ms = at(s.discover_interval_ms);
