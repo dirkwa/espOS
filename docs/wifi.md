@@ -155,14 +155,14 @@ be *detected* — not that WiFi is broken.
 
 ### Why a restart and not a transport re-init
 
-The first version of this called `esp_hosted_deinit()` →
-`esp_hosted_init()` → `esp_hosted_connect_to_slave()`, to recover in
-seconds while keeping config and UI state. That is what the upstream
-`host_hosted_events` example does, and it looked strictly better than a
-reboot.
+Upstream's `host_hosted_events` example recovers with
+`esp_hosted_deinit()` → `esp_hosted_init()` →
+`esp_hosted_connect_to_slave()`, which repairs the link in seconds and
+keeps config and UI state. **Do not do this here**, however obviously
+better it looks than a reboot.
 
-It is not, because that pair **asserts rather than returning an error**
-when it cannot re-allocate:
+That pair **asserts rather than returning an error** when it cannot
+re-allocate:
 
 ```text
 assert failed: sdio_mempool_create sdio_drv.c:258 (buf_mp_g)
@@ -170,10 +170,10 @@ assert failed: sdio_mempool_create sdio_drv.c:258 (buf_mp_g)
 
 `sdio_mempool_destroy()` runs on deinit and `sdio_mempool_create()` on
 init; if the pool cannot be re-allocated — fragmentation, or the old one
-not fully released — the assert fires on whatever task called it. On a
-panel that was the `esp_timer` task, so the "graceful recovery" panicked
-the system. Error handling on the return value cannot help: the assert
-fires first.
+not fully released — the assert fires on whatever task called it, which
+for this watchdog is `esp_timer`. Error handling on the return value
+cannot help: the assert fires first, so the `if (err)` branch is
+unreachable.
 
 The transport is already broken when recovery runs, so the recovery path
 must not have a failure mode of its own. `esp_restart()` always works.
