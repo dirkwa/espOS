@@ -440,12 +440,6 @@ static char *status_to_json(const espos_wifi_status_t *st)
     cJSON_AddNumberToObject(root, "round", st->sm.round);
     cJSON_AddNumberToObject(root, "connect_count", st->sm.connect_count);
     cJSON_AddNumberToObject(root, "disconnect_count", st->sm.disconnect_count);
-    /* Only when it has actually happened: a 0 on every native-radio
-     * device is noise in a document people read by eye. */
-    uint32_t hosted_recoveries = espos_wifi_hosted_recoveries();
-    if (hosted_recoveries) {
-        cJSON_AddNumberToObject(root, "transport_recoveries", hosted_recoveries);
-    }
     cJSON *portal = cJSON_AddObjectToObject(root, "portal");
     if (portal) {
         cJSON_AddBoolToObject(portal, "active", st->sm.portal_active);

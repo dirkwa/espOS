@@ -37,6 +37,7 @@
 #include "esp_hosted_event.h"
 #include "esp_hosted_misc.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 #include <inttypes.h>
@@ -53,10 +54,8 @@ static const char *TAG = "espos_hostedwd";
 #define TIMEOUT_US          ((int64_t)HEARTBEAT_SEC * MISSED_BEATS_LIMIT * 1000000)
 
 static esp_timer_handle_t s_timer;
-static volatile bool s_recovering;
 static uint32_t s_last_beat;
 static bool s_seen_beat;
-static uint32_t s_recoveries;
 
 static void arm_timer(void)
 {
@@ -70,47 +69,32 @@ static void arm_timer(void)
     }
 }
 
-/* Runs on the esp_timer task. esp_hosted_deinit()/init() block, so this
- * must not run from the event loop it is reacting to. */
+/* Runs on the esp_timer task.
+ *
+ * Deliberately NOT esp_hosted_deinit()/init(): that pair asserts rather
+ * than returning an error when it cannot re-allocate. A failed re-init
+ * panics on whatever task called it —
+ *
+ *     assert failed: sdio_mempool_create sdio_drv.c:258 (buf_mp_g)
+ *
+ * observed on a panel doing exactly this, taking down the esp_timer
+ * task. The transport is already broken at this point, so the recovery
+ * must not have a failure mode of its own; a deliberate restart is the
+ * one path that always works.
+ *
+ * Detection is the valuable half. A device that reboots 60 s after the
+ * link dies is strictly better than one that sits unreachable until
+ * someone power-cycles it, which is what happened before this existed. */
 static void recover(void *arg)
 {
     (void)arg;
-    if (s_recovering) {
-        return;
-    }
-    s_recovering = true;
-    s_recoveries++;
-    ESP_LOGW(TAG, "no co-processor heartbeat for %d s — reinitialising transport (#%" PRIu32 ")",
-             HEARTBEAT_SEC * MISSED_BEATS_LIMIT, s_recoveries);
-
-    int err = esp_hosted_deinit();
-    if (err) {
-        ESP_LOGE(TAG, "esp_hosted_deinit: %d", err);
-    }
-    err = esp_hosted_init();
-    if (err) {
-        /* Leave the timer disarmed: without a working transport there
-         * will be no heartbeat to re-arm it, and retrying in a tight
-         * loop would only starve the rest of the system. The
-         * application watchdog reboots us from here. */
-        ESP_LOGE(TAG, "esp_hosted_init failed (%d) — transport is down", err);
-        s_recovering = false;
-        return;
-    }
-    err = esp_hosted_connect_to_slave();
-    if (err) {
-        ESP_LOGE(TAG, "esp_hosted_connect_to_slave: %d", err);
-    }
-
-    /* Re-arm the heartbeat: the co-processor forgot it across the
-     * restart, and without this the monitor goes permanently blind. */
-    if (esp_hosted_configure_heartbeat(true, HEARTBEAT_SEC) != ESP_OK) {
-        ESP_LOGE(TAG, "could not re-enable the heartbeat");
-    }
-    s_seen_beat = false;
-    s_recovering = false;
-    arm_timer();
-    ESP_LOGI(TAG, "transport reinitialised");
+    ESP_LOGE(TAG, "no co-processor heartbeat for %d s — the radio link is gone, restarting",
+             HEARTBEAT_SEC * MISSED_BEATS_LIMIT);
+    /* esp_restart() is safe from the timer task and always succeeds;
+     * that is the whole point of choosing it over a re-init that can
+     * assert. The log line above is the only breadcrumb explaining the
+     * restart, so emit it before going down. */
+    esp_restart();
 }
 
 static void on_hosted_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -137,21 +121,27 @@ static void on_hosted_event(void *arg, esp_event_base_t base, int32_t id, void *
          * CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y it restarts
          * the system and we never get here; with it disabled, recover
          * now instead of waiting out the heartbeat timeout. */
-        ESP_LOGW(TAG, "transport failure reported");
-        if (s_timer && !s_recovering) {
-            esp_timer_stop(s_timer);
-            esp_timer_start_once(s_timer, 0);
-        }
+        /* With CONFIG_ESP_HOSTED_TRANSPORT_RESTART_ON_FAILURE=y (the
+         * default espOS keeps) esp_hosted restarts the system itself and
+         * we never reach here. With it disabled, act now rather than
+         * waiting out the heartbeat timeout. */
+        ESP_LOGE(TAG, "transport failure reported — restarting");
+        esp_restart();
         break;
     case ESP_HOSTED_EVENT_CP_INIT:
-        /* The co-processor restarted underneath us — its heartbeat
-         * config went with it. */
-        ESP_LOGW(TAG, "co-processor restarted");
-        if (!s_recovering) {
-            esp_hosted_configure_heartbeat(true, HEARTBEAT_SEC);
-            s_seen_beat = false;
-            arm_timer();
-        }
+        /* The co-processor restarted underneath us, so its heartbeat
+         * config went with it and no beat will ever arrive again.
+         *
+         * Re-enabling it here would mean an RPC from the event loop
+         * task — blocking, on a link that has just proved unreliable,
+         * which is exactly the mistake that made a wedged transport
+         * panic the UI task. Restart instead: a co-processor that
+         * reset under a running host is not a state worth nursing, and
+         * the heartbeat is re-enabled cleanly on the next boot. The
+         * timer is left running, so if this event ever fires spuriously
+         * on a healthy link the beats keep it disarmed. */
+        ESP_LOGE(TAG, "co-processor restarted underneath us — restarting");
+        esp_restart();
         break;
     default:
         break;
@@ -175,16 +165,43 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
     err = esp_event_handler_register(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID,
                                      on_hosted_event, NULL);
     if (err != ESP_OK) {
+        /* No stop needed: the timer was only just created and no handler
+         * is registered yet, so nothing can have armed it. */
         esp_timer_delete(s_timer);
         s_timer = NULL;
         return err;
     }
+    /* Blocking RPC, but this runs once from espos_wifi_start() on the
+     * app task at boot, where the link is known good and blocking is
+     * expected. Never call it from the event loop or a UI task. */
     err = esp_hosted_configure_heartbeat(true, HEARTBEAT_SEC);
     if (err != ESP_OK) {
-        /* Not fatal: WiFi works, we just cannot see it wedge. Say so
-         * plainly rather than implying the watchdog is armed. */
+        /* Not fatal: WiFi works, we just cannot see it wedge. Unwind
+         * fully so a later retry actually retries — leaving s_timer set
+         * would make the next call return ESP_OK with detection off,
+         * which is worse than failing. */
         ESP_LOGW(TAG, "co-processor heartbeat unavailable (%s) — "
                       "wedge detection is OFF", esp_err_to_name(err));
+        /* Unregister BEFORE touching the timer: the handler is already
+         * live, and a heartbeat arriving mid-teardown would call
+         * arm_timer() on a handle we are about to delete.
+         *
+         * Stop before delete: esp_timer_delete() returns
+         * ESP_ERR_INVALID_STATE for an armed timer, so a delete that
+         * silently failed would leak a timer that still fires recover()
+         * — restarting a device whose detection we just reported OFF.
+         * esp_timer_stop() on an idle timer is a harmless no-op. */
+        esp_event_handler_unregister(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID, on_hosted_event);
+        esp_timer_stop(s_timer);
+        esp_err_t derr = esp_timer_delete(s_timer);
+        if (derr != ESP_OK) {
+            /* Should not happen now, but leaving s_timer set is the
+             * safer failure: start() then returns early instead of
+             * creating a second timer over a leaked one. */
+            ESP_LOGE(TAG, "esp_timer_delete: %s", esp_err_to_name(derr));
+            return err;
+        }
+        s_timer = NULL;
         return err;
     }
     arm_timer();
@@ -195,7 +212,11 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
 
 uint32_t espos_wifi_hosted_recoveries(void)
 {
-    return s_recoveries;
+    /* Always 0 on a hosted build: recovery is a restart, so a RAM
+     * counter cannot survive to report it. Kept so the API is uniform;
+     * the restart itself is visible as reset_reason plus the
+     * "radio link is gone" line in the log ring. */
+    return 0;
 }
 
 #endif /* CONFIG_ESP_HOSTED_ENABLED */
