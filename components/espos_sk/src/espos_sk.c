@@ -402,8 +402,16 @@ static void handle_cmd(const cmd_t *c)
             unlock();
         }
         select_server();
-        if (discovery_wanted() && s.discover_due_ms == 0) {
+        /* Browse now whenever discovery has just become wanted again —
+         * discovery switched on, or a manual host cleared. Testing only
+         * `discover_due_ms == 0` was not enough: setting a manual host
+         * leaves the old due-time in place, so clearing it later left
+         * discovery wanted but never rescheduled, and the device sat with
+         * no server until something else happened to re-arm the timer. */
+        if (discovery_wanted()) {
             s.discover_due_ms = at(0);
+        } else {
+            s.discover_due_ms = 0;
         }
         break;
     case CMD_DISCOVER:
