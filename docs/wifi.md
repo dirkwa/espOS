@@ -164,7 +164,7 @@ reboot.
 It is not, because that pair **asserts rather than returning an error**
 when it cannot re-allocate:
 
-```
+```text
 assert failed: sdio_mempool_create sdio_drv.c:258 (buf_mp_g)
 ```
 

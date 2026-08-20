@@ -1414,7 +1414,12 @@ class SkTests(unittest.TestCase):
     def test_05_server_forgets_request_404_re_request(self):
         before = sk_status()["token"]["counts"]["requests"]
         self.mock.ctl("forget")
-        js = wait_sk(lambda j: j["token"]["counts"]["requests"] > before, timeout=70)
+        # The counter increments when the request is SENT, and the state is
+        # "requesting" until the response lands and moves it to "pending".
+        # Waiting on the count alone can therefore observe the intermediate
+        # state on a slow runner; wait for both.
+        js = wait_sk(lambda j: j["token"]["counts"]["requests"] > before
+                     and j["token"]["state"] == "pending", timeout=70)
         self.assertIsNotNone(js, sk_status())
         self.assertEqual(js["token"]["state"], "pending")
 

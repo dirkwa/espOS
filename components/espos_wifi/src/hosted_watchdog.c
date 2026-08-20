@@ -165,6 +165,8 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
     err = esp_event_handler_register(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID,
                                      on_hosted_event, NULL);
     if (err != ESP_OK) {
+        /* No stop needed: the timer was only just created and no handler
+         * is registered yet, so nothing can have armed it. */
         esp_timer_delete(s_timer);
         s_timer = NULL;
         return err;
@@ -180,8 +182,25 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
          * which is worse than failing. */
         ESP_LOGW(TAG, "co-processor heartbeat unavailable (%s) — "
                       "wedge detection is OFF", esp_err_to_name(err));
+        /* Unregister BEFORE touching the timer: the handler is already
+         * live, and a heartbeat arriving mid-teardown would call
+         * arm_timer() on a handle we are about to delete.
+         *
+         * Stop before delete: esp_timer_delete() returns
+         * ESP_ERR_INVALID_STATE for an armed timer, so a delete that
+         * silently failed would leak a timer that still fires recover()
+         * — restarting a device whose detection we just reported OFF.
+         * esp_timer_stop() on an idle timer is a harmless no-op. */
         esp_event_handler_unregister(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID, on_hosted_event);
-        esp_timer_delete(s_timer);
+        esp_timer_stop(s_timer);
+        esp_err_t derr = esp_timer_delete(s_timer);
+        if (derr != ESP_OK) {
+            /* Should not happen now, but leaving s_timer set is the
+             * safer failure: start() then returns early instead of
+             * creating a second timer over a leaked one. */
+            ESP_LOGE(TAG, "esp_timer_delete: %s", esp_err_to_name(derr));
+            return err;
+        }
         s_timer = NULL;
         return err;
     }
