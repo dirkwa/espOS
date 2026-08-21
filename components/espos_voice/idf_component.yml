@@ -1,0 +1,8 @@
+## espos_voice component manifest
+dependencies:
+  idf: ">=6.0.0"
+  bblanchon/arduinojson: "^7.4.0"
+  espressif/esp-sr:
+    version: "^2.5.0"
+    rules:
+      - if: "target in [esp32s3, esp32p4]"
