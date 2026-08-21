@@ -245,6 +245,7 @@ a `wifi_scan` SSE event carries the same document when a scan finishes.
 | `sk_ws`     | the `ws` object of `/sk/status`      | stream connect/disconnect, error, drops |
 | `logs`      | `{"next": <seq>}`                     | at most every 500 ms when new log lines arrived; fetch `/logs?after=` |
 | `ota`       | the `/ota/status` document           | on connect, state changes, every ~32 KiB of download |
+| `ble`       | the `/ble/status` document           | on connect (snapshot)                  |
 
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
 oldest stream is evicted (clients reconnect via `retry`).
@@ -358,6 +359,43 @@ JSON content type required; `202 {"status": …}`. `POST /ota` with
 build (`404 not_found` if none). `409 busy` while a check or install is
 running; `400 validation` for a non-http(s) URL. Progress and the outcome
 arrive via `GET /ota/status` and the `ota` SSE event.
+
+## BLE gateway
+
+Present only when `espos_ble` is in the build and Bluetooth is enabled in
+sdkconfig. The component bridges BLE devices to signalk-server's BLE provider
+API; it decodes nothing itself, so there is no device or sensor model here —
+what a device *is* remains a server-side concern.
+
+### `GET /ble/status`
+
+```json
+{
+  "enabled": true, "scanning": true, "mac": "D8:85:AC:FA:2C:46",
+  "scan_hits": 2766, "adv_received": 2766, "adv_posted": 1840,
+  "adv_dropped": 0, "adv_pending": 126,
+  "post_success": 46, "post_fail": 0,
+  "ws_connected": true,
+  "gatt_sessions": 0, "gatt_max": 3
+}
+```
+
+* `scan_hits` counts advertisements seen by the radio, `adv_received` those
+  handed to the gateway; a gap between them means the intake callback is being
+  starved.
+* `adv_pending` is the ring buffer's depth and `adv_dropped` the running total
+  shed once it is full (oldest first). Sustained growth in `adv_dropped` means
+  the POST interval or the buffer is too small for the local radio traffic —
+  it is a real count, not an estimate.
+* `post_fail` counts POSTs the server refused or that never completed; a 401
+  or 403 is reported to `espos_sk`, which owns the token, rather than
+  triggering a second access request from here.
+* `gatt_max` is the concurrent-session ceiling (3, Bluedroid's own limit) and
+  is what the gateway advertises to the server in its `hello`.
+
+There is no `POST /ble/...`: scanning is driven by config
+(`PUT /config` with the `ble` namespace) and GATT sessions are opened by the
+server over the control WebSocket, never through this API.
 
 ## Planned (shape reserved, not implemented)
 

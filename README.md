@@ -77,8 +77,9 @@ curl http://<device-ip>/api/v1/wifi/status
 
 Docs: [REST API contract](docs/api.md) · [Config store &
 descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
-discovery & token](docs/signalk.md) · [Development & host
-tests](docs/development.md) · [Security notes](docs/security.md)
+discovery & token](docs/signalk.md) · [BLE gateway](docs/ble.md) ·
+[Development & host tests](docs/development.md) · [Security
+notes](docs/security.md)
 
 ## Layout
 
