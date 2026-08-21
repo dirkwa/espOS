@@ -77,9 +77,35 @@ curl http://<device-ip>/api/v1/wifi/status
 
 Docs: [REST API contract](docs/api.md) · [Config store &
 descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
-discovery & token](docs/signalk.md) · [BLE gateway](docs/ble.md) ·
+discovery & token](docs/signalk.md) · [OTA & signing](docs/ota.md) ·
+[Web UI](docs/ui.md) · [BLE gateway](docs/ble.md) · [NMEA 2000
+gateway](docs/n2k.md) · [Voice satellite](docs/voice.md) ·
 [Development & host tests](docs/development.md) · [Security
 notes](docs/security.md)
+
+## Components
+
+Everything is an ESP-IDF component; an application depends on the ones it
+needs and ignores the rest. The core four are what "running espOS" means;
+the rest are optional.
+
+| Component | What it gives you | Docs |
+|---|---|---|
+| `espos_config` | NVS config store, JSON-Schema descriptors, REST-backed settings | [config.md](docs/config.md) |
+| `espos_httpd` | HTTP server, REST API, SSE, the web UI from a LittleFS partition | [api.md](docs/api.md) · [ui.md](docs/ui.md) |
+| `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog | [wifi.md](docs/wifi.md) |
+| `espos_log` | Log ring served over REST, so a device is debuggable without a serial cable | — |
+| `espos_sk` | SignalK: mDNS discovery, access token, delta stream in and out | [signalk.md](docs/signalk.md) |
+| `espos_ota` | Signed OTA with rollback, from a URL or a version manifest | [ota.md](docs/ota.md) |
+| `espos_ble` | BLE gateway | [ble.md](docs/ble.md) |
+| `espos_n2k` | NMEA 2000 over TWAI + a candump TCP server | [n2k.md](docs/n2k.md) |
+| `espos_audio` | The `AudioDriver` contract a board implements (header-only) | [voice.md](docs/voice.md) |
+| `espos_voice` | Wyoming voice satellite with esp-sr wake word | [voice.md](docs/voice.md) |
+
+Board-specific code — display HALs, audio codecs, pin maps — stays in the
+application. espOS defines the contracts and never assumes a particular
+board; `espos_audio::AudioDriver` is the pattern to copy when something
+similar is needed.
 
 ## Layout
 
