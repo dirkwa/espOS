@@ -48,7 +48,10 @@ namespace espos_voice {
 
 struct WyomingSatelliteConfig {
   uint16_t port = 10700;
-  const char* name = "cockpit";
+  // Advertised to the orchestrator in the `info` reply, and how the device
+  // appears in Home Assistant. Applications should set this; the default is
+  // deliberately generic because espOS does not know what board it is on.
+  const char* name = "espos";
   // Playback format we advertise + expect in audio-start. Piper medium/high
   // voices are 22050 Hz; the driver reopens the codec to match. Set to
   // 16000 if you constrain the orchestrator to 16 kHz voices.

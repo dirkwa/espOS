@@ -26,7 +26,7 @@ struct AudioFormat {
 
 // What this satellite advertises in its `info` reply to `describe`.
 struct SatelliteInfo {
-  std::string name = "cockpit";
+  std::string name = "espos";   // overridden from WyomingSatelliteConfig::name
   AudioFormat mic_format;   // capture format we can stream (Phase 2)
   AudioFormat snd_format;   // playback format we expect in audio-start
   bool supports_trigger = true;  // orchestrator may trigger a pipeline
