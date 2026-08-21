@@ -10,15 +10,23 @@ nothing here assumes a particular panel or transceiver.
 
 ```cpp
 #include "espos_n2k/twai_receiver.h"
+#include "espos_n2k/twai_transmitter.h"
 #include "espos_n2k/candump_tcp_server.h"
 
-espos_n2k::TwaiReceiver rx({.tx_pin = 22, .rx_pin = 21, .bitrate_kbps = 250});
-espos_n2k::CandumpTcpServer srv({.port = 2599, .interface_name = "can0"});
+static espos_n2k::TwaiReceiver rx({
+    .tx_pin = GPIO_NUM_22, .rx_pin = GPIO_NUM_21, .bitrate = 250000});
+static espos_n2k::TwaiTransmitter tx;
+static espos_n2k::CandumpTcpServer srv(&rx, &tx, {.port = 2599});
 
-rx.set_on_frame([&](const espos_n2k::TwaiMessage& m) { srv.broadcast(m); });
 rx.start();
-srv.start();
+tx.start();
+srv.start();   // installs its own frame callback on the receiver
 ```
+
+`start()` on the server wires itself to the receiver, so **do not call
+`TwaiReceiver::set_on_frame()` afterwards** — it replaces the server's
+callback and no frame reaches a client. Set your own callback before
+starting the server if you also want frames in the application.
 
 N2K is 250 kbit/s; the transceiver (SN65HVD230 or similar) is the
 board's business, not this component's.

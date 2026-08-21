@@ -8,6 +8,7 @@
 #include "lwip/sockets.h"
 
 #include "espos_n2k/candump_format.h"
+#include <cstdlib>   // malloc, free
 
 namespace espos_n2k {
 
@@ -285,7 +286,11 @@ void CandumpTcpServer::client_task(void* arg) {
       for (int i = 0; i < recv_len; i++) {
         if (recv_buf[i] == '\n' || line_pos >= (int)sizeof(line_buf) - 1) {
           line_buf[line_pos] = '\0';
-          TwaiMessage tx_msg;
+          // Zero-init: twai_message_t overlays its flag bits with a
+          // union, and candump_decode() sets only some of them. Leaving
+          // the rest as stack garbage hands undefined flags to
+          // twai_transmit().
+          TwaiMessage tx_msg = {};
           if (candump_decode(line_buf, &tx_msg) && self->transmitter_) {
             self->transmitter_->set(tx_msg);
           }

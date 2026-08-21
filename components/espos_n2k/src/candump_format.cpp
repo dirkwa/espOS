@@ -2,6 +2,7 @@
 #include "espos_n2k/candump_format.h"
 
 #include <cstdio>
+#include <cstdlib>   // strtoll, strtoul
 #include <cstring>
 #include <sys/time.h>
 
