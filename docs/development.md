@@ -60,6 +60,10 @@ idf.py --preview set-target linux && idf.py build
 cd ../espos_ota_test
 idf.py --preview set-target linux && idf.py build
 ./build/espos_ota_test.elf                 # manifest selection, version compare
+
+cd ../espos_ble_test
+idf.py --preview set-target linux && idf.py build
+./build/espos_ble_test.elf                 # BLE wire format: hex, ad ring, UUIDs, with_response
 ```
 
 `run_test.py` also covers M5's firmware side (`UiAndLogsTests`): static
@@ -89,6 +93,7 @@ components/espos_config/   NVS-backed config store, descriptor tables, JSON, mig
 components/espos_httpd/    esp_http_server + REST API + SSE + static UI
 components/espos_wifi/     WiFi state machine, portal, /wifi endpoints
 components/espos_sk/       SignalK discovery, token state machine, /sk endpoints
+components/espos_ble/      BLE gateway to signalk-server's BLE provider API (optional)
 main/                      example app
 tools/                     build-time generators
 test/host/                 linux-target unit/integration tests
