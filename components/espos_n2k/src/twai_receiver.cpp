@@ -16,6 +16,13 @@ TwaiReceiver::TwaiReceiver(const TwaiReceiverConfig& config)
 TwaiReceiver::~TwaiReceiver() { stop(); }
 
 void TwaiReceiver::start() {
+  // Say so rather than installing a driver on pin -1 and reporting
+  // success: an application that forgot to set the pins gets one clear
+  // line instead of a silent bus that never receives anything.
+  if (config_.tx_pin == GPIO_NUM_NC || config_.rx_pin == GPIO_NUM_NC) {
+    ESP_LOGE(kTag, "tx_pin/rx_pin not set — TWAI not started");
+    return;
+  }
   if (running_.exchange(true)) return;
 
   // Configure and install the TWAI driver.
