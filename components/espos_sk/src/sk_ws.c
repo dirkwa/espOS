@@ -329,10 +329,12 @@ esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *m
     if (strlen(key) >= NOTIFY_KEY_MAX) return ESP_ERR_INVALID_SIZE;
     if (strlen(message) >= NOTIFY_MSG_MAX) return ESP_ERR_INVALID_SIZE;
 
+    /* Created in espos_sk_ws_start(), which espos_sk_start() always calls. A
+     * null here means notifying before the SignalK subsystem was started,
+     * which is a caller error rather than a timeout. */
     SemaphoreHandle_t lk = s_notify_lock;
-    if (!lk || xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
+    if (!lk) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
 
     int slot = -1;
     for (int i = 0; i < s_notify_count; i++) {
