@@ -208,3 +208,40 @@ without handlers).
   `PUT /skServer/security/access/requests/<clientId>/approved` using the
   admin cookie from `POST /signalk/v1/auth/login`; revoke with
   `DELETE /skServer/security/devices/<clientId>`.
+
+## Notifications
+
+`espos_sk_notify(key, state, message)` raises or clears a SignalK notification
+under `notifications.espos.<label>.<key>`:
+
+```c
+espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN, "wake service unreachable");
+espos_sk_notify("wakeService", ESPOS_SK_ALERT_NORMAL, "");   /* cleared */
+```
+
+For conditions the device knows about and an operator would want to see: memory
+pressure, an overheating chip, a service the firmware depends on having gone
+away. Without them these surface as a device that has quietly stopped doing its
+job, which looks identical to a hardware fault and is the expensive kind of
+problem to diagnose.
+
+* **Level-triggered and idempotent.** Re-raising the same state and message
+  sends nothing, so a caller may poll and re-raise on every tick. The first
+  raise after boot always goes out, even if it is `NORMAL`, because the server
+  may still hold an alert from before a restart.
+* `key` is a short stable identifier (`lowMemory`, `wakeService`) -- it becomes
+  part of the path, and the path is what a rule or dashboard keys on. The
+  `message` is the human half and may change freely.
+* `method` is `["visual"]` for warn/alarm and `[]` on clear. What to do about
+  it is the server's decision, not the device's.
+* Up to `CONFIG_ESPOS_SK_MAX_NOTIFY` distinct keys (default 8, range
+  1-32); buffered like any other delta while offline. Oversized keys or
+  messages are rejected with `ESP_ERR_INVALID_SIZE` rather than truncated --
+  a clipped key would never match on the next call and would leak a slot.
+
+espOS raises one itself: **`lowMemory`**, from the health tick, when internal
+RAM drops below 20 KB or the heap below 40 KB. Internal RAM is checked
+separately because it is the scarce pool on targets with PSRAM -- tens of
+megabytes free overall can hide an internal-RAM exhaustion that will take the
+radio down.
+

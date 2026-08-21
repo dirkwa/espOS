@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "cJSON.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_transport.h"
@@ -282,6 +283,139 @@ static void reconcile_meta(const espos_sk_server_t *srv, const char *token)
 
 /* ------------------------------------------------------------ health */
 
+#if CONFIG_ESPOS_SK_NOTIFICATIONS
+
+/* Last state+message per key, so a caller can re-raise on every poll without
+ * flooding the server with identical deltas.
+ *
+ * Allocated on first use rather than as a static table: a device that never
+ * notifies should not pay for the feature, and on a 320 KB-SRAM part a
+ * permanently-reserved kilobyte is worth avoiding. Entries are never freed --
+ * the set of conditions a firmware can raise is fixed at build time, so this
+ * grows to at most CONFIG_ESPOS_SK_MAX_NOTIFY and then stops. */
+#define NOTIFY_MAX CONFIG_ESPOS_SK_MAX_NOTIFY
+#define NOTIFY_KEY_MAX 24
+#define NOTIFY_MSG_MAX 96
+typedef struct {
+    char key[NOTIFY_KEY_MAX];
+    espos_sk_alert_t state;
+    char msg[NOTIFY_MSG_MAX];
+} notify_slot_t;
+static notify_slot_t *s_notify;   /* NULL until the first notification */
+static uint8_t s_notify_count;
+/* Callers are on different tasks - publish_health() on the stream task,
+ * espos_voice on its wake task - so the table needs its own lock. Not s.lock:
+ * espos_sk_publish_json() takes that, and this must not be held across the
+ * publish. */
+static SemaphoreHandle_t s_notify_lock;
+static portMUX_TYPE s_notify_init_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static SemaphoreHandle_t notify_lock(void)
+{
+    if (!s_notify_lock) {
+        /* Two tasks can reach a first notification simultaneously; create the
+         * mutex under a spinlock so only one wins. */
+        portENTER_CRITICAL(&s_notify_init_mux);
+        SemaphoreHandle_t existing = s_notify_lock;
+        portEXIT_CRITICAL(&s_notify_init_mux);
+        if (!existing) {
+            SemaphoreHandle_t m = xSemaphoreCreateMutex();
+            if (!m) return NULL;
+            portENTER_CRITICAL(&s_notify_init_mux);
+            if (!s_notify_lock) { s_notify_lock = m; m = NULL; }
+            portEXIT_CRITICAL(&s_notify_init_mux);
+            if (m) vSemaphoreDelete(m);
+        }
+    }
+    return s_notify_lock;
+}
+
+esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
+{
+    if (!key || !key[0]) return ESP_ERR_INVALID_ARG;
+    if (!message) message = "";
+    /* Reject rather than truncate. A key clipped to fit would never match on
+     * the next lookup, so every call would consume another slot until the
+     * table filled; and a clipped path is a different SignalK path, which is
+     * worse than an error the caller can see. */
+    if (strlen(key) >= NOTIFY_KEY_MAX) return ESP_ERR_INVALID_SIZE;
+    if (strlen(message) >= NOTIFY_MSG_MAX) return ESP_ERR_INVALID_SIZE;
+
+    SemaphoreHandle_t lk = notify_lock();
+    if (!lk || xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < s_notify_count; i++) {
+        if (strcmp(s_notify[i].key, key) == 0) { slot = i; break; }
+    }
+    if (slot < 0) {
+        /* No early-out for NORMAL here, even though allocating a slot to
+         * record "nothing is wrong" looks wasteful: after a reboot the server
+         * may still hold an alert this device raised before it restarted, and
+         * the clear that retires it is exactly a first call with NORMAL. The
+         * header promises that; skipping it would leave stale alarms on the
+         * server for conditions that no longer exist. */
+        if (s_notify_count >= NOTIFY_MAX) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
+        if (!s_notify) {
+            s_notify = calloc(NOTIFY_MAX, sizeof(*s_notify));
+            if (!s_notify) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
+        }
+        slot = s_notify_count++;
+        snprintf(s_notify[slot].key, sizeof(s_notify[slot].key), "%s", key);
+        s_notify[slot].state = (espos_sk_alert_t)-1;  /* forces the first send */
+    }
+    if (s_notify[slot].state == state &&
+        strcmp(s_notify[slot].msg, message) == 0) {
+        xSemaphoreGive(lk);
+        return ESP_OK;  /* unchanged - stay quiet */
+    }
+    s_notify[slot].state = state;
+    snprintf(s_notify[slot].msg, sizeof(s_notify[slot].msg), "%s", message);
+    xSemaphoreGive(lk);   /* released BEFORE publishing: publish takes s.lock */
+
+    const char *st = state == ESPOS_SK_ALERT_ALARM ? "alarm"
+                   : state == ESPOS_SK_ALERT_WARN  ? "warn"
+                                                   : "normal";
+    char path[ESPOS_SK_PATH_MAX];
+    if (snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key)
+        >= (int)sizeof(path)) {
+        return ESP_ERR_INVALID_SIZE;   /* a clipped path is the wrong path */
+    }
+
+    /* Built with cJSON rather than snprintf: the message is escaped properly,
+     * and a value too long to serialise fails here instead of emitting JSON
+     * that is silently truncated mid-string. */
+    cJSON *v = cJSON_CreateObject();
+    if (!v) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(v, "state", st);
+    cJSON_AddStringToObject(v, "message", message);
+    cJSON *m = cJSON_AddArrayToObject(v, "method");
+    /* method is the server's business; the device only states the condition. */
+    if (m && state != ESPOS_SK_ALERT_NORMAL) {
+        cJSON_AddItemToArray(m, cJSON_CreateString("visual"));
+    }
+    char *val = cJSON_PrintUnformatted(v);
+    cJSON_Delete(v);
+    if (!val) return ESP_ERR_NO_MEM;
+
+    ESP_LOGW(TAG, "notification %s: %s (%s)", key, st, message);
+    esp_err_t err = espos_sk_publish_json(path, val);
+    cJSON_free(val);
+    return err;
+}
+
+#else  /* !CONFIG_ESPOS_SK_NOTIFICATIONS */
+
+esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
+{
+    (void)key; (void)state; (void)message;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+#endif
+
 static void publish_health(void)
 {
     char base[64];
@@ -322,6 +456,29 @@ static void publish_health(void)
     }
     snprintf(p, sizeof(p), "%sskReconnects", base);
     espos_sk_publish_number(p, s.st.reconnects > 0 ? s.st.reconnects - 1 : 0);
+#if CONFIG_ESPOS_SK_NOTIFICATIONS
+    /* Device-health conditions espOS can judge for itself. An operator sees a
+     * warning while there is still time to act, instead of finding a device
+     * that rebooted overnight with no explanation. Thresholds are deliberately
+     * conservative: a warning nobody can act on is noise.
+     *
+     * Internal RAM is checked separately from total heap because it is the
+     * scarce pool on targets with PSRAM -- tens of megabytes free overall can
+     * hide an internal-RAM exhaustion that will take the radio down. */
+    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (internal_free < 20 * 1024) {
+        char m[96];
+        snprintf(m, sizeof(m), "internal RAM low: %u bytes free", (unsigned)internal_free);
+        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_WARN, m);
+    } else if (esp_get_free_heap_size() < 40 * 1024) {
+        char m[96];
+        snprintf(m, sizeof(m), "heap low: %u bytes free", (unsigned)esp_get_free_heap_size());
+        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_WARN, m);
+    } else {
+        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_NORMAL, "");
+    }
+#endif
+
     snprintf(p, sizeof(p), "%sresetReason", base);
     static const char *const reasons[] = { "unknown", "poweron", "external", "software", "panic", "int_wdt",
                                            "task_wdt", "wdt", "deepsleep", "brownout", "sdio", "usb", "jtag",

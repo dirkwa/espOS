@@ -20,7 +20,11 @@ if(target STREQUAL "esp32s3" OR target STREQUAL "esp32p4")
              src/protocol/events.cpp src/protocol/framing.cpp
         INCLUDE_DIRS include
         REQUIRES espos_audio
-        PRIV_REQUIRES lwip bblanchon__arduinojson espressif__esp-sr)
+        # espos_sk for notifications: a wake service that goes away otherwise
+        # leaves a panel that silently stops waking, which is indistinguishable
+        # from a dead mic. Reporting that is core behaviour, not something each
+        # application should re-derive from a callback.
+        PRIV_REQUIRES lwip bblanchon__arduinojson espressif__esp-sr espos_sk)
 else()
     idf_component_register()
 endif()

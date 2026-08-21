@@ -111,6 +111,30 @@ class WyomingSatellite {
   void start();
   void stop();
 
+  /**
+   * Switch to a network wake service at runtime, replacing whatever back-end
+   * is running.
+   *
+   * Discovery is the reason this exists. A panel cannot know at construction
+   * time whether a wake service is on the network -- there is no network yet --
+   * so it starts on-device and upgrades once it can ask. Calling this before
+   * start() just reconfigures; calling it after tears the on-device engine
+   * down (releasing the mic, which has a single consumer) and brings the
+   * network wake task up.
+   *
+   * `words` empty means "listen for whatever the service is configured for",
+   * which is usually what you want: the wake word is the service's business.
+   *
+   * There is deliberately no switch back. Once a wake service has been found,
+   * a momentary outage should reconnect rather than flip the panel to a
+   * different wake word behind the user's back; run_wake() already retries.
+   *
+   * Safe to call from any task. Returns false if `host` is empty.
+   */
+  bool set_wake_network(const std::string& host, uint16_t port = 10400,
+                        const std::vector<std::string>& words = {});
+
+
   // Push-to-talk, LEVEL-triggered (press-and-hold): set held=true on the mic
   // button press, held=false on release. Safe to call from any task (e.g. the
   // LVGL UI). The satellite streams the mic while held is true and the
@@ -278,11 +302,18 @@ class WyomingSatellite {
   // Atomic so /hello diagnostics can read it concurrently with stop()'s
   // detach-then-delete without a use-after-free.
   std::atomic<WakeEngine*> wake_engine_{nullptr};
+
   void start_wake_pipeline();  // detection -> pause engine -> run pipeline -> resume
 
   // Network wake (legacy). wake_task_ runs run_wake() when wake_host is set.
   TaskHandle_t wake_task_ = nullptr;
   SemaphoreHandle_t wake_done_ = nullptr;  // given when run_wake() exits
+  // Serialises start()/stop()/set_wake_network(): they all tear down and build
+  // up the same back-ends, and set_wake_network() can arrive from any task.
+  SemaphoreHandle_t lifecycle_ = nullptr;
+  // The wake task's own handle, so a switch requested from inside run_wake()
+  // is refused rather than deadlocking on its own exit.
+  std::atomic<TaskHandle_t> wake_task_self_{nullptr};
   // True while a detection-triggered pipeline is in flight, so the wake loop
   // knows to hold off capture until run_mic() returns (single mic consumer).
   std::atomic<bool> pipeline_active_{false};
