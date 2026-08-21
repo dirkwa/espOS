@@ -23,7 +23,7 @@ none of that state was ever its own.
 Both authenticate with the token `espos_sk` already holds — the gateway never
 runs an access request of its own.
 
-```
+```text
 POST http://<server>/signalk/v2/api/ble/gateway/advertisements
      Authorization: Bearer <jwt>
      {"gateway_id","mac","uptime","free_heap","devices":[{"mac","rssi","name?","adv_data?"}]}
@@ -46,8 +46,10 @@ Wire-format details that are contract, not taste (see signalk-server's
 
 ## GATT writes: `with_response`
 
-Every write in `init[]`, `periodic_write[]` and the direct `gatt_write`
-command may carry an optional `with_response` flag. **Absent means
+Every write in `init[]` and the direct `gatt_write` command may carry an
+optional `with_response` flag. (`periodic_write[]` is part of the server-side
+protocol but is **not implemented here yet**; a server that sends it gets no
+writes.) **Absent means
 write-with-response**, matching the server-side default and the behaviour of
 every gateway that predates the flag.
 

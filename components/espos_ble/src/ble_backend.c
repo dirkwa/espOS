@@ -88,9 +88,19 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         memcpy(adv.adv_data, param->scan_rst.ble_adv, len);
         adv.adv_data_len = len;
 
+        /* The bounded variant: the unbounded esp_ble_resolve_adv_data() walks
+         * the payload with no length to stop at, and IDF 6 deprecates it for
+         * exactly that reason. Fall back to the shortened name, which is what
+         * a device advertises when the full one does not fit in 31 bytes. */
         uint8_t name_len = 0;
-        uint8_t *name = esp_ble_resolve_adv_data(
-            param->scan_rst.ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
+        uint16_t adv_len = param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len;
+        uint8_t *name = esp_ble_resolve_adv_data_by_type(
+            param->scan_rst.ble_adv, adv_len, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
+        if (!name || !name_len) {
+            name = esp_ble_resolve_adv_data_by_type(
+                param->scan_rst.ble_adv, adv_len, ESP_BLE_AD_TYPE_NAME_SHORT,
+                &name_len);
+        }
         if (name && name_len) {
             if (name_len >= ESPOS_BLE_NAME_MAX) name_len = ESPOS_BLE_NAME_MAX - 1;
             memcpy(adv.name, name, name_len);
@@ -121,7 +131,7 @@ static esp_err_t controller_up(void)
      * function pointers, so attaching the HCI driver first faults on the
      * first call through them (verified 2026-08-21). */
     ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init");
-    esp_hosted_connect_to_slave();
+    ESP_RETURN_ON_ERROR(esp_hosted_connect_to_slave(), TAG, "connect_to_slave");
     ESP_RETURN_ON_ERROR(esp_hosted_bt_controller_init(), TAG, "bt_controller_init");
     ESP_RETURN_ON_ERROR(esp_hosted_bt_controller_enable(), TAG, "bt_controller_enable");
 

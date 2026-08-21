@@ -6,6 +6,12 @@ idf_build_get_property(target IDF_TARGET)
 set(srcs src/ble_proto.c)
 set(priv_reqs espressif__cjson)
 
+# Target, not CONFIG_BT_BLUEDROID_ENABLED: component CMakeLists are evaluated
+# during early expansion, before sdkconfig exists, so a CONFIG_ guard here is
+# empty on the first pass - it drops `bt` from the requirements while the
+# sources still compile on the second, and the build fails on a missing
+# esp_gattc_api.h. The sources are #if'd on the symbol instead, which costs a
+# few empty objects on a target built without Bluetooth.
 if(NOT target STREQUAL "linux")
     list(APPEND srcs src/ble_backend.c src/ble_gattc.c src/ble_gateway.c src/api_ble.c)
     list(APPEND priv_reqs bt esp_http_client esp_websocket_client esp_timer esp_event nvs_flash)
