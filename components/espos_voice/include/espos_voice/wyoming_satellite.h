@@ -308,6 +308,12 @@ class WyomingSatellite {
   // Network wake (legacy). wake_task_ runs run_wake() when wake_host is set.
   TaskHandle_t wake_task_ = nullptr;
   SemaphoreHandle_t wake_done_ = nullptr;  // given when run_wake() exits
+  // Serialises start()/stop()/set_wake_network(): they all tear down and build
+  // up the same back-ends, and set_wake_network() can arrive from any task.
+  SemaphoreHandle_t lifecycle_ = nullptr;
+  // The wake task's own handle, so a switch requested from inside run_wake()
+  // is refused rather than deadlocking on its own exit.
+  std::atomic<TaskHandle_t> wake_task_self_{nullptr};
   // True while a detection-triggered pipeline is in flight, so the wake loop
   // knows to hold off capture until run_mic() returns (single mic consumer).
   std::atomic<bool> pipeline_active_{false};

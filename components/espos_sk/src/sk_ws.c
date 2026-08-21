@@ -303,57 +303,107 @@ typedef struct {
 } notify_slot_t;
 static notify_slot_t *s_notify;   /* NULL until the first notification */
 static uint8_t s_notify_count;
+/* Callers are on different tasks - publish_health() on the stream task,
+ * espos_voice on its wake task - so the table needs its own lock. Not s.lock:
+ * espos_sk_publish_json() takes that, and this must not be held across the
+ * publish. */
+static SemaphoreHandle_t s_notify_lock;
+static portMUX_TYPE s_notify_init_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static SemaphoreHandle_t notify_lock(void)
+{
+    if (!s_notify_lock) {
+        /* Two tasks can reach a first notification simultaneously; create the
+         * mutex under a spinlock so only one wins. */
+        portENTER_CRITICAL(&s_notify_init_mux);
+        SemaphoreHandle_t existing = s_notify_lock;
+        portEXIT_CRITICAL(&s_notify_init_mux);
+        if (!existing) {
+            SemaphoreHandle_t m = xSemaphoreCreateMutex();
+            if (!m) return NULL;
+            portENTER_CRITICAL(&s_notify_init_mux);
+            if (!s_notify_lock) { s_notify_lock = m; m = NULL; }
+            portEXIT_CRITICAL(&s_notify_init_mux);
+            if (m) vSemaphoreDelete(m);
+        }
+    }
+    return s_notify_lock;
+}
 
 esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
 {
     if (!key || !key[0]) return ESP_ERR_INVALID_ARG;
     if (!message) message = "";
+    /* Reject rather than truncate. A key clipped to fit would never match on
+     * the next lookup, so every call would consume another slot until the
+     * table filled; and a clipped path is a different SignalK path, which is
+     * worse than an error the caller can see. */
+    if (strlen(key) >= NOTIFY_KEY_MAX) return ESP_ERR_INVALID_SIZE;
+    if (strlen(message) >= NOTIFY_MSG_MAX) return ESP_ERR_INVALID_SIZE;
+
+    SemaphoreHandle_t lk = notify_lock();
+    if (!lk || xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     int slot = -1;
     for (int i = 0; i < s_notify_count; i++) {
         if (strcmp(s_notify[i].key, key) == 0) { slot = i; break; }
     }
     if (slot < 0) {
-        /* A clear for a condition never raised is a no-op: nothing to say, and
-         * no reason to allocate a slot to remember saying it. */
-        if (state == ESPOS_SK_ALERT_NORMAL) return ESP_OK;
-        if (s_notify_count >= NOTIFY_MAX) return ESP_ERR_NO_MEM;
+        /* No early-out for NORMAL here, even though allocating a slot to
+         * record "nothing is wrong" looks wasteful: after a reboot the server
+         * may still hold an alert this device raised before it restarted, and
+         * the clear that retires it is exactly a first call with NORMAL. The
+         * header promises that; skipping it would leave stale alarms on the
+         * server for conditions that no longer exist. */
+        if (s_notify_count >= NOTIFY_MAX) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
         if (!s_notify) {
             s_notify = calloc(NOTIFY_MAX, sizeof(*s_notify));
-            if (!s_notify) return ESP_ERR_NO_MEM;
+            if (!s_notify) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
         }
         slot = s_notify_count++;
         snprintf(s_notify[slot].key, sizeof(s_notify[slot].key), "%s", key);
-        /* Force the first raise through even if it is NORMAL: the server may
-         * be holding a stale alert from before a reboot. */
-        s_notify[slot].state = (espos_sk_alert_t)-1;
+        s_notify[slot].state = (espos_sk_alert_t)-1;  /* forces the first send */
     }
     if (s_notify[slot].state == state &&
-        strncmp(s_notify[slot].msg, message, sizeof(s_notify[slot].msg)) == 0) {
+        strcmp(s_notify[slot].msg, message) == 0) {
+        xSemaphoreGive(lk);
         return ESP_OK;  /* unchanged - stay quiet */
     }
     s_notify[slot].state = state;
     snprintf(s_notify[slot].msg, sizeof(s_notify[slot].msg), "%s", message);
+    xSemaphoreGive(lk);   /* released BEFORE publishing: publish takes s.lock */
 
     const char *st = state == ESPOS_SK_ALERT_ALARM ? "alarm"
                    : state == ESPOS_SK_ALERT_WARN  ? "warn"
                                                    : "normal";
     char path[ESPOS_SK_PATH_MAX];
-    snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key);
+    if (snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key)
+        >= (int)sizeof(path)) {
+        return ESP_ERR_INVALID_SIZE;   /* a clipped path is the wrong path */
+    }
 
-    /* method: [] on normal, ["visual"] otherwise - the server and its consumers
-     * decide what to do with it; the device only states the condition. */
-    char val[NOTIFY_MSG_MAX + 96];
-    cJSON *msg_json = cJSON_CreateString(message);
-    char *msg_esc = msg_json ? cJSON_PrintUnformatted(msg_json) : NULL;
-    snprintf(val, sizeof(val), "{\"state\":\"%s\",\"message\":%s,\"method\":[%s]}",
-             st, msg_esc ? msg_esc : "\"\"",
-             state == ESPOS_SK_ALERT_NORMAL ? "" : "\"visual\"");
-    if (msg_esc) cJSON_free(msg_esc);
-    if (msg_json) cJSON_Delete(msg_json);
+    /* Built with cJSON rather than snprintf: the message is escaped properly,
+     * and a value too long to serialise fails here instead of emitting JSON
+     * that is silently truncated mid-string. */
+    cJSON *v = cJSON_CreateObject();
+    if (!v) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(v, "state", st);
+    cJSON_AddStringToObject(v, "message", message);
+    cJSON *m = cJSON_AddArrayToObject(v, "method");
+    /* method is the server's business; the device only states the condition. */
+    if (m && state != ESPOS_SK_ALERT_NORMAL) {
+        cJSON_AddItemToArray(m, cJSON_CreateString("visual"));
+    }
+    char *val = cJSON_PrintUnformatted(v);
+    cJSON_Delete(v);
+    if (!val) return ESP_ERR_NO_MEM;
 
     ESP_LOGW(TAG, "notification %s: %s (%s)", key, st, message);
-    return espos_sk_publish_json(path, val);
+    esp_err_t err = espos_sk_publish_json(path, val);
+    cJSON_free(val);
+    return err;
 }
 
 #else  /* !CONFIG_ESPOS_SK_NOTIFICATIONS */

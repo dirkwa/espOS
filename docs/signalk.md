@@ -234,7 +234,10 @@ problem to diagnose.
   `message` is the human half and may change freely.
 * `method` is `["visual"]` for warn/alarm and `[]` on clear. What to do about
   it is the server's decision, not the device's.
-* Up to 8 distinct keys; buffered like any other delta while offline.
+* Up to `CONFIG_ESPOS_SK_MAX_NOTIFY` distinct keys (default 8, range
+  1-32); buffered like any other delta while offline. Oversized keys or
+  messages are rejected with `ESP_ERR_INVALID_SIZE` rather than truncated --
+  a clipped key would never match on the next call and would leak a slot.
 
 espOS raises one itself: **`lowMemory`**, from the health tick, when internal
 RAM drops below 20 KB or the heap below 40 KB. Internal RAM is checked

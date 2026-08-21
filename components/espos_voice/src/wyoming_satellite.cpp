@@ -21,6 +21,7 @@ WyomingSatellite::WyomingSatellite(
     espos_audio::AudioDriver* audio,
     const WyomingSatelliteConfig& config)
     : audio_(audio), config_(config) {
+  lifecycle_ = xSemaphoreCreateMutex();
   send_mutex_ = xSemaphoreCreateMutex();
   mic_done_ = xSemaphoreCreateBinary();
   server_done_ = xSemaphoreCreateBinary();
@@ -39,6 +40,9 @@ WyomingSatellite::~WyomingSatellite() {
 }
 
 void WyomingSatellite::start() {
+  if (lifecycle_) xSemaphoreTake(lifecycle_, portMAX_DELAY);
+  struct Unlock { SemaphoreHandle_t m; ~Unlock() { if (m) xSemaphoreGive(m); } }
+      unlock{lifecycle_};
   if (running_.exchange(true)) return;
   xTaskCreate(&WyomingSatellite::server_task, "wyoming_sat", 6144, this, 3,
               &server_task_);
@@ -75,6 +79,21 @@ void WyomingSatellite::start() {
 bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
                                         const std::vector<std::string>& words) {
   if (host.empty()) return false;
+
+  // Called from the wake task itself, this would wait for that same task to
+  // exit -- an eight-second stall ending in failure. Refuse instead.
+  if (wake_task_self_.load() == xTaskGetCurrentTaskHandle()) {
+    ESP_LOGW(kTag, "set_wake_network() from the wake task — ignored");
+    return false;
+  }
+  if (!lifecycle_ || xSemaphoreTake(lifecycle_, pdMS_TO_TICKS(10000)) != pdTRUE) {
+    ESP_LOGW(kTag, "set_wake_network() could not take the lifecycle lock");
+    return false;
+  }
+  struct Unlock {
+    SemaphoreHandle_t m;
+    ~Unlock() { xSemaphoreGive(m); }
+  } unlock{lifecycle_};
 
   const bool was_running = running_.load();
   if (was_running && !config_.on_device_wake && config_.wake_host == host &&
@@ -113,13 +132,39 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
   config_.wake_words = words;
 
   if (was_running) {
-    xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake", 4608, this, 3,
-                &wake_task_);
+    if (xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake", 4608, this, 3,
+                    &wake_task_) != pdPASS) {
+      // The on-device engine is already gone, so returning true here would
+      // leave the device with no wake back-end at all while reporting success.
+      // Put the local one back and stay as we were.
+      wake_task_ = nullptr;
+      config_.on_device_wake = true;
+      config_.wake_host.clear();
+      WakeEngine* e = new WakeEngine(audio_);
+      if (e) {
+        e->set_muted_fn([this] { return mic_muted(); });
+        e->set_on_detect([this] { start_wake_pipeline(); });
+        e->set_input_gain(config_.wake_input_gain);
+        e->set_threshold(config_.wake_threshold);
+        if (e->start()) {
+          wake_engine_.store(e);
+        } else {
+          delete e;
+        }
+      }
+      ESP_LOGE(kTag, "wake task creation failed — kept the on-device word");
+      espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN,
+                      "could not start network wake; using the on-device word");
+      return false;
+    }
   }
   return true;
 }
 
 void WyomingSatellite::stop() {
+  if (lifecycle_) xSemaphoreTake(lifecycle_, portMAX_DELAY);
+  struct Unlock { SemaphoreHandle_t m; ~Unlock() { if (m) xSemaphoreGive(m); } }
+      unlock{lifecycle_};
   if (!running_.exchange(false)) return;
   // Nudge a blocked accept()/recv() to notice running_==false: closing the
   // client socket unblocks recv; the accept loop wakes on its select tick.
@@ -557,6 +602,7 @@ void WyomingSatellite::wake_task(void* arg) {
 }
 
 void WyomingSatellite::run_wake() {
+  wake_task_self_.store(xTaskGetCurrentTaskHandle());
   // Reconnect loop to the wake service. Each successful connection runs a
   // capture-and-detect session; on any drop we back off and retry until
   // stop() clears running_.
@@ -584,6 +630,17 @@ void WyomingSatellite::run_wake() {
     }
     if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
       close(sock);
+      // Warn on the failed connect too, not only after a session drops: a
+      // service that is unreachable from the start would otherwise retry
+      // forever in silence, which is the case most likely to be a
+      // misconfiguration someone needs told about. Idempotence keeps this to
+      // one notification however long the retry loop runs.
+      {
+        char m[96];
+        snprintf(m, sizeof(m), "wake service %s:%u unreachable",
+                 config_.wake_host.c_str(), config_.wake_port);
+        espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN, m);
+      }
       if (running_.load()) vTaskDelay(backoff);
       backoff = backoff * 2 > kMaxBackoff ? kMaxBackoff : backoff * 2;
       continue;
