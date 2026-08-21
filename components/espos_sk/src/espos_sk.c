@@ -181,6 +181,16 @@ static void load_cfg(void)
 
 /* ---------------------------------------------------- server choice */
 
+/* Discovery is pointless once a manual host is configured: the address is
+ * already known, select_server() ignores discovered entries entirely, and
+ * browsing on regardless only spends radio time and mDNS traffic to
+ * maintain a list nothing reads. Setting an explicit address should mean
+ * exactly that — talk to this server, stop looking for others. */
+static inline bool discovery_wanted(void)
+{
+    return s.discovery_enabled && !s.cfg_host[0];
+}
+
 /* Pick the server per config: manual host wins; else the discovered server
  * with the preferred self; else the first discovered "master"; else the
  * first discovered. Task-private. */
@@ -386,17 +396,32 @@ static void handle_cmd(const cmd_t *c)
     switch (c->type) {
     case CMD_CONFIG:
         load_cfg();
-        if (!s.discovery_enabled) {
+        if (!discovery_wanted()) {
             lock();
             s.server_count = 0; /* discovered entries are no longer valid choices */
             unlock();
         }
         select_server();
-        if (s.discovery_enabled && s.discover_due_ms == 0) {
+        /* Browse now whenever discovery has just become wanted again —
+         * discovery switched on, or a manual host cleared. Testing only
+         * `discover_due_ms == 0` was not enough: setting a manual host
+         * leaves the old due-time in place, so clearing it later left
+         * discovery wanted but never rescheduled, and the device sat with
+         * no server until something else happened to re-arm the timer. */
+        if (discovery_wanted()) {
             s.discover_due_ms = at(0);
+        } else {
+            s.discover_due_ms = 0;
         }
         break;
     case CMD_DISCOVER:
+        /* Deliberately NOT discovery_wanted(): this is an explicit request
+         * from POST /sk/discover, and the endpoint has already answered
+         * "discovering". A manual host suppresses the periodic browse, but
+         * silently doing nothing here would make the web UI's Discover
+         * button lie — it is also the one way to see what else is on the
+         * network while pinned to an address. Only the config switch turns
+         * it off entirely. */
         if (s.discovery_enabled) {
             run_discovery();
         }
@@ -512,7 +537,7 @@ static void sk_task(void *arg)
         espos_wifi_status_t ws;
         if (espos_wifi_get_status(&ws) == ESP_OK) {
             bool up = ws.sm.state == ESPOS_WIFI_ST_CONNECTED;
-            if (up && !s.wifi_was_connected && s.discovery_enabled) {
+            if (up && !s.wifi_was_connected && discovery_wanted()) {
                 s.discover_due_ms = at(0);
             }
             s.wifi_was_connected = up;
@@ -528,7 +553,7 @@ static void sk_task(void *arg)
             espos_sk_tok_event(&s.sm, ESPOS_SK_EV_TIMER, NULL);
             continue;
         }
-        if (s.discovery_enabled && s.discover_due_ms && (int32_t)(t - s.discover_due_ms) >= 0) {
+        if (discovery_wanted() && s.discover_due_ms && (int32_t)(t - s.discover_due_ms) >= 0) {
             run_discovery();
             s.discover_due_ms = at(s.discover_interval_ms);
             continue;
@@ -539,7 +564,7 @@ static void sk_task(void *arg)
             int32_t d = (int32_t)(s.timer_due_ms - t);
             if (d < (int32_t)wait) wait = d > 0 ? (uint32_t)d : 0;
         }
-        if (s.discovery_enabled && s.discover_due_ms) {
+        if (discovery_wanted() && s.discover_due_ms) {
             int32_t d = (int32_t)(s.discover_due_ms - t);
             if (d < (int32_t)wait) wait = d > 0 ? (uint32_t)d : 0;
         }
@@ -623,7 +648,9 @@ static char *status_json_from(const espos_sk_tok_status_t *st, const char *sourc
     cJSON_AddStringToObject(root, "client_id", s.client_id);
     cJSON_AddStringToObject(root, "description", s.cfg.description);
     cJSON_AddStringToObject(root, "permissions", s.cfg.permissions);
-    cJSON_AddBoolToObject(disc, "enabled", s.discovery_enabled);
+    /* What is actually running, not merely what the flag says: a manual
+     * host suppresses discovery, and the UI should not claim otherwise. */
+    cJSON_AddBoolToObject(disc, "enabled", discovery_wanted());
     cJSON_AddNumberToObject(disc, "count", (double)s.server_count);
     if (s.last_discovery_ms) {
         cJSON_AddNumberToObject(disc, "last_s", (t - s.last_discovery_ms) / 1000);

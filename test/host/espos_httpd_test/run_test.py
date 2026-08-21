@@ -1202,13 +1202,24 @@ class SkInboundTests(unittest.TestCase):
 
     def test_02_exact_path_and_wildcard_prefix_dispatch(self):
         req("DELETE", "/__harness/sk/rx")
+        n_before = len(self.mock.subs)
         st, _, _, js = req("POST", "/__harness/sk/sub", {"pattern": "notifications.*"})
         st, _, _, js2 = req("POST", "/__harness/sk/sub", {"pattern": "environment.mode"})
-        wait_for(lambda: len(self.mock.subs) >= 2 or None, timeout=5)
-        # incremental frame carries only the new patterns
-        last = self.mock.subs[-1]["subscribe"]
-        self.assertEqual(sorted(x["path"] for x in last), ["environment.mode", "notifications.*"])
-        self.assertEqual(last[0]["period"], 1000)                        # default period
+        # Wait for both patterns, not for a frame count. `subs` is not empty
+        # at this point — test_01 already subscribed — so `len(subs) >= 2`
+        # was satisfied by the FIRST of these two, and subs[-1] was then read
+        # before the second arrived. Whether the two POSTs share one
+        # incremental frame or get one each is a timing detail; what the
+        # subscription carries is not.
+        new_subs = wait_for(
+            lambda: (lambda xs: xs if {"environment.mode", "notifications.*"} <=
+                     {x["path"] for x in xs} else None)
+                    ([x for s in self.mock.subs[n_before:] for x in s["subscribe"]]),
+            timeout=5)
+        self.assertIsNotNone(new_subs, self.mock.subs[n_before:])
+        # incremental frames carry only the new patterns
+        self.assertEqual(sorted(x["path"] for x in new_subs), ["environment.mode", "notifications.*"])
+        self.assertTrue(all(x["period"] == 1000 for x in new_subs), new_subs)   # default period
         self.mock.push_delta({"notifications.mob": {"state": "emergency", "message": "MOB"},
                               "notifications.anchor.dragging": {"state": "alarm"},
                               "environment.mode": "night", "environment.modeX": "no"})
