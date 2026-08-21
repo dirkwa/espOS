@@ -1,0 +1,88 @@
+{
+  "namespace": "ble",
+  "version": 1,
+  "title": "BLE gateway",
+  "description": "Bridges BLE devices to signalk-server's BLE provider API. Which devices are read, and how, is configured on the server - not here.",
+  "keys": [
+    {
+      "name": "enabled",
+      "type": "bool",
+      "default": true,
+      "title": "Enabled",
+      "restart_required": true,
+      "description": "Master switch for the BLE gateway."
+    },
+    {
+      "name": "active_scan",
+      "type": "bool",
+      "default": false,
+      "title": "Active scan",
+      "description": "Request scan responses (more data per device, more airtime). Leave off on the ESP32-P4: active scan needs the C6 co-processor to transmit SCAN_REQ over SDIO, which is unreliable and can silence advertisements entirely."
+    },
+    {
+      "name": "scan_int_ms",
+      "type": "int",
+      "default": 320,
+      "min": 3,
+      "max": 10240,
+      "unit": "ms",
+      "title": "Scan interval"
+    },
+    {
+      "name": "scan_win_ms",
+      "type": "int",
+      "default": 160,
+      "min": 3,
+      "max": 10240,
+      "unit": "ms",
+      "title": "Scan window",
+      "description": "Listening time per interval. Must not exceed the interval; window/interval is the duty cycle."
+    },
+    {
+      "name": "post_int_ms",
+      "type": "int",
+      "default": 2000,
+      "min": 250,
+      "max": 60000,
+      "unit": "ms",
+      "title": "POST interval",
+      "description": "How often buffered advertisements are forwarded to the server."
+    },
+    {
+      "name": "status_int_ms",
+      "type": "int",
+      "default": 30000,
+      "min": 1000,
+      "max": 600000,
+      "unit": "ms",
+      "title": "Status interval",
+      "description": "How often a status frame goes out on the control WebSocket."
+    },
+    {
+      "name": "max_pend_ads",
+      "type": "int",
+      "default": 500,
+      "min": 10,
+      "max": 5000,
+      "title": "Advertisement buffer",
+      "description": "Advertisements held between POSTs. When full the oldest are dropped and counted, so a slow or absent server cannot exhaust memory."
+    },
+    {
+      "name": "control_ws",
+      "type": "bool",
+      "default": true,
+      "title": "Control WebSocket",
+      "restart_required": true,
+      "description": "Enables hello/status and GATT commands. With this off the gateway still forwards advertisements over HTTP, which is all that beacon-style devices (Ruuvi, Victron) need."
+    },
+    {
+      "name": "max_gatt_sess",
+      "type": "int",
+      "default": 3,
+      "min": 0,
+      "max": 3,
+      "title": "Max GATT connections",
+      "description": "Concurrent GATT connections advertised to the server. The Bluedroid GATT client supports at most 3."
+    }
+  ]
+}
