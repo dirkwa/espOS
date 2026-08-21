@@ -308,26 +308,14 @@ static uint8_t s_notify_count;
  * espos_sk_publish_json() takes that, and this must not be held across the
  * publish. */
 static SemaphoreHandle_t s_notify_lock;
-static portMUX_TYPE s_notify_init_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static SemaphoreHandle_t notify_lock(void)
+/* Created once, before any task can race for it: espos_sk_start() runs from
+ * app_main long before the stream or wake tasks exist. Creating it lazily
+ * needed a double-checked lock, and the unsynchronised read that pattern
+ * relies on is exactly the kind of thing that works until it does not. */
+static void notify_lock_init(void)
 {
-    if (!s_notify_lock) {
-        /* Two tasks can reach a first notification simultaneously; create the
-         * mutex under a spinlock so only one wins. */
-        portENTER_CRITICAL(&s_notify_init_mux);
-        SemaphoreHandle_t existing = s_notify_lock;
-        portEXIT_CRITICAL(&s_notify_init_mux);
-        if (!existing) {
-            SemaphoreHandle_t m = xSemaphoreCreateMutex();
-            if (!m) return NULL;
-            portENTER_CRITICAL(&s_notify_init_mux);
-            if (!s_notify_lock) { s_notify_lock = m; m = NULL; }
-            portEXIT_CRITICAL(&s_notify_init_mux);
-            if (m) vSemaphoreDelete(m);
-        }
-    }
-    return s_notify_lock;
+    if (!s_notify_lock) s_notify_lock = xSemaphoreCreateMutex();
 }
 
 esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
@@ -341,7 +329,7 @@ esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *m
     if (strlen(key) >= NOTIFY_KEY_MAX) return ESP_ERR_INVALID_SIZE;
     if (strlen(message) >= NOTIFY_MSG_MAX) return ESP_ERR_INVALID_SIZE;
 
-    SemaphoreHandle_t lk = notify_lock();
+    SemaphoreHandle_t lk = s_notify_lock;
     if (!lk || xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
@@ -890,6 +878,9 @@ char *espos_sk_ws_status_json(void)
 
 esp_err_t espos_sk_ws_start(void)
 {
+#if CONFIG_ESPOS_SK_NOTIFICATIONS
+    notify_lock_init();
+#endif
     if (s.task) {
         return ESP_OK;
     }
