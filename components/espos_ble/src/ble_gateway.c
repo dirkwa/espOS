@@ -54,6 +54,9 @@ typedef struct {
     espos_ble_init_write_t *init_writes;
     size_t init_count, init_index;
     int64_t init_deadline_us;
+    /* True while run_init_writes() is inside espos_ble_gatt_write(), so a
+     * synchronous completion advances the index without re-entering the loop. */
+    bool in_init_write;
     /* Characteristics to enable notifications on. */
     char (*notify_uuids)[ESPOS_BLE_UUID_MAX];
     size_t notify_count;
@@ -65,7 +68,13 @@ static struct {
     bool running;
     espos_ble_advq_t q;
     espos_ble_adv_t *storage;
-    SemaphoreHandle_t lock;
+    SemaphoreHandle_t lock;      /* guards q only */
+    /* Sessions are touched from three tasks - the websocket event task
+     * (gatt_subscribe/write/close), the Bluetooth stack task (every on_gatt_*
+     * callback) and the gateway task (the init-write watchdog) - so every
+     * lookup, mutation and free goes through this. Without it a session can be
+     * freed on one task while another walks it. */
+    SemaphoreHandle_t sess_lock;
     esp_websocket_client_handle_t ws;
     bool ws_connected;
     TaskHandle_t task;
@@ -104,8 +113,6 @@ static char *build_adv_body(const espos_ble_adv_t *ads, size_t n)
     cJSON *root = cJSON_CreateObject();
     if (!root) return NULL;
 
-    espos_sk_ws_status_t ws;
-    (void)ws;
     cJSON_AddStringToObject(root, "gateway_id", espos_ble_mac());
     cJSON_AddStringToObject(root, "mac", espos_ble_mac());
     cJSON_AddNumberToObject(root, "uptime", esp_timer_get_time() / 1000000);
@@ -242,6 +249,19 @@ static void send_status(void)
     cJSON_Delete(d);
 }
 
+/* Held across the whole of any session operation, including the callbacks it
+ * makes into ble_gattc. Recursion is not possible: nothing under the lock
+ * re-enters these helpers. */
+static inline bool sess_lock(void)
+{
+    return g.sess_lock && xSemaphoreTake(g.sess_lock, pdMS_TO_TICKS(200)) == pdTRUE;
+}
+
+static inline void sess_unlock(void)
+{
+    if (g.sess_lock) xSemaphoreGive(g.sess_lock);
+}
+
 static session_t *session_by_id(const char *id)
 {
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
@@ -308,22 +328,39 @@ static void run_subscribes(session_t *s)
     }
 }
 
+/* Iterative, not recursive.
+ *
+ * A write-without-response completes synchronously (ble_gattc synthesises the
+ * callback the stack never sends), and that callback re-enters here. Recursing
+ * would make the stack depth equal the number of consecutive no-response or
+ * failing writes - and init[] comes straight off the wire, so a server could
+ * set that depth. The loop advances in place instead; the callback path only
+ * ever re-enters with a strictly larger init_index, which terminates.
+ *
+ * Caller holds the session lock. */
 static void run_init_writes(session_t *s)
 {
-    if (s->init_index >= s->init_count) {
-        send_gatt_event("gatt_connected", s->session_id, NULL, NULL, NULL, -1);
-        return;
-    }
-    espos_ble_init_write_t *iw = &s->init_writes[s->init_index];
-    s->init_deadline_us = esp_timer_get_time() + 3000000; /* 3 s */
-    esp_err_t err = espos_ble_gatt_write(s->conn_handle, iw->char_uuid,
-                                         iw->data, iw->data_len, iw->mode);
-    if (err != ESP_OK) {
+    while (s->init_index < s->init_count) {
+        espos_ble_init_write_t *iw = &s->init_writes[s->init_index];
+        s->init_deadline_us = esp_timer_get_time() + 3000000; /* 3 s */
+        s->in_init_write = true;
+        esp_err_t err = espos_ble_gatt_write(s->conn_handle, iw->char_uuid,
+                                             iw->data, iw->data_len, iw->mode);
+        s->in_init_write = false;
+        if (err == ESP_OK) {
+            /* A no-response write already advanced the index from the
+             * synthesised completion; anything else waits for the real one. */
+            if (s->init_index < s->init_count &&
+                &s->init_writes[s->init_index] == iw) {
+                return;
+            }
+            continue;
+        }
         send_gatt_event("gatt_error", s->session_id, iw->char_uuid, NULL,
                         "init write failed", -1);
         s->init_index++;
-        run_init_writes(s);
     }
+    send_gatt_event("gatt_connected", s->session_id, NULL, NULL, NULL, -1);
 }
 
 static void handle_gatt_subscribe(cJSON *doc)
@@ -333,11 +370,21 @@ static void handle_gatt_subscribe(cJSON *doc)
     const cJSON *svc = cJSON_GetObjectItemCaseSensitive(doc, "service");
     if (!cJSON_IsString(sid) || !cJSON_IsString(mac)) return;
 
+    if (!sess_lock()) {
+        send_gatt_event("gatt_error", sid->valuestring, NULL, NULL,
+                        "gateway busy", -1);
+        return;
+    }
+
+    /* Only look at the slots the operator allows, so max_gatt_sess is enforced
+     * rather than merely advertised in hello. */
+    size_t limit = g.max_gatt < MAX_SESSIONS ? g.max_gatt : MAX_SESSIONS;
     session_t *s = NULL;
-    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+    for (size_t i = 0; i < limit; i++) {
         if (!g.sessions[i].active) { s = &g.sessions[i]; break; }
     }
     if (!s) {
+        sess_unlock();
         send_gatt_event("gatt_error", sid->valuestring, NULL, NULL,
                         "no free session slot", -1);
         return;
@@ -388,15 +435,23 @@ static void handle_gatt_subscribe(cJSON *doc)
         }
     }
 
+    /* Active BEFORE the connect: discovery completes on the Bluetooth stack
+     * task and can call back before this function returns. Setting the flag
+     * afterwards loses that race - session_by_handle() skips the slot, the
+     * subscribes and init writes never run, and the peripheral sits connected
+     * and silent with nothing reported to the server. */
+    s->active = true;
     s->conn_handle = espos_ble_gatt_connect(
         mac->valuestring, cJSON_IsString(svc) ? svc->valuestring : NULL);
     if (s->conn_handle < 0) {
-        send_gatt_event("gatt_error", s->session_id, NULL, NULL,
-                        "connect failed", -1);
+        char sid_copy[sizeof(s->session_id)];
+        snprintf(sid_copy, sizeof(sid_copy), "%s", s->session_id);
         session_free(s);
+        sess_unlock();
+        send_gatt_event("gatt_error", sid_copy, NULL, NULL, "connect failed", -1);
         return;
     }
-    s->active = true;
+    sess_unlock();
 }
 
 static void handle_gatt_write(cJSON *doc)
@@ -406,28 +461,35 @@ static void handle_gatt_write(cJSON *doc)
     const cJSON *data = cJSON_GetObjectItemCaseSensitive(doc, "data");
     if (!cJSON_IsString(sid) || !cJSON_IsString(uuid) || !cJSON_IsString(data)) return;
 
+    if (!sess_lock()) return;
     session_t *s = session_by_id(sid->valuestring);
-    if (!s) return;
+    if (!s) { sess_unlock(); return; }
 
     uint8_t buf[ESPOS_BLE_WRITE_DATA_MAX];
     int len = espos_ble_hex_decode(data->valuestring, buf, sizeof(buf));
     if (len < 0) {
-        send_gatt_event("gatt_error", s->session_id, uuid->valuestring, NULL,
+        char sid_copy[sizeof(s->session_id)];
+        snprintf(sid_copy, sizeof(sid_copy), "%s", s->session_id);
+        sess_unlock();
+        send_gatt_event("gatt_error", sid_copy, uuid->valuestring, NULL,
                         "bad hex payload", -1);
         return;
     }
     espos_ble_gatt_write(s->conn_handle, uuid->valuestring, buf, (size_t)len,
                          espos_ble_parse_write_mode(doc));
+    sess_unlock();
 }
 
 static void handle_gatt_close(cJSON *doc)
 {
     const cJSON *sid = cJSON_GetObjectItemCaseSensitive(doc, "session_id");
     if (!cJSON_IsString(sid)) return;
+    if (!sess_lock()) return;
     session_t *s = session_by_id(sid->valuestring);
-    if (!s) return;
+    if (!s) { sess_unlock(); return; }
     espos_ble_gatt_disconnect(s->conn_handle);
     session_free(s);
+    sess_unlock();
 }
 
 static void handle_ws_text(const char *data, size_t len)
@@ -526,32 +588,44 @@ static void ws_connect(void)
 static void on_gatt_connected(int h, void *arg)
 {
     (void)arg;
+    if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) return;
+    if (!s) { sess_unlock(); return; }
     run_subscribes(s);
     run_init_writes(s);
+    sess_unlock();
 }
 
 static void on_gatt_disconnected(int h, int reason, void *arg)
 {
     (void)arg;
+    if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) return;
-    send_gatt_event("gatt_disconnected", s->session_id, NULL, NULL, NULL, reason);
+    if (!s) { sess_unlock(); return; }
+    char sid[sizeof(s->session_id)];
+    snprintf(sid, sizeof(sid), "%s", s->session_id);
     session_free(s);
+    sess_unlock();
+    /* Report outside the lock: the send can block on the websocket. */
+    send_gatt_event("gatt_disconnected", sid, NULL, NULL, NULL, reason);
 }
 
 static void on_gatt_notify(int h, const char *uuid, const uint8_t *data,
                            size_t len, void *arg)
 {
     (void)arg;
+    char sid[sizeof(g.sessions[0].session_id)];
+    if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) return;
+    if (!s) { sess_unlock(); return; }
+    snprintf(sid, sizeof(sid), "%s", s->session_id);
+    sess_unlock();
+
     char *hex = malloc(len * 2 + 1);
     if (!hex) return;
     /* lowercase on the GATT channel */
     espos_ble_hex_encode_lower(data, len, hex);
-    send_gatt_event("gatt_data", s->session_id, uuid, hex, NULL, -1);
+    send_gatt_event("gatt_data", sid, uuid, hex, NULL, -1);
     free(hex);
 }
 
@@ -563,21 +637,39 @@ static void on_gatt_read(int h, const char *uuid, const uint8_t *data,
 
 static void on_gatt_write_done(int h, const char *uuid, bool ok, void *arg)
 {
-    (void)uuid; (void)arg;
+    (void)arg;
+    if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s || s->init_index >= s->init_count) return;
+    if (!s || s->init_index >= s->init_count) { sess_unlock(); return; }
+
+    /* Only a completion for the write we are actually waiting on advances the
+     * chain. A server-driven gatt_write during initialisation completes on the
+     * same callback, and taking it would skip one configured init write and
+     * report gatt_connected early. */
+    if (uuid && strcmp(uuid, s->init_writes[s->init_index].char_uuid) != 0) {
+        sess_unlock();
+        return;
+    }
+
     if (!ok) ESP_LOGW(TAG, "init write %u failed", (unsigned)s->init_index);
     s->init_index++;
-    run_init_writes(s);
+    /* Re-entered synchronously from inside run_init_writes (a no-response
+     * write): just advance and let that loop continue, rather than nesting. */
+    if (!s->in_init_write) run_init_writes(s);
+    sess_unlock();
 }
 
 static void on_gatt_error(int h, const char *error, void *arg)
 {
     (void)arg;
+    if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) return;
-    send_gatt_event("gatt_error", s->session_id, NULL, NULL, error, -1);
+    if (!s) { sess_unlock(); return; }
+    char sid[sizeof(s->session_id)];
+    snprintf(sid, sizeof(sid), "%s", s->session_id);
     session_free(s);
+    sess_unlock();
+    send_gatt_event("gatt_error", sid, NULL, NULL, error, -1);
 }
 
 /* ---------------------------------------------------------------- */
@@ -624,14 +716,18 @@ static void gateway_task(void *arg)
 
         /* Init-write watchdog: a peripheral that never answers must not pin a
          * session in init forever. */
-        for (size_t i = 0; i < MAX_SESSIONS; i++) {
-            session_t *s = &g.sessions[i];
-            if (!s->active || s->init_index >= s->init_count) continue;
-            if (s->init_deadline_us && now > s->init_deadline_us) {
-                ESP_LOGW(TAG, "init write %u timed out", (unsigned)s->init_index);
-                s->init_index++;
-                run_init_writes(s);
+        if (sess_lock()) {
+            for (size_t i = 0; i < MAX_SESSIONS; i++) {
+                session_t *s = &g.sessions[i];
+                if (!s->active || s->init_index >= s->init_count) continue;
+                if (s->init_deadline_us && now > s->init_deadline_us) {
+                    ESP_LOGW(TAG, "init write %u timed out",
+                             (unsigned)s->init_index);
+                    s->init_index++;
+                    run_init_writes(s);
+                }
             }
+            sess_unlock();
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -661,18 +757,33 @@ esp_err_t espos_ble_start(void)
     v = 160;  espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_SCAN_WIN_MS, &v);   g.scan_win = (uint32_t)v;
     v = 2000; espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_POST_INT_MS, &v);   g.post_int = (uint32_t)v;
     v = 30000;espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_STATUS_INT_MS, &v); g.status_int = (uint32_t)v;
-    v = 3;    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_MAX_GATT_SESS, &v); g.max_gatt = (uint32_t)v;
+    v = 3;    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_MAX_GATT_SESS, &v);
+    if (v < 0) v = 0;
+    if (v > MAX_SESSIONS) v = MAX_SESSIONS;
+    g.max_gatt = (uint32_t)v;
     g.control_ws = true;
     espos_config_get_bool(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_CONTROL_WS, &g.control_ws);
 
     int32_t cap = 500;
     espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_MAX_PEND_ADS, &cap);
+    /* The descriptor bounds this, but config can be restored from an older
+     * schema or a hand-edited import: 0 would give a zero-capacity ring that
+     * drops everything, and a negative would become a huge size_t. */
+    if (cap < 10) cap = 10;
+    if (cap > 5000) cap = 5000;
     g.storage = calloc((size_t)cap, sizeof(espos_ble_adv_t));
     if (!g.storage) return ESP_ERR_NO_MEM;
     espos_ble_advq_init(&g.q, g.storage, (size_t)cap);
 
     g.lock = xSemaphoreCreateMutex();
-    if (!g.lock) { free(g.storage); return ESP_ERR_NO_MEM; }
+    g.sess_lock = xSemaphoreCreateMutex();
+    if (!g.lock || !g.sess_lock) {
+        if (g.lock) { vSemaphoreDelete(g.lock); g.lock = NULL; }
+        if (g.sess_lock) { vSemaphoreDelete(g.sess_lock); g.sess_lock = NULL; }
+        free(g.storage);
+        g.storage = NULL;
+        return ESP_ERR_NO_MEM;
+    }
 
     espos_ble_callbacks_t cb = {
         .on_advertisement = on_advertisement,
@@ -686,7 +797,10 @@ esp_err_t espos_ble_start(void)
     esp_err_t err = espos_ble_backend_init(&cb);
     if (err != ESP_OK) {
         vSemaphoreDelete(g.lock);
+        vSemaphoreDelete(g.sess_lock);
+        g.lock = g.sess_lock = NULL;
         free(g.storage);
+        g.storage = NULL;
         return err;
     }
 
@@ -699,6 +813,12 @@ esp_err_t espos_ble_start(void)
      * s_post_batch) so this covers the call depth, not the payloads. */
     if (xTaskCreate(gateway_task, "espos_ble", 8192, NULL, 5, &g.task) != pdPASS) {
         g.running = false;
+        espos_ble_scan_stop();
+        vSemaphoreDelete(g.lock);
+        vSemaphoreDelete(g.sess_lock);
+        g.lock = g.sess_lock = NULL;
+        free(g.storage);
+        g.storage = NULL;
         return ESP_ERR_NO_MEM;
     }
     /* Non-fatal: the gateway still works without its status endpoint. */
@@ -716,11 +836,37 @@ esp_err_t espos_ble_stop(void)
     if (!g.running) return ESP_OK;
     g.running = false;
     espos_ble_scan_stop();
+
+    /* gateway_task polls g.running every 100 ms and deletes itself; wait for
+     * it before freeing anything it touches. */
+    for (int i = 0; i < 20 && g.task && eTaskGetState(g.task) != eDeleted; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    g.task = NULL;
+
     if (g.ws) {
         esp_websocket_client_stop(g.ws);
         esp_websocket_client_destroy(g.ws);
         g.ws = NULL;
+        g.ws_connected = false;
     }
+
+    /* Close any live session and release its allocations - a stop/start cycle
+     * would otherwise orphan them and leave stale connection handles behind. */
+    if (sess_lock()) {
+        for (size_t i = 0; i < MAX_SESSIONS; i++) {
+            if (!g.sessions[i].active) continue;
+            espos_ble_gatt_disconnect(g.sessions[i].conn_handle);
+            session_free(&g.sessions[i]);
+        }
+        sess_unlock();
+    }
+
+    if (g.lock) { vSemaphoreDelete(g.lock); g.lock = NULL; }
+    if (g.sess_lock) { vSemaphoreDelete(g.sess_lock); g.sess_lock = NULL; }
+    free(g.storage);
+    g.storage = NULL;
+    memset(&g.q, 0, sizeof(g.q));
     return ESP_OK;
 }
 
