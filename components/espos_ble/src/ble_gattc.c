@@ -264,12 +264,14 @@ esp_err_t espos_ble_gatt_write(int conn_handle, const char *char_uuid,
         return err;
     }
 
-    /* Synthesise the completion the stack will never send, so a caller
-     * sequencing init writes advances instead of stalling forever. */
-    if (mode == ESPOS_BLE_WRITE_NO_RESPONSE && s_cb.on_gatt_write_done) {
-        s_cb.on_gatt_write_done(conn_handle, char_uuid, true, s_cb.arg);
-    }
-    return ESP_OK;
+    /* A no-response write produces no WRITE_CHAR_EVT, so the caller must not
+     * wait for one. Report that through the return value rather than by
+     * invoking on_gatt_write_done() from inside this call: the caller holds
+     * its session lock across this function, and a synchronous callback would
+     * re-enter it on a non-recursive mutex.
+     *
+     * ESP_ERR_NOT_FINISHED means "sent, and no completion is coming". */
+    return (mode == ESPOS_BLE_WRITE_NO_RESPONSE) ? ESP_ERR_NOT_FINISHED : ESP_OK;
 }
 
 esp_err_t espos_ble_gatt_disconnect(int conn_handle)
@@ -352,8 +354,11 @@ void espos_ble_gattc_event(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
             format_bda(param->open.remote_bda, mac);
             ESP_LOGE(TAG, "open(%s) failed: %d", mac, param->open.status);
             int h = (int)(s - s_slots);
-            slot_release(s);
+            /* Same ordering as DISCONNECT_EVT: keep the slot reserved until
+             * the callback has resolved this handle. */
+            s->connected = false;
             if (s_cb.on_gatt_error) s_cb.on_gatt_error(h, "connect failed", s_cb.arg);
+            slot_release(s);
             break;
         }
         s->conn_id = param->open.conn_id;
@@ -461,8 +466,14 @@ void espos_ble_gattc_event(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         int h = (int)(s - s_slots);
         int reason = param->disconnect.reason;
         ESP_LOGI(TAG, "%s disconnected (reason %d)", s->mac, reason);
-        slot_release(s);
+        /* Mark it closed but keep the slot reserved until the callback has
+         * run. Releasing first would let a new connect claim the same slot
+         * index - which is the caller's conn_handle - while the gateway is
+         * still resolving the old one, so a stale event could land on a
+         * freshly created session. */
+        s->connected = false;
         if (s_cb.on_gatt_disconnected) s_cb.on_gatt_disconnected(h, reason, s_cb.arg);
+        slot_release(s);
         break;
     }
 

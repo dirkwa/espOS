@@ -83,17 +83,21 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         adv.rssi = param->scan_rst.rssi;
         adv.received_us = esp_timer_get_time();
 
-        uint8_t len = param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len;
-        if (len > ESPOS_BLE_ADV_DATA_MAX) len = ESPOS_BLE_ADV_DATA_MAX;
-        memcpy(adv.adv_data, param->scan_rst.ble_adv, len);
-        adv.adv_data_len = len;
+        /* Sum in a wider type before clamping: each field is at most 31, so
+         * the total fits today, but adding them in a uint8_t would wrap
+         * silently if either ever grew. */
+        uint16_t total = (uint16_t)param->scan_rst.adv_data_len +
+                         (uint16_t)param->scan_rst.scan_rsp_len;
+        if (total > ESPOS_BLE_ADV_DATA_MAX) total = ESPOS_BLE_ADV_DATA_MAX;
+        memcpy(adv.adv_data, param->scan_rst.ble_adv, total);
+        adv.adv_data_len = (uint8_t)total;
 
         /* The bounded variant: the unbounded esp_ble_resolve_adv_data() walks
          * the payload with no length to stop at, and IDF 6 deprecates it for
          * exactly that reason. Fall back to the shortened name, which is what
          * a device advertises when the full one does not fit in 31 bytes. */
         uint8_t name_len = 0;
-        uint16_t adv_len = param->scan_rst.adv_data_len + param->scan_rst.scan_rsp_len;
+        uint16_t adv_len = total;
         uint8_t *name = esp_ble_resolve_adv_data_by_type(
             param->scan_rst.ble_adv, adv_len, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
         if (!name || !name_len) {

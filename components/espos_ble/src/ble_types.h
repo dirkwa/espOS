@@ -77,6 +77,13 @@ const char *espos_ble_mac(void);
 int espos_ble_gatt_connect(const char *mac, const char *service_uuid);
 esp_err_t espos_ble_gatt_subscribe(int conn_id, const char *char_uuid);
 esp_err_t espos_ble_gatt_read(int conn_id, const char *char_uuid);
+/* Returns ESP_OK when the write was sent and a completion event will follow;
+ * ESP_ERR_NOT_FINISHED when it was sent as write-without-response, for which
+ * the stack generates no completion at all - callers sequencing writes must
+ * advance themselves on that. Other codes are real failures.
+ *
+ * Never calls back into espos_ble_callbacks_t before returning, so a caller
+ * may hold its own lock across it. */
 esp_err_t espos_ble_gatt_write(int conn_id, const char *char_uuid,
                                const uint8_t *data, size_t len,
                                espos_ble_write_mode_t mode);

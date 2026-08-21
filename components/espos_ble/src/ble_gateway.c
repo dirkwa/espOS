@@ -54,9 +54,6 @@ typedef struct {
     espos_ble_init_write_t *init_writes;
     size_t init_count, init_index;
     int64_t init_deadline_us;
-    /* True while run_init_writes() is inside espos_ble_gatt_write(), so a
-     * synchronous completion advances the index without re-entering the loop. */
-    bool in_init_write;
     /* Characteristics to enable notifications on. */
     char (*notify_uuids)[ESPOS_BLE_UUID_MAX];
     size_t notify_count;
@@ -83,6 +80,10 @@ static struct {
     /* config */
     bool active_scan, control_ws;
     uint32_t scan_int, scan_win, post_int, status_int, max_gatt;
+
+    /* Set by gateway_task just before it deletes itself, so stop() can wait
+     * without polling a task handle that may already be freed. */
+    volatile bool task_exited;
 
     /* counters */
     uint32_t adv_received, adv_posted, post_ok, post_fail;
@@ -250,11 +251,21 @@ static void send_status(void)
 }
 
 /* Held across the whole of any session operation, including the callbacks it
- * makes into ble_gattc. Recursion is not possible: nothing under the lock
- * re-enters these helpers. */
+ * makes into ble_gattc.
+ *
+ * The mutex is NOT recursive, so nothing called under it may re-enter these
+ * helpers. That is why espos_ble_gatt_write() reports a no-response write
+ * through its return value instead of invoking on_gatt_write_done() inline:
+ * doing so deadlocked the init chain, which then only advanced when the 3 s
+ * watchdog fired. */
+/* The wait must exceed the websocket send timeout (1 s in ws_send_json):
+ * gatt_error and gatt_connected are reported with the lock held, so a stalled
+ * socket can hold it for that long. A shorter wait here would make every other
+ * task - including the Bluetooth stack callbacks - fail to acquire it exactly
+ * when the link is degraded. */
 static inline bool sess_lock(void)
 {
-    return g.sess_lock && xSemaphoreTake(g.sess_lock, pdMS_TO_TICKS(200)) == pdTRUE;
+    return g.sess_lock && xSemaphoreTake(g.sess_lock, pdMS_TO_TICKS(1500)) == pdTRUE;
 }
 
 static inline void sess_unlock(void)
@@ -330,12 +341,11 @@ static void run_subscribes(session_t *s)
 
 /* Iterative, not recursive.
  *
- * A write-without-response completes synchronously (ble_gattc synthesises the
- * callback the stack never sends), and that callback re-enters here. Recursing
- * would make the stack depth equal the number of consecutive no-response or
- * failing writes - and init[] comes straight off the wire, so a server could
- * set that depth. The loop advances in place instead; the callback path only
- * ever re-enters with a strictly larger init_index, which terminates.
+ * init[] comes straight off the wire, so its length is chosen by the server;
+ * recursing once per write would let a peer pick the stack depth. Writes that
+ * expect a completion return here and are resumed by on_gatt_write_done(),
+ * which re-enters with a strictly larger init_index - so that path terminates
+ * too.
  *
  * Caller holds the session lock. */
 static void run_init_writes(session_t *s)
@@ -343,17 +353,18 @@ static void run_init_writes(session_t *s)
     while (s->init_index < s->init_count) {
         espos_ble_init_write_t *iw = &s->init_writes[s->init_index];
         s->init_deadline_us = esp_timer_get_time() + 3000000; /* 3 s */
-        s->in_init_write = true;
         esp_err_t err = espos_ble_gatt_write(s->conn_handle, iw->char_uuid,
                                              iw->data, iw->data_len, iw->mode);
-        s->in_init_write = false;
+
         if (err == ESP_OK) {
-            /* A no-response write already advanced the index from the
-             * synthesised completion; anything else waits for the real one. */
-            if (s->init_index < s->init_count &&
-                &s->init_writes[s->init_index] == iw) {
-                return;
-            }
+            /* Sent, and a WRITE_CHAR_EVT is coming: on_gatt_write_done()
+             * advances the chain and calls back in. */
+            return;
+        }
+        if (err == ESP_ERR_NOT_FINISHED) {
+            /* Write-without-response: no completion event will ever arrive,
+             * so advance here and keep going. */
+            s->init_index++;
             continue;
         }
         send_gatt_event("gatt_error", s->session_id, iw->char_uuid, NULL,
@@ -621,6 +632,13 @@ static void on_gatt_notify(int h, const char *uuid, const uint8_t *data,
     snprintf(sid, sizeof(sid), "%s", s->session_id);
     sess_unlock();
 
+    /* len comes from the peripheral (bounded by the negotiated MTU), so cap it
+     * rather than sizing an allocation from a remote value. A GATT payload
+     * cannot exceed the ATT maximum. */
+    if (len > 512) {
+        ESP_LOGW(TAG, "notify %u bytes truncated to 512", (unsigned)len);
+        len = 512;
+    }
     char *hex = malloc(len * 2 + 1);
     if (!hex) return;
     /* lowercase on the GATT channel */
@@ -653,9 +671,7 @@ static void on_gatt_write_done(int h, const char *uuid, bool ok, void *arg)
 
     if (!ok) ESP_LOGW(TAG, "init write %u failed", (unsigned)s->init_index);
     s->init_index++;
-    /* Re-entered synchronously from inside run_init_writes (a no-response
-     * write): just advance and let that loop continue, rather than nesting. */
-    if (!s->in_init_write) run_init_writes(s);
+    run_init_writes(s);
     sess_unlock();
 }
 
@@ -732,6 +748,7 @@ static void gateway_task(void *arg)
 
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+    g.task_exited = true;
     vTaskDelete(NULL);
 }
 
@@ -807,6 +824,7 @@ esp_err_t espos_ble_start(void)
     espos_ble_scan_start(g.active_scan, (uint16_t)g.scan_int, (uint16_t)g.scan_win);
 
     g.running = true;
+    g.task_exited = false;
     /* 8 KB: cJSON serialisation plus esp_http_client's own frame need real
      * headroom, and a stack-protection fault here is a reboot loop rather
      * than a degraded mode. The big scratch buffers are static (see
@@ -838,9 +856,19 @@ esp_err_t espos_ble_stop(void)
     espos_ble_scan_stop();
 
     /* gateway_task polls g.running every 100 ms and deletes itself; wait for
-     * it before freeing anything it touches. */
-    for (int i = 0; i < 20 && g.task && eTaskGetState(g.task) != eDeleted; i++) {
+     * it before freeing anything it touches. Wait on its own flag rather than
+     * eTaskGetState(): once the task has called vTaskDelete(NULL) the handle
+     * may already be freed, and inspecting it is undefined. */
+    for (int i = 0; i < 40 && !g.task_exited; i++) {
         vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!g.task_exited) {
+        /* Leaking is the safe branch: freeing buffers a live task still walks
+         * would be a use-after-free. Restore running so a later stop can try
+         * again rather than short-circuiting on the !g.running guard. */
+        ESP_LOGW(TAG, "gateway task did not exit; leaving its buffers alone");
+        g.running = true;
+        return ESP_ERR_TIMEOUT;
     }
     g.task = NULL;
 
@@ -880,8 +908,14 @@ esp_err_t espos_ble_get_status(espos_ble_status_t *out)
     out->scan_hits = espos_ble_scan_hits();
     out->adv_received = g.adv_received;
     out->adv_posted = g.adv_posted;
-    out->adv_dropped = g.q.dropped;
-    out->adv_pending = espos_ble_advq_count(&g.q);
+    /* Under the lock like every other q access: this runs on the httpd task
+     * while the Bluetooth stack task is pushing. A torn read here would only
+     * misreport a counter, but the inconsistency is not worth keeping. */
+    if (g.lock && xSemaphoreTake(g.lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        out->adv_dropped = g.q.dropped;
+        out->adv_pending = espos_ble_advq_count(&g.q);
+        xSemaphoreGive(g.lock);
+    }
     out->post_success = g.post_ok;
     out->post_fail = g.post_fail;
     out->ws_connected = g.ws_connected;
