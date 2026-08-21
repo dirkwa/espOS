@@ -10,4 +10,33 @@ menu "espOS SignalK"
             paths) can reach several KiB; raise on PSRAM boards that
             subscribe to whole families.
 
+    config ESPOS_SK_NOTIFICATIONS
+        bool "Device-health notifications"
+        default y
+        help
+            Let the firmware raise SignalK notifications under
+            notifications.espos.<label>.<key> for conditions it can judge
+            itself -- memory pressure, a dependency that has gone away --
+            via espos_sk_notify().
+
+            Without them such a condition surfaces as a device that has
+            quietly stopped working, which looks the same as a hardware
+            fault and is the expensive kind of problem to diagnose.
+
+            Turn it off on parts where the RAM matters more: the table is
+            allocated on first use, so an unused build already costs
+            nothing, but disabling also drops the code and the periodic
+            low-memory check.
+
+    config ESPOS_SK_MAX_NOTIFY
+        int "Distinct notification keys"
+        depends on ESPOS_SK_NOTIFICATIONS
+        default 8
+        range 1 32
+        help
+            Slots for remembered notification state, one per key. Allocated
+            together on the first notification (~128 bytes each), never
+            freed. A firmware's set of conditions is fixed at build time,
+            so size this to what it actually raises.
+
 endmenu

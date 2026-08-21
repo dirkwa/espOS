@@ -65,6 +65,34 @@ esp_err_t espos_sk_publish_bool(const char *path, bool value);
 esp_err_t espos_sk_publish_json(const char *path, const char *value_json);
 
 /**
+ * Raise or clear a SignalK notification under notifications.espos.<label>.<key>.
+ *
+ * For conditions the device knows about and an operator would want to see:
+ * memory pressure, an overheating chip, a service the firmware depends on
+ * having gone away. These otherwise surface as a device that has quietly
+ * stopped doing its job, which is indistinguishable from a hardware fault
+ * from the outside and is the expensive kind of problem to diagnose.
+ *
+ * Notifications are level-triggered and idempotent: raising the same state and
+ * message twice sends one delta, so a caller may poll and re-raise freely.
+ * Passing ESPOS_SK_ALERT_NORMAL clears the condition.
+ *
+ * `key` is a short stable identifier ("lowMemory", "wakeService"), not a
+ * sentence -- it becomes part of the path, and the path is what a rule or a
+ * dashboard keys on. `message` is the human-readable half and may change
+ * without re-notifying.
+ *
+ * Thread-safe; never blocks. Buffered like any other delta while offline.
+ */
+typedef enum {
+    ESPOS_SK_ALERT_NORMAL = 0,  /* condition cleared */
+    ESPOS_SK_ALERT_WARN,
+    ESPOS_SK_ALERT_ALARM,
+} espos_sk_alert_t;
+
+esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message);
+
+/**
  * Declare metadata for a NON-standard path (never for spec paths — the
  * server knows those). meta_json is the full meta object, e.g.
  * {"units":"Hz","description":"…"}. period_ms > 0 adds "timeout" (in
