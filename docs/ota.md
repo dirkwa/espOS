@@ -58,6 +58,57 @@ without Secure Boot*: it protects against network-side tampering, not
 against someone with the USB port. Hardware Secure Boot / flash encryption
 are release-overlay decisions ([security.md](security.md)).
 
+### Swapping the key
+
+ESP-IDF's signing step depends on the unsigned binary alone, so replacing
+`secure_boot_signing_key.pem` and rebuilding **keeps the previous
+signature** — no source changed, nothing re-links, and the build log looks
+normal. The root `CMakeLists.txt` fingerprints the key and forces a
+re-link when it differs, so this is handled; if you copy that block into
+your own project, copy the fingerprinting with it. Verify before flashing
+anything you cannot recover over the air:
+
+```sh
+espsecure verify-signature --version 2 --keyfile <key>.pem build/<app>.bin
+```
+
+### Releasing, and forking
+
+Signing is inherited by every project built on espOS, so this applies to
+them and to anyone who forks one.
+
+Ordinary builds need nothing: the development key is generated
+automatically, so pushes and pull requests build on a fork unchanged.
+**Publishing a release is the decision point**, because that artefact is
+what other people install.
+
+- **You run devices that take OTA updates** — generate a key, keep it, and
+  give it to CI as a secret:
+
+  ```sh
+  espsecure generate-signing-key --version 2 --scheme rsa3072 signing_key.pem
+  gh secret set <APP>_SIGNING_KEY_PEM < signing_key.pem
+  ```
+
+  Losing that file means no already-flashed device can ever take another
+  OTA. It is the one thing worth backing up.
+
+- **You just want a flashable binary** — release without a key, and say so
+  in the release. The convention is a repository *variable*
+  `<APP>_ALLOW_UNSIGNED_RELEASE=true`: the build uses a throwaway key and
+  the release notes are marked USB-only. Devices flashed from it reject
+  every OTA, including later releases from the same fork.
+
+A release workflow should **fail** when neither is set rather than quietly
+falling back to a throwaway key. That fallback produces a release which
+installs fine and then rejects every future update — a failure that
+surfaces on the device, over the air, long after CI went green.
+
+There is deliberately **no committed default key**. A private key in a
+public repository is a key everyone has, and any device trusting it would
+accept firmware signed by anyone. Making the safe path opt-in would also
+mean most forks ship the shared key without noticing.
+
 ## Manifest format (`schema: 1`)
 
 ```json

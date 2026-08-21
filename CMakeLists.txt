@@ -33,6 +33,36 @@ if(NOT EXISTS "${ESPOS_SIGNING_KEY}")
     endif()
 endif()
 
+# Re-sign when the KEY changes, not just when the code does.
+#
+# ESP-IDF's signing step depends on the unsigned binary alone
+# (esptool_py/project_include.cmake: DEPENDS "${build_dir}/.bin_timestamp"),
+# so swapping secure_boot_signing_key.pem and rebuilding silently keeps the
+# signature made with the PREVIOUS key — no source changed, so nothing
+# re-links, and the build log looks completely normal. You get a device that
+# installs fine over USB and then rejects every OTA, with no way to tell why
+# short of running `espsecure verify-signature` by hand.
+#
+# Fingerprint the key (the file's hash — never its contents, which would
+# reach the build directory) and force a re-link whenever it differs.
+file(SHA256 "${ESPOS_SIGNING_KEY}" ESPOS_SIGNING_KEY_HASH)
+set(ESPOS_KEY_STAMP "${CMAKE_BINARY_DIR}/espos_signing_key.stamp")
+set(ESPOS_KEY_STAMP_OLD "")
+if(EXISTS "${ESPOS_KEY_STAMP}")
+    file(READ "${ESPOS_KEY_STAMP}" ESPOS_KEY_STAMP_OLD)
+endif()
+if(NOT ESPOS_KEY_STAMP_OLD STREQUAL ESPOS_SIGNING_KEY_HASH)
+    if(NOT ESPOS_KEY_STAMP_OLD STREQUAL "")
+        message(STATUS "espOS: signing key changed — forcing a re-link so the "
+                       "image is signed with the current key.")
+        # Removing the unsigned binary's stamp is what actually re-triggers
+        # IDF's sign-data step; deleting only the .bin leaves it satisfied.
+        file(REMOVE "${CMAKE_BINARY_DIR}/.bin_timestamp"
+                    "${CMAKE_BINARY_DIR}/.signed_bin_timestamp")
+    endif()
+    file(WRITE "${ESPOS_KEY_STAMP}" "${ESPOS_SIGNING_KEY_HASH}")
+endif()
+
 project(espos)
 
 # UI bundle → LittleFS "storage" partition image, flashed with `idf.py flash`.
