@@ -9,6 +9,15 @@
 
 #include "sdkconfig.h"
 
+/* The gateway has no meaning without a GATT client: the server drives sessions
+ * over the control WebSocket, and ble_backend.c/ble_gateway.c reference GATTC
+ * types and entry points unconditionally. Rather than #ifdef those call sites
+ * into a half-working configuration, require the symbol and say so here.
+ * espos_ble's own sdkconfig guidance sets it (docs/ble.md). */
+#if defined(CONFIG_BT_BLUEDROID_ENABLED) && !defined(CONFIG_BT_GATTC_ENABLE)
+#error "espos_ble requires CONFIG_BT_GATTC_ENABLE (Bluedroid GATT client)."
+#endif
+
 #ifdef CONFIG_BT_GATTC_ENABLE
 
 #include "ble_types.h"

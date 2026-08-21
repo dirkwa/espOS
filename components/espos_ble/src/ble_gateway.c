@@ -213,7 +213,10 @@ static void ws_send_json(cJSON *doc)
     if (!g.ws_connected || !g.ws) return;
     char *txt = cJSON_PrintUnformatted(doc);
     if (!txt) return;
-    esp_websocket_client_send_text(g.ws, txt, strlen(txt), pdMS_TO_TICKS(1000));
+    /* Short, because run_subscribes()/run_init_writes() report through here
+     * while holding the session lock, on the Bluetooth stack task. A long
+     * timeout there stalls the radio; a dropped status frame does not. */
+    esp_websocket_client_send_text(g.ws, txt, strlen(txt), pdMS_TO_TICKS(100));
     free(txt);
 }
 
@@ -258,14 +261,17 @@ static void send_status(void)
  * through its return value instead of invoking on_gatt_write_done() inline:
  * doing so deadlocked the init chain, which then only advanced when the 3 s
  * watchdog fired. */
-/* The wait must exceed the websocket send timeout (1 s in ws_send_json):
- * gatt_error and gatt_connected are reported with the lock held, so a stalled
- * socket can hold it for that long. A shorter wait here would make every other
- * task - including the Bluetooth stack callbacks - fail to acquire it exactly
- * when the link is degraded. */
+/* Must exceed the worst case a holder can take. The longest is a session
+ * bring-up that reports several events through ws_send_json(), each capped at
+ * 100 ms. 500 ms leaves room for that without letting a degraded websocket
+ * make every other task fail to acquire the lock.
+ *
+ * The deeper fix is to hand callback work to gateway_task through a queue so
+ * the Bluetooth stack task never blocks at all; that is a larger change than
+ * this one is worth, and the timeouts here bound the exposure meanwhile. */
 static inline bool sess_lock(void)
 {
-    return g.sess_lock && xSemaphoreTake(g.sess_lock, pdMS_TO_TICKS(1500)) == pdTRUE;
+    return g.sess_lock && xSemaphoreTake(g.sess_lock, pdMS_TO_TICKS(500)) == pdTRUE;
 }
 
 static inline void sess_unlock(void)
@@ -663,10 +669,20 @@ static void on_gatt_write_done(int h, const char *uuid, bool ok, void *arg)
     /* Only a completion for the write we are actually waiting on advances the
      * chain. A server-driven gatt_write during initialisation completes on the
      * same callback, and taking it would skip one configured init write and
-     * report gatt_connected early. */
-    if (uuid && strcmp(uuid, s->init_writes[s->init_index].char_uuid) != 0) {
-        sess_unlock();
-        return;
+     * report gatt_connected early.
+     *
+     * Compare by value, not text: the callback always formats the long
+     * lowercase form while the server may have sent "ffe1" or upper case, so
+     * strcmp() would never match and the chain would stall until the watchdog
+     * fired. */
+    if (uuid) {
+        uint8_t got[16], want[16];
+        if (espos_ble_uuid_parse(uuid, got, NULL) &&
+            espos_ble_uuid_parse(s->init_writes[s->init_index].char_uuid, want, NULL) &&
+            !espos_ble_uuid_equal(got, want)) {
+            sess_unlock();
+            return;
+        }
     }
 
     if (!ok) ESP_LOGW(TAG, "init write %u failed", (unsigned)s->init_index);

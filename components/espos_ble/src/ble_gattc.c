@@ -150,6 +150,13 @@ esp_err_t espos_ble_gattc_init(const espos_ble_callbacks_t *cb)
 int espos_ble_gatt_connect(const char *mac, const char *service_uuid)
 {
     if (!mac) return -1;
+    /* esp_ble_gattc_app_register() is asynchronous: s_gattc_if is only valid
+     * once REG_EVT has arrived. A gatt_subscribe landing in that window would
+     * open with ESP_GATT_IF_NONE and leave the slot reserved forever. */
+    if (s_gattc_if == ESP_GATT_IF_NONE) {
+        ESP_LOGW(TAG, "connect before GATTC registration completed");
+        return -1;
+    }
 
     conn_slot_t *s = NULL;
     for (size_t i = 0; i < ESPOS_BLE_GATTC_MAX_CONN; i++) {
@@ -163,6 +170,7 @@ int espos_ble_gatt_connect(const char *mac, const char *service_uuid)
     memset(s, 0, sizeof(*s));
     if (!parse_mac(mac, s->bda)) {
         ESP_LOGE(TAG, "bad MAC: %s", mac);
+        slot_release(s);
         return -1;
     }
     snprintf(s->mac, sizeof(s->mac), "%s", mac);
