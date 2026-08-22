@@ -113,8 +113,15 @@ bool EventDecoder::read_header() {
   const cJSON* pl = cJSON_GetObjectItemCaseSensitive(doc.get(), "payload_length");
   if (cJSON_IsNumber(dl)) data_len = dl->valuedouble;
   if (cJSON_IsNumber(pl)) payload_len = pl->valuedouble;
+  // Both bounds are explicit. The pre-cJSON code read these through a signed
+  // long and so could never see a payload_length past LONG_MAX, which on a
+  // 32-bit target kept data_len_ + payload_len_ from wrapping -- an accident
+  // of the type, not a check. Reading them as JSON numbers removes it, so the
+  // ceiling has to be stated. The ordering matters: the range tests come
+  // before the casts, so an out-of-range value is never converted.
   if (data_len < 0 || payload_len < 0 || data_len > (double)kMaxDataBytes ||
-      payload_len > (double)SIZE_MAX || data_len != (double)(size_t)data_len ||
+      payload_len > (double)kMaxPayloadBytes ||
+      data_len != (double)(size_t)data_len ||
       payload_len != (double)(size_t)payload_len) {
     ESP_LOGE(kTag, "invalid length fields (data=%.0f payload=%.0f)", data_len,
              payload_len);

@@ -71,6 +71,13 @@ class EventDecoder {
   // payload so it never has to fit a fixed cap).
   static constexpr size_t kMaxHeaderBytes = 8 * 1024;
   static constexpr size_t kMaxDataBytes = 64 * 1024;
+  // A payload is streamed rather than capped to a working size, but it still
+  // has to be bounded: feed() adds the two lengths, and on a 32-bit target an
+  // unbounded payload_length wraps that sum to something small enough to look
+  // satisfied, dispatching a pointer past the buffer with a huge length.
+  // 2 GiB is exactly representable as a double (these arrive as JSON numbers)
+  // and leaves the sum well inside size_t on every target espOS builds for.
+  static constexpr size_t kMaxPayloadBytes = size_t{2} * 1024 * 1024 * 1024;
 
   // feed() appends `chunk` and drains as many complete events as possible,
   // calling on_event(ctx, ev) for each. Returns false on framing error.
