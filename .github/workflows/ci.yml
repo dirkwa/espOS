@@ -3,9 +3,27 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
+  # A tag whose version.txt says something else makes every device built from
+  # it report a version that matches no release. Cheap to check, impossible to
+  # notice by eye once it has happened.
+  version:
+    name: tag matches version.txt
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(cat version.txt)"
+          echo "tag=$tag version.txt=$file"
+          test "$tag" = "$file"
+
   generator:
     name: descriptor generator (python)
     runs-on: ubuntu-latest
@@ -45,7 +63,13 @@ jobs:
       matrix:
         target: [esp32, esp32s3, esp32c3, esp32c6, esp32p4]
     steps:
+      # Full history and tags: the version compiled into the image comes from
+      # `git describe`, and a shallow clone has nothing to describe — the
+      # artifacts would quietly fall back to version.txt and every build
+      # between two releases would carry the same version again.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: espos-ui
