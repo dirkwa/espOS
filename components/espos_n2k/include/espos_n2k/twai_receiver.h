@@ -6,13 +6,12 @@
 #include <cstdint>
 
 #include "driver/gpio.h"
-#include "driver/twai.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include <functional>
-#include "espos_n2k/twai_message.h"
+#include "espos_n2k/can_frame.h"
 
 namespace espos_n2k {
 
@@ -28,11 +27,11 @@ struct TwaiReceiverConfig {
   size_t rx_queue_depth = 64;
 };
 
-/// Reads CAN frames from the TWAI peripheral and emits them as
-/// TwaiMessage values. Runs a dedicated FreeRTOS task for RX.
+/// Reads CAN frames from the TWAI peripheral and emits them as CanMessage
+/// values, on the shared node's RX task.
 class TwaiReceiver {
  public:
-  using FrameFn = std::function<void(const TwaiMessage&)>;
+  using FrameFn = std::function<void(const CanMessage&)>;
   explicit TwaiReceiver(const TwaiReceiverConfig& config = {});
   ~TwaiReceiver();
 
@@ -58,18 +57,17 @@ class TwaiReceiver {
     return (esp_timer_get_time() - last) / 1000000;
   }
 
-  uint32_t bus_off_count() const { return bus_off_count_; }
+  /// Bus-off events counted by the shared node since it came up.
+  uint32_t bus_off_count() const;
 
  private:
-  static void rx_task(void* arg);
+  static void sink(void* ctx, const CanMessage& msg);
 
   TwaiReceiverConfig config_;
   FrameFn on_frame_;
-  TaskHandle_t rx_task_ = nullptr;
   std::atomic<bool> running_{false};
   // Microseconds-since-boot of last RX frame; 0 = nothing received yet.
   std::atomic<int64_t> last_rx_us_{0};
-  std::atomic<uint32_t> bus_off_count_{0};
 };
 
 }  // namespace espos_n2k

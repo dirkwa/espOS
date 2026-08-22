@@ -34,7 +34,7 @@ CandumpTcpServer::~CandumpTcpServer() {
   if (clients_mutex_) vSemaphoreDelete(clients_mutex_);
 }
 
-void CandumpTcpServer::on_frame(const TwaiMessage& msg) {
+void CandumpTcpServer::on_frame(const CanMessage& msg) {
   if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(5)) != pdTRUE) return;
   for (int i = 0; i < kMaxClients; i++) {
     if (client_queues_[i]) {
@@ -49,7 +49,7 @@ void CandumpTcpServer::start() {
   if (running_.exchange(true)) return;
 
   // Subscribe to TwaiReceiver's output.
-  receiver_->set_on_frame([this](const TwaiMessage& m) { this->on_frame(m); });
+  receiver_->set_on_frame([this](const CanMessage& m) { this->on_frame(m); });
 
   xTaskCreate(&CandumpTcpServer::server_task, "candump_srv", 4096,
               this, 3, &server_task_);
@@ -148,7 +148,7 @@ void CandumpTcpServer::server_task(void* arg) {
       for (int i = 0; i < kMaxClients; i++) {
         if (self->client_queues_[i] == nullptr) {
           self->client_queues_[i] =
-              xQueueCreate(128, sizeof(TwaiMessage));
+              xQueueCreate(128, sizeof(CanMessage));
           slot = i;
           break;
         }
@@ -258,7 +258,7 @@ void CandumpTcpServer::client_task(void* arg) {
 
   while (self->running_.load()) {
     // 1. Drain queued frames → encode into batch buffer, flush when full.
-    TwaiMessage msg;
+    CanMessage msg;
     while (xQueueReceive(queue, &msg, 0) == pdTRUE) {
       int n = candump_encode(msg, self->config_.interface_name,
                              encode_buf, sizeof(encode_buf));
@@ -286,11 +286,11 @@ void CandumpTcpServer::client_task(void* arg) {
       for (int i = 0; i < recv_len; i++) {
         if (recv_buf[i] == '\n' || line_pos >= (int)sizeof(line_buf) - 1) {
           line_buf[line_pos] = '\0';
-          // Zero-init: twai_message_t overlays its flag bits with a
-          // union, and candump_decode() sets only some of them. Leaving
-          // the rest as stack garbage hands undefined flags to
-          // twai_transmit().
-          TwaiMessage tx_msg = {};
+          // CanFrame default-initialises every field, but keep the
+          // explicit {} — this used to be twai_message_t, whose flag bits
+          // live in a union that candump_decode() only partly filled, and
+          // the stack garbage in the rest reached the driver.
+          CanMessage tx_msg = {};
           if (candump_decode(line_buf, &tx_msg) && self->transmitter_) {
             self->transmitter_->set(tx_msg);
           }
