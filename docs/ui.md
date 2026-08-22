@@ -81,3 +81,41 @@ new lines arrived — never from inside the logging call, so nothing can
 recurse or block a logger on a slow SSE client. `main.c` calls it before
 anything else to catch the boot log; `espos_httpd_start()` calls it too
 (idempotent).
+
+## Pages from a firmware
+
+The page list is a registry, not a constant: `ui/src/routes.ts` holds the core
+pages and `registerPage()` adds to it, the same shape as
+`espos_httpd_register()` and `espos_config_add_descriptor()` on the C side.
+
+A firmware that wants its own page keeps a small Vite project of its own and
+uses espOS's entry point:
+
+```ts
+// <firmware>/ui/src/main.tsx
+import { registerPage, mount } from "../../espos/ui/src/mount";
+import { TanksPage } from "./pages/tanks";
+
+registerPage({ path: "/tanks", title: "Tanks", page: TanksPage, order: 35 });
+mount();
+```
+
+`order` places the tab (core pages sit on 10–70); registering an existing
+path replaces that page, which is how a firmware puts its own Status screen
+in front. Build it the same way espOS builds its own — `npm run build` to
+`dist-gz/`, then point `espos_project_ui_partition(DIR ...)` at it.
+
+### Pages that are not always there
+
+A route may declare `available()`, awaited once at startup; the tab appears
+only if it resolves true. The BLE page uses it:
+
+```ts
+{ path: "/ble", title: "BLE", page: BlePage, available: () => endpointExists("/ble/status") }
+```
+
+`endpointExists()` treats a 404 as "the component is not in this build" and
+anything else — a 500, a dropped connection — as no evidence either way, so a
+momentarily busy device does not lose a tab. The shell paints the ungated
+pages first and adds the rest when they answer, rather than holding a blank
+page while it decides.

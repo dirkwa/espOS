@@ -52,6 +52,12 @@ export interface SkWs {
   in?: { subs: number; frames: number; received: number };
   put?: { pending: number; ok: number; failed: number };
 }
+export interface BleStatus {
+  enabled: boolean; scanning: boolean; mac: string;
+  scan_hits: number; adv_received: number; adv_posted: number; adv_dropped: number; adv_pending: number;
+  post_success: number; post_fail: number; ws_connected: boolean;
+  gatt_sessions: number; gatt_max: number;
+}
 export interface SkStatus {
   token: { state: string; has_token: boolean; busy: boolean; approved_s?: number; pending_s?: number; pending_href?: string;
     next_action_s?: number; last_check_s?: number; last_http_status: number; last_error: string;
@@ -106,6 +112,7 @@ export const skServersStore = new Store<SkServersDoc>();
 export const skWsStore = new Store<SkWs>();
 export const logsSeqStore = new Store<number>();
 export const otaStore = new Store<OtaStatus>();
+export const bleStore = new Store<BleStatus>();
 export const configChangeStore = new Store<{ ns: string; key: string; n: number }>();
 export const linkStore = new Store<"connecting" | "open" | "lost">();
 
@@ -135,6 +142,7 @@ export function connectEvents() {
   on("sk_servers", skServersStore);
   on("sk_ws", skWsStore);
   on("ota", otaStore);
+  on("ble", bleStore);
   es.addEventListener("logs", (e) => logsSeqStore.set((JSON.parse((e as MessageEvent).data) as { next: number }).next));
   es.addEventListener("config", (e) => {
     const d = JSON.parse((e as MessageEvent).data) as { ns: string; key: string };
