@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "espos_n2k/can_frame.h"
 #include "espos_n2k/twai_receiver.h"
 #include "espos_n2k/twai_transmitter.h"
 
@@ -38,7 +39,7 @@ class CandumpTcpServer {
   static void client_task(void* arg);
 
   // Called on the receiver task for every frame — fans out to per-client queues.
-  void on_frame(const TwaiMessage& msg);
+  void on_frame(const CanMessage& msg);
   // mDNS registration, retried from the server task until mDNS is up.
   void advertise();
   bool advertised_ = false;

@@ -4,6 +4,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "twai_node.h"
+
 namespace espos_n2k {
 
 namespace {
@@ -16,95 +18,43 @@ TwaiReceiver::TwaiReceiver(const TwaiReceiverConfig& config)
 TwaiReceiver::~TwaiReceiver() { stop(); }
 
 void TwaiReceiver::start() {
-  // Say so rather than installing a driver on pin -1 and reporting
-  // success: an application that forgot to set the pins gets one clear
-  // line instead of a silent bus that never receives anything.
-  if (config_.tx_pin == GPIO_NUM_NC || config_.rx_pin == GPIO_NUM_NC) {
-    ESP_LOGE(kTag, "tx_pin/rx_pin not set — TWAI not started");
-    return;
-  }
   if (running_.exchange(true)) return;
 
-  // Configure and install the TWAI driver.
-  twai_general_config_t g_config =
-      TWAI_GENERAL_CONFIG_DEFAULT(config_.tx_pin, config_.rx_pin,
-                                  TWAI_MODE_NORMAL);
-  g_config.rx_queue_len = config_.rx_queue_depth;
-  g_config.tx_queue_len = 32;
+  detail::TwaiNodeConfig cfg;
+  cfg.tx_pin = config_.tx_pin;
+  cfg.rx_pin = config_.rx_pin;
+  cfg.bitrate = config_.bitrate;
+  cfg.rx_queue_depth = config_.rx_queue_depth;
 
-  twai_timing_config_t t_config;
-  if (config_.bitrate == 250000) {
-    t_config = TWAI_TIMING_CONFIG_250KBITS();
-  } else if (config_.bitrate == 500000) {
-    t_config = TWAI_TIMING_CONFIG_500KBITS();
-  } else {
-    t_config = TWAI_TIMING_CONFIG_250KBITS();
-  }
-
-  // Accept all frames (no filter).
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-
-  esp_err_t err = twai_driver_install(&g_config, &t_config, &f_config);
-  if (err != ESP_OK) {
-    ESP_LOGE(kTag, "twai_driver_install failed: %s", esp_err_to_name(err));
+  // The node logs why on every failure path (unset pins, no free controller);
+  // repeating it here would only say it twice.
+  if (detail::TwaiNode::instance().acquire(cfg) != ESP_OK) {
     running_.store(false);
     return;
   }
-
-  err = twai_start();
-  if (err != ESP_OK) {
-    ESP_LOGE(kTag, "twai_start failed: %s", esp_err_to_name(err));
-    twai_driver_uninstall();
-    running_.store(false);
-    return;
-  }
-
-  ESP_LOGI(kTag, "TWAI started: TX=%d RX=%d %ukbps",
-           config_.tx_pin, config_.rx_pin, config_.bitrate / 1000);
-
-  xTaskCreate(&TwaiReceiver::rx_task, "twai_rx", 4096, this, 5, &rx_task_);
+  detail::TwaiNode::instance().set_sink(&TwaiReceiver::sink, this);
 }
 
 void TwaiReceiver::stop() {
   if (!running_.exchange(false)) return;
-  if (rx_task_) {
-    // The task checks running_ and exits.
-    vTaskDelay(pdMS_TO_TICKS(100));
-    rx_task_ = nullptr;
-  }
-  twai_stop();
-  twai_driver_uninstall();
-  ESP_LOGI(kTag, "TWAI stopped");
+  // Unhook first: releasing may keep the bus up for a transmitter that is
+  // still running, and a frame arriving after this object is gone would call
+  // into a destroyed std::function.
+  detail::TwaiNode::instance().set_sink(nullptr, nullptr);
+  detail::TwaiNode::instance().release();
 }
 
-void TwaiReceiver::rx_task(void* arg) {
-  auto* self = static_cast<TwaiReceiver*>(arg);
+uint32_t TwaiReceiver::bus_off_count() const {
+  return detail::TwaiNode::instance().bus_off_count();
+}
 
-  while (self->running_.load()) {
-    twai_message_t frame;
-    esp_err_t err = twai_receive(&frame, pdMS_TO_TICKS(100));
-
-    if (err == ESP_OK) {
-      TwaiMessage msg;
-      msg.frame = frame;
-      msg.timestamp_us = esp_timer_get_time();
-      self->last_rx_us_.store(msg.timestamp_us,
-                              std::memory_order_relaxed);
-      if (self->on_frame_) self->on_frame_(msg);
-    } else if (err == ESP_ERR_TIMEOUT) {
-      // No frame received — check for bus-off state.
-      twai_status_info_t status;
-      if (twai_get_status_info(&status) == ESP_OK &&
-          status.state == TWAI_STATE_BUS_OFF) {
-        ESP_LOGW(kTag, "Bus-off detected — initiating recovery");
-        self->bus_off_count_.fetch_add(1, std::memory_order_relaxed);
-        twai_initiate_recovery();
-        vTaskDelay(pdMS_TO_TICKS(500));
-      }
-    }
-  }
-
-  vTaskDelete(nullptr);
+/// Runs on the node's task, one frame at a time — the same contract the
+/// old twai_receive() loop offered, so callbacks written against it are
+/// unaffected by the driver change.
+void TwaiReceiver::sink(void* ctx, const CanMessage& msg) {
+  auto* self = static_cast<TwaiReceiver*>(ctx);
+  self->last_rx_us_.store(msg.timestamp_us, std::memory_order_relaxed);
+  if (self->on_frame_) self->on_frame_(msg);
 }
 
 }  // namespace espos_n2k

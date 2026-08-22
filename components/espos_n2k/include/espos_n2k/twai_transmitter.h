@@ -5,18 +5,17 @@
 #include <atomic>
 #include <cstdint>
 
-#include "driver/twai.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/task.h"
 
-#include "espos_n2k/twai_message.h"
+#include "espos_n2k/can_frame.h"
 
 namespace espos_n2k {
 
-/// Accepts TwaiMessage values and transmits them on the CAN bus.
-/// Runs a dedicated FreeRTOS task that drains a TX queue.
+/// Accepts CanMessage values and transmits them on the CAN bus.
+///
+/// The bus itself belongs to the receiver, which configures the pins and the
+/// bitrate; start the receiver first. Queueing is the driver's — esp_twai has
+/// a transmit queue of its own, so this class no longer runs a task.
 class TwaiTransmitter {
  public:
   explicit TwaiTransmitter(size_t tx_queue_depth = 32);
@@ -25,15 +24,18 @@ class TwaiTransmitter {
   void start();
   void stop();
 
-  /// ValueConsumer interface — queues a frame for transmission.
-  void set(const TwaiMessage& msg);
+  /// ValueConsumer interface — queues a frame for transmission. Does not
+  /// block: a full transmit queue drops the frame and counts a failure.
+  void set(const CanMessage& msg);
 
-  /// True if we have transmitted at least one frame since boot.
+  /// True if we have queued at least one frame since boot. (Queued, not
+  /// acknowledged on the wire — the driver reports that asynchronously and
+  /// this class does not subscribe to it.)
   bool ever_transmitted() const {
     return last_tx_us_.load(std::memory_order_relaxed) != 0;
   }
 
-  /// Seconds since the last transmitted frame. INT64_MAX if none yet.
+  /// Seconds since the last frame was queued. INT64_MAX if none yet.
   /// Replaces the old uint32_t tx_count_ which would overflow at ~20
   /// days of busy traffic.
   int64_t seconds_since_last_tx() const {
@@ -45,10 +47,7 @@ class TwaiTransmitter {
   uint32_t tx_fail_count() const { return tx_fail_count_; }
 
  private:
-  static void tx_task(void* arg);
-
-  QueueHandle_t tx_queue_ = nullptr;
-  TaskHandle_t tx_task_ = nullptr;
+  size_t tx_queue_depth_;
   std::atomic<bool> running_{false};
   // Microseconds-since-boot of last successful TX; 0 = nothing yet.
   std::atomic<int64_t> last_tx_us_{0};

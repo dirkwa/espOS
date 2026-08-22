@@ -8,7 +8,7 @@
 
 namespace espos_n2k {
 
-int candump_encode(const TwaiMessage& msg, const char* iface,
+int candump_encode(const CanMessage& msg, const char* iface,
                    char* buf, size_t buf_len) {
   // Format: (seconds.microseconds) iface CANID#HEXDATA\n
   // Use wall-clock time (Unix epoch) so SignalK gets valid timestamps.
@@ -26,8 +26,8 @@ int candump_encode(const TwaiMessage& msg, const char* iface,
 
   // Build the hex data string
   char data_hex[17];  // max 8 bytes = 16 hex chars + null
-  int data_len = msg.frame.data_length_code;
-  if (data_len > 8) data_len = 8;
+  int data_len = msg.frame.dlc;
+  if (data_len > (int)kCanMaxData) data_len = (int)kCanMaxData;
   for (int i = 0; i < data_len; i++) {
     snprintf(data_hex + i * 2, 3, "%02X", msg.frame.data[i]);
   }
@@ -36,12 +36,12 @@ int candump_encode(const TwaiMessage& msg, const char* iface,
   // CAN ID — always 8 hex digits for extended frames (NMEA 2000)
   int n = snprintf(buf, buf_len, "(%lld.%06lld) %s %08X#%s\n",
                    (long long)sec, (long long)usec,
-                   iface, (unsigned)msg.frame.identifier, data_hex);
+                   iface, (unsigned)msg.frame.id, data_hex);
   if (n < 0 || (size_t)n >= buf_len) return -1;
   return n;
 }
 
-bool candump_decode(const char* line, TwaiMessage* out) {
+bool candump_decode(const char* line, CanMessage* out) {
   // Parse: (seconds.microseconds) iface CANID#HEXDATA
   if (!line || !out) return false;
 
@@ -74,22 +74,19 @@ bool candump_decode(const char* line, TwaiMessage* out) {
   if (*hash != '#') return false;
   hash++;
 
-  out->frame.identifier = can_id;
-  out->frame.extd = 1;  // NMEA 2000 always extended
-  out->frame.rtr = 0;
-  out->frame.ss = 0;
-  out->frame.self = 0;
-  out->frame.dlc_non_comp = 0;
+  out->frame.id = can_id;
+  out->frame.extended = true;  // NMEA 2000 always extended
+  out->frame.remote = false;
 
   // Parse hex data bytes
   int data_len = 0;
-  while (*hash && *hash != '\n' && *hash != '\r' && data_len < 8) {
+  while (*hash && *hash != '\n' && *hash != '\r' && data_len < (int)kCanMaxData) {
     unsigned int byte;
     if (sscanf(hash, "%2x", &byte) != 1) break;
     out->frame.data[data_len++] = (uint8_t)byte;
     hash += 2;
   }
-  out->frame.data_length_code = data_len;
+  out->frame.dlc = (uint8_t)data_len;
 
   return data_len > 0;
 }

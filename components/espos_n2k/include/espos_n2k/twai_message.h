@@ -1,17 +1,20 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
-#ifndef COCKPIT_N2K_TWAI_MESSAGE_H_
-#define COCKPIT_N2K_TWAI_MESSAGE_H_
+#ifndef ESPOS_N2K_TWAI_MESSAGE_H_
+#define ESPOS_N2K_TWAI_MESSAGE_H_
 
-#include "driver/twai.h"
+/// Compatibility header. `TwaiMessage` was a thin wrapper around the driver's
+/// `twai_message_t`; it is now an alias for CanMessage, which carries the same
+/// information without naming a driver type. The FIELDS changed with it —
+/// `identifier`/`data_length_code`/`extd` are `id`/`dlc`/`extended` — so this
+/// keeps code that names the type compiling, not code that reaches inside it.
+///
+/// Include espos_n2k/can_frame.h directly in new code.
+#include "espos_n2k/can_frame.h"
 
 namespace espos_n2k {
 
-/// Thin wrapper around twai_message_t with a microsecond timestamp.
-struct TwaiMessage {
-  twai_message_t frame;
-  int64_t timestamp_us;  // esp_timer_get_time()
-};
+using TwaiMessage = CanMessage;
 
 }  // namespace espos_n2k
 
-#endif  // COCKPIT_N2K_TWAI_MESSAGE_H_
+#endif  // ESPOS_N2K_TWAI_MESSAGE_H_
