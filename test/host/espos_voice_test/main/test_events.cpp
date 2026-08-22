@@ -243,6 +243,30 @@ TEST_CASE("parse_detection accepts a bare detection", "[events]")
     TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
 }
 
+/* Malformed data used to read as a valid detection with an unknown name,
+ * which is how a garbled frame woke the panel. It is refused now; an absent
+ * or null name inside a well-formed object still means the word fired. */
+TEST_CASE("parse_detection refuses data it cannot parse", "[events]")
+{
+    DecodedEvent ev;
+    ev.type = "detection";
+    std::string name = "stale";
+
+    ev.data_json = "{\"name\":";           /* truncated */
+    TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
+    ev.data_json = "not json at all";
+    TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
+    ev.data_json = "[\"an array\"]";       /* valid JSON, wrong shape */
+    TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
+
+    ev.data_json = "{}";
+    TEST_ASSERT_TRUE(espos_voice::parse_detection(ev, &name));
+    TEST_ASSERT_EQUAL_STRING("", name.c_str());
+    ev.data_json = "{\"name\":null}";
+    TEST_ASSERT_TRUE(espos_voice::parse_detection(ev, &name));
+    TEST_ASSERT_EQUAL_STRING("", name.c_str());
+}
+
 TEST_CASE("parse_ping_text tolerates a ping with nothing in it", "[events]")
 {
     DecodedEvent ev;

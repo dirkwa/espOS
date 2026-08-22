@@ -191,7 +191,12 @@ bool parse_detection(const DecodedEvent& ev, std::string* name) {
   if (ev.type != "detection") return false;
   name->clear();
   if (ev.data_json.empty()) return true;  // detection with no data is valid
+  // A data block that will not parse is not a detection with an unknown name,
+  // it is a frame we do not understand -- and acting on it means waking the
+  // panel because something got garbled. An absent or null `name` inside a
+  // well-formed object is different, and still means "the wake word fired".
   JsonPtr doc = parse(ev.data_json);
+  if (!doc) return false;
   const char* n = str_field(doc, "name");  // null/absent -> leave empty
   if (n) *name = n;
   return true;
