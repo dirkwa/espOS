@@ -1,7 +1,12 @@
 ## espos_voice component manifest
 dependencies:
   idf: ">=6.0.0"
-  bblanchon/arduinojson: "^7.4.0"
+  # cJSON, exact-pinned like every other registry dependency here: the
+  # Wyoming protocol code used ArduinoJson, which meant a firmware with a
+  # voice satellite linked two JSON libraries -- cJSON for everything espOS
+  # does and ArduinoJson for this one component -- and paid for both in
+  # flash. Nothing in the protocol needed what ArduinoJson does differently.
+  espressif/cjson: "==1.7.19~2"
   espressif/esp-sr:
     version: "^2.5.0"
     rules:

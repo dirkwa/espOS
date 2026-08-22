@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include "ArduinoJson.h"
 #include "espos_voice/protocol/events.h"
+#include "jsonx.h"
 #include "unity.h"
 
 using espos_voice::AudioFormat;
@@ -75,25 +75,31 @@ TEST_CASE("info advertises one mic and one snd program with our formats", "[even
     const Decoded d = decode_one(wire);
     TEST_ASSERT_EQUAL_STRING("info", d.type.c_str());
 
-    JsonDocument doc;
-    TEST_ASSERT_FALSE(deserializeJson(doc, d.data_json));
+    jsonx::Doc doc(d.data_json);
+    TEST_ASSERT_TRUE(doc.valid());
 
     /* All seven program lists present, five of them empty. */
     for (const char *empty : {"asr", "tts", "handle", "intent", "wake"}) {
-        TEST_ASSERT_TRUE_MESSAGE(doc[empty].is<JsonArray>(), empty);
-        TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)doc[empty].as<JsonArray>().size());
+        TEST_ASSERT_TRUE_MESSAGE(jsonx::is_array(doc.get(), empty), empty);
+        TEST_ASSERT_EQUAL_INT(0, jsonx::array_size(doc.get(), empty));
     }
-    TEST_ASSERT_EQUAL_UINT32(1, (uint32_t)doc["mic"].as<JsonArray>().size());
-    TEST_ASSERT_EQUAL_UINT32(1, (uint32_t)doc["snd"].as<JsonArray>().size());
+    TEST_ASSERT_EQUAL_INT(1, jsonx::array_size(doc.get(), "mic"));
+    TEST_ASSERT_EQUAL_INT(1, jsonx::array_size(doc.get(), "snd"));
 
-    TEST_ASSERT_EQUAL_STRING("cockpit", doc["mic"][0]["name"] | "");
-    TEST_ASSERT_EQUAL_UINT32(16000, doc["mic"][0]["mic_format"]["rate"] | 0u);
-    TEST_ASSERT_EQUAL_UINT32(22050, doc["snd"][0]["snd_format"]["rate"] | 0u);
-    TEST_ASSERT_EQUAL_UINT32(2, doc["snd"][0]["snd_format"]["width"] | 0u);
+    const cJSON *mic = jsonx::at(doc.get(), "mic", 0);
+    const cJSON *snd = jsonx::at(doc.get(), "snd", 0);
+    TEST_ASSERT_NOT_NULL(mic);
+    TEST_ASSERT_NOT_NULL(snd);
+    TEST_ASSERT_EQUAL_STRING("cockpit", jsonx::str(mic, "name"));
+    TEST_ASSERT_EQUAL_UINT32(16000, jsonx::num(jsonx::field(mic, "mic_format"), "rate"));
+    TEST_ASSERT_EQUAL_UINT32(22050, jsonx::num(jsonx::field(snd, "snd_format"), "rate"));
+    TEST_ASSERT_EQUAL_UINT32(2, jsonx::num(jsonx::field(snd, "snd_format"), "width"));
 
-    TEST_ASSERT_EQUAL_STRING("cockpit", doc["satellite"]["name"] | "");
-    TEST_ASSERT_TRUE(doc["satellite"]["supports_trigger"] | false);
-    TEST_ASSERT_TRUE(doc["satellite"]["active_wake_words"].is<JsonArray>());
+    const cJSON *sat = jsonx::field(doc.get(), "satellite");
+    TEST_ASSERT_NOT_NULL(sat);
+    TEST_ASSERT_EQUAL_STRING("cockpit", jsonx::str(sat, "name"));
+    TEST_ASSERT_TRUE(jsonx::boolean(sat, "supports_trigger"));
+    TEST_ASSERT_TRUE(jsonx::is_array(sat, "active_wake_words"));
 }
 
 /* null vs absent: the reference sends `text: null`, and an orchestrator that
@@ -123,12 +129,12 @@ TEST_CASE("run-pipeline asks for asr..tts and names the satellite", "[events]")
     const Decoded d = decode_one(wire);
     TEST_ASSERT_EQUAL_STRING("run-pipeline", d.type.c_str());
 
-    JsonDocument doc;
-    TEST_ASSERT_FALSE(deserializeJson(doc, d.data_json));
-    TEST_ASSERT_EQUAL_STRING("asr", doc["start_stage"] | "");
-    TEST_ASSERT_EQUAL_STRING("tts", doc["end_stage"] | "");
-    TEST_ASSERT_FALSE(doc["restart_on_end"] | true);
-    TEST_ASSERT_EQUAL_STRING("cockpit", doc["name"] | "");
+    jsonx::Doc doc(d.data_json);
+    TEST_ASSERT_TRUE(doc.valid());
+    TEST_ASSERT_EQUAL_STRING("asr", jsonx::str(doc.get(), "start_stage"));
+    TEST_ASSERT_EQUAL_STRING("tts", jsonx::str(doc.get(), "end_stage"));
+    TEST_ASSERT_TRUE(jsonx::is_false(doc.get(), "restart_on_end"));
+    TEST_ASSERT_EQUAL_STRING("cockpit", jsonx::str(doc.get(), "name"));
 }
 
 TEST_CASE("detect with no names listens for any wake word", "[events]")

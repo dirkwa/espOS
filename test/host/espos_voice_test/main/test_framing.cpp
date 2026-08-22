@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include "ArduinoJson.h"
 #include "espos_voice/protocol/framing.h"
+#include "jsonx.h"
 #include "unity.h"
 
 using espos_voice::DecodedEvent;
@@ -83,10 +83,10 @@ TEST_CASE("data block is byte-counted and spliced after the header", "[framing]"
     std::vector<uint8_t> wire;
     espos_voice::encode_event(wire, "transcript", data, nullptr, 0);
 
-    JsonDocument header;
-    TEST_ASSERT_FALSE(deserializeJson(header, header_line(wire)));
-    TEST_ASSERT_EQUAL_UINT32((uint32_t)data.size(), header["data_length"] | 0u);
-    TEST_ASSERT_FALSE(header["payload_length"].is<uint32_t>());
+    jsonx::Doc header(header_line(wire));
+    TEST_ASSERT_TRUE(header.valid());
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)data.size(), jsonx::num(header.get(), "data_length"));
+    TEST_ASSERT_FALSE(jsonx::has_number(header.get(), "payload_length"));
 
     const std::string tail = as_text(wire).substr(header_line(wire).size() + 1);
     TEST_ASSERT_EQUAL_STRING(data.c_str(), tail.c_str());
@@ -108,9 +108,9 @@ TEST_CASE("payload follows the data block and is byte-counted", "[framing]")
     std::vector<uint8_t> wire;
     espos_voice::encode_event(wire, "audio-chunk", "{\"rate\":16000}", pcm, sizeof(pcm));
 
-    JsonDocument header;
-    TEST_ASSERT_FALSE(deserializeJson(header, header_line(wire)));
-    TEST_ASSERT_EQUAL_UINT32((uint32_t)sizeof(pcm), header["payload_length"] | 0u);
+    jsonx::Doc header(header_line(wire));
+    TEST_ASSERT_TRUE(header.valid());
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)sizeof(pcm), jsonx::num(header.get(), "payload_length"));
 
     EventDecoder dec;
     Sink sink;
@@ -197,6 +197,21 @@ TEST_CASE("an oversized data_length is rejected, not allocated", "[framing]")
     const std::vector<uint8_t> wire = as_bytes(line);
     TEST_ASSERT_FALSE(dec.feed(wire.data(), wire.size(), collect, &sink));
     TEST_ASSERT_TRUE(dec.failed());
+}
+
+/* data_length and payload_length are added together to decide how many bytes
+ * an event needs. On a 32-bit target 1 + 4294967295 wraps that sum to zero,
+ * which looks satisfied immediately: the decoder would then hand the callback
+ * a pointer past the end of its buffer and a 4 GiB length. */
+TEST_CASE("a payload_length that would wrap the byte count is rejected", "[framing]")
+{
+    EventDecoder dec;
+    Sink sink;
+    const std::vector<uint8_t> wire =
+        as_bytes("{\"type\":\"x\",\"data_length\":1,\"payload_length\":4294967295}\n");
+    TEST_ASSERT_FALSE(dec.feed(wire.data(), wire.size(), collect, &sink));
+    TEST_ASSERT_TRUE(dec.failed());
+    TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)sink.events.size());
 }
 
 TEST_CASE("a header line that never ends is rejected at the cap", "[framing]")

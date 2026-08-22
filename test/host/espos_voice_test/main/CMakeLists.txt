@@ -10,5 +10,5 @@ idf_component_register(
          "${voice_src}/src/protocol/framing.cpp"
          "${voice_src}/src/protocol/events.cpp"
     INCLUDE_DIRS "." "${voice_src}/include"
-    PRIV_REQUIRES unity log bblanchon__arduinojson
+    PRIV_REQUIRES unity log espressif__cjson
     WHOLE_ARCHIVE)
