@@ -48,7 +48,8 @@ espos_project_ui_partition()
 
 `espos_project_prologue()` enforces the pinned IDF version, checks the
 submodule is populated, puts `espos/components` on `EXTRA_COMPONENT_DIRS`,
-and manages the app-signing key — including forcing a re-link when the key
+sets `PROJECT_VER` from your project's own `git describe`/`version.txt`
+(docs/releasing.md), and manages the app-signing key — including forcing a re-link when the key
 changes, without which a rebuilt image keeps the *previous* key's signature
 and the device rejects every OTA. `espos_project_ui_partition()` (after
 `project()`) packs `espos/ui/dist-gz` into the LittleFS `storage` partition.

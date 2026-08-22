@@ -32,6 +32,7 @@ if(NOT EXISTS "${ESPOS_DIR}/components/espos_config/CMakeLists.txt")
                         "if espOS is a submodule, run `git submodule update --init`.")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/espos_version.cmake")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 #
@@ -60,6 +61,12 @@ macro(espos_project_prologue)
     endif()
 
     _espos_check_idf_version("${_ESPOS_NAME}" "${_ESPOS_IDF_VERSION_FILE}")
+
+    # Sets PROJECT_VER, which project() reads a few lines later. Here rather
+    # than in each firmware's root: a consumer wants to know which of ITS
+    # builds is on a device for the same reason espOS does, and version.txt
+    # alone cannot say.
+    espos_project_version()
 
     # In espOS's own tree components/ is already the project's component dir;
     # naming it again would register every component twice.

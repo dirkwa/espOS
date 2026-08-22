@@ -80,7 +80,7 @@ descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
 discovery & token](docs/signalk.md) · [OTA & signing](docs/ota.md) ·
 [Web UI](docs/ui.md) · [Device health](docs/health.md) · [BLE gateway](docs/ble.md) · [NMEA 2000
 gateway](docs/n2k.md) · [Voice satellite](docs/voice.md) ·
-[Development & host tests](docs/development.md) · [Security
+[Development & host tests](docs/development.md) · [Releasing](docs/releasing.md) · [Security
 notes](docs/security.md)
 
 ## Components
