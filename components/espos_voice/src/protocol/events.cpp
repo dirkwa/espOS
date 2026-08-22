@@ -38,7 +38,16 @@ std::string dump(const JsonPtr& doc) {
 // data block means.
 JsonPtr parse(const std::string& json) {
   if (json.empty()) return JsonPtr();
-  JsonPtr doc(cJSON_ParseWithLength(json.data(), json.size()));
+  // require_null_terminated: cJSON otherwise stops at the end of the first
+  // value and ignores whatever follows, so {"name":"wake"}garbage would parse
+  // as a perfectly good object. The data block is exactly data_length bytes
+  // off the wire, so trailing non-whitespace means the sender declared a
+  // length its own JSON does not fill -- a frame to refuse, not to interpret.
+  // Trailing whitespace is still fine; cJSON skips it before the check.
+  //
+  // size() + 1 so the string's own NUL is inside the buffer: the check reads
+  // the byte after the value and fails if it is past the end.
+  JsonPtr doc(cJSON_ParseWithLengthOpts(json.data(), json.size() + 1, nullptr, 1));
   if (!cJSON_IsObject(doc.get())) return JsonPtr();
   return doc;
 }
@@ -191,7 +200,12 @@ bool parse_detection(const DecodedEvent& ev, std::string* name) {
   if (ev.type != "detection") return false;
   name->clear();
   if (ev.data_json.empty()) return true;  // detection with no data is valid
+  // A data block that will not parse is not a detection with an unknown name,
+  // it is a frame we do not understand -- and acting on it means waking the
+  // panel because something got garbled. An absent or null `name` inside a
+  // well-formed object is different, and still means "the wake word fired".
   JsonPtr doc = parse(ev.data_json);
+  if (!doc) return false;
   const char* n = str_field(doc, "name");  // null/absent -> leave empty
   if (n) *name = n;
   return true;
