@@ -78,7 +78,7 @@ curl http://<device-ip>/api/v1/wifi/status
 Docs: [REST API contract](docs/api.md) · [Config store &
 descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
 discovery & token](docs/signalk.md) · [OTA & signing](docs/ota.md) ·
-[Web UI](docs/ui.md) · [BLE gateway](docs/ble.md) · [NMEA 2000
+[Web UI](docs/ui.md) · [Device health](docs/health.md) · [BLE gateway](docs/ble.md) · [NMEA 2000
 gateway](docs/n2k.md) · [Voice satellite](docs/voice.md) ·
 [Development & host tests](docs/development.md) · [Security
 notes](docs/security.md)
@@ -95,6 +95,7 @@ the rest are optional.
 | `espos_httpd` | HTTP server, REST API, SSE, the web UI from a LittleFS partition | [api.md](docs/api.md) · [ui.md](docs/ui.md) |
 | `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog | [wifi.md](docs/wifi.md) |
 | `espos_log` | Log ring served over REST, so a device is debuggable without a serial cable | — |
+| `espos_health` | Device conditions (warn/alarm) and the sinks that consume them | [health.md](docs/health.md) |
 | `espos_sk` | SignalK: mDNS discovery, access token, delta stream in and out | [signalk.md](docs/signalk.md) |
 | `espos_ota` | Signed OTA with rollback, from a URL or a version manifest | [ota.md](docs/ota.md) |
 | `espos_ble` | BLE gateway | [ble.md](docs/ble.md) |

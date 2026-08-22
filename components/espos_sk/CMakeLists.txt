@@ -12,6 +12,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS include
     REQUIRES espos_config espos_httpd espos_wifi
+    PRIV_REQUIRES espos_health
     PRIV_REQUIRES ${priv_reqs})
 
 espos_config_add_descriptor(config/sk.json)
