@@ -41,6 +41,9 @@ nav a:hover { background: var(--code); }
 .badge.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: #8a6d00; }
 .badge.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .badge.muted { color: var(--muted); }
+/* Inline emphasis for a number that is bad news on its own (dropped frames,
+   failed POSTs) — a badge would over-state a figure that is usually zero. */
+.bad { color: var(--bad); font-weight: 600; }
 @media (prefers-color-scheme: dark) { .badge.warn { color: #f0c94a; } }
 .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .5rem 0; }
 .spread { justify-content: space-between; }

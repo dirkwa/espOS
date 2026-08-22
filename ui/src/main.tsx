@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
-import { render } from "preact";
-import { App } from "./app";
-import { connectEvents } from "./api";
-import "./style.css";
+// espOS's own bundle: the core pages and nothing else. A firmware that wants
+// pages of its own has its own entry point calling registerPage() before
+// mount() — docs/ui.md.
+import { mount } from "./mount";
 
-connectEvents();
-render(<App />, document.getElementById("app")!);
+mount();

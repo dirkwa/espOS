@@ -1,24 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 // Shell: nav + a hand-rolled history router (no router dependency).
 import { useEffect, useState } from "preact/hooks";
-import type { ComponentType } from "preact";
 import { linkStore, useStore, wifiStore, skStore } from "./api";
-import { StatusPage } from "./pages/status";
-import { WifiPage } from "./pages/wifi";
-import { SignalKPage } from "./pages/signalk";
-import { ConfigPage } from "./pages/config";
-import { LogsPage } from "./pages/logs";
-import { OtaPage } from "./pages/ota";
-
-interface Route { path: string; title: string; page: ComponentType }
-const ROUTES: Route[] = [
-  { path: "/", title: "Status", page: StatusPage },
-  { path: "/wifi", title: "WiFi", page: WifiPage },
-  { path: "/signalk", title: "SignalK", page: SignalKPage },
-  { path: "/config", title: "Config", page: ConfigPage },
-  { path: "/logs", title: "Logs", page: LogsPage },
-  { path: "/ota", title: "OTA", page: OtaPage },
-];
+import type { Route } from "./routes";
 
 export function navigate(path: string) {
   history.pushState(null, "", path);
@@ -35,9 +19,9 @@ function usePath(): string {
   return p;
 }
 
-export function App() {
+export function App({ routes }: { routes: Route[] }) {
   const path = usePath();
-  const route = ROUTES.find((r) => r.path === path) ?? ROUTES[0]!;
+  const route = routes.find((r) => r.path === path) ?? routes[0]!;
   const link = useStore(linkStore);
   const wifi = useStore(wifiStore);
   const sk = useStore(skStore);
@@ -50,7 +34,7 @@ export function App() {
           <span class="logo">◈</span> espOS <small>{wifi?.hostname ?? ""}</small>
         </a>
         <nav>
-          {ROUTES.map((r) => (
+          {routes.map((r) => (
             <a key={r.path} href={r.path} class={r === route ? "active" : ""} onClick={(e) => { e.preventDefault(); navigate(r.path); }}>
               {r.title}
               {r.path === "/wifi" && wifi && <Dot ok={wifi.state === "connected"} warn={wifi.state === "connecting" || wifi.state === "obtaining_ip"} />}
