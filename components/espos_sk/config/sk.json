@@ -13,6 +13,8 @@
     {"name": "server_host", "type": "string", "default": "", "maxLength": 63, "title": "Manual server host",
      "description": "Host name or IP when mDNS is blocked. Empty = use discovery. When set, this address is used exclusively and mDNS discovery stops."},
     {"name": "server_port", "type": "int", "default": 80, "min": 1, "max": 65535, "title": "Manual server port"},
+    {"name": "tls", "type": "bool", "default": false, "title": "Use TLS (https/wss)", "restart_required": true,
+     "description": "Talk to the server over https and wss instead of http and ws. Requires a firmware built with ESPOS_SK_TLS; without it this setting is inert and the device logs that it is. The server certificate is validated against the bundled Mozilla roots, so a self-signed certificate will be refused."},
     {"name": "description", "type": "string", "default": "", "maxLength": 63, "title": "Access request description",
      "description": "Shown to the admin approving the request. Empty = espOS <hostname>."},
     {"name": "permissions", "type": "string", "default": "readwrite", "enum": ["readonly", "readwrite", "admin"],

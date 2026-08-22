@@ -173,6 +173,38 @@ updates in ~40 s of `navigation.*` from N2K sources, satellitesInView
 objects of several KiB reassembled, PUT round trip (405 from a server
 without handlers).
 
+## TLS (https / wss)
+
+Off by default and inert unless the firmware was built with
+`CONFIG_ESPOS_SK_TLS`, which compiles the TLS transports. With it, the
+`sk.tls` setting switches the device to `https://` for the access-request
+calls and `wss://` for the delta stream; `sk.tls` is `restart_required`,
+because the transport is built once when the stream task connects.
+
+What it is for: keeping the SignalK access token off the wire. The OTA path
+— the one an attacker would actually want — is protected by image signatures
+rather than by transport security (docs/ota.md), which is why plain `http`
+remains a reasonable default on a boat LAN. On a shared marina network, or
+anywhere the server is reachable from outside the boat, that reasoning stops
+applying.
+
+The scheme is a field on the chosen server (`espos_sk_server_t::tls`), not a
+compile-time branch at each call site, so the day discovery learns to
+advertise a scheme it becomes a value rather than a rewrite. Today nothing
+sets it but the configuration: SignalK's mDNS advertisement does not say
+whether the server speaks TLS.
+
+**Limits, on purpose.** The server certificate is verified against the
+bundled Mozilla roots. There is nowhere to pin a private CA yet, so a
+self-signed certificate — what a boat server most often has — is refused
+rather than accepted quietly; an "accept anything" switch would make the
+setting a decoration.
+
+The flash cost is near zero: a default espOS build already links mbedTLS and
+the certificate bundle for signed OTA, and the image measured the same size
+with and without `CONFIG_ESPOS_SK_TLS` on esp32c6. Budget ~20 KB of RAM for
+the open connection.
+
 ## API
 
 * `GET /api/v1/sk/status` — token/server/discovery status plus the `ws`

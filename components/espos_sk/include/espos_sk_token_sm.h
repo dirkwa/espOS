@@ -49,6 +49,12 @@ typedef enum {
 typedef struct {
     char host[ESPOS_SK_HOST_MAX];
     uint16_t port;
+    /* Scheme for this server: https/wss when true, http/ws when false. The
+     * transport is chosen from here rather than from a #ifdef at each call
+     * site, so a future per-server scheme (a discovered https advertisement,
+     * say) is a value change and not a rewrite. Effective only in builds with
+     * CONFIG_ESPOS_SK_TLS; see docs/signalk.md. */
+    bool tls;
     char self[ESPOS_SK_SELF_MAX];   /* vessel self URN if known (mDNS TXT / learned), else "" */
 } espos_sk_server_t;
 

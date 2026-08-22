@@ -10,6 +10,32 @@ menu "espOS SignalK"
             paths) can reach several KiB; raise on PSRAM boards that
             subscribe to whole families.
 
+    config ESPOS_SK_TLS
+        bool "Talk to the server over TLS (https/wss)"
+        default n
+        select MBEDTLS_CERTIFICATE_BUNDLE
+        help
+            Compile the https/wss transports, switchable per install with
+            the sk.tls setting (off by default, so enabling this changes
+            nothing until somebody asks for it).
+
+            Off by default because espOS is a boat-LAN device and the OTA
+            path -- the one that actually matters -- is protected by image
+            signatures rather than by transport security. What TLS buys
+            here is keeping the SignalK access token off the wire, which
+            starts to matter on a shared marina network or as soon as a
+            server is reachable from outside the boat.
+
+            Flash cost is close to nothing in a default espOS build:
+            mbedTLS and the certificate bundle are already linked because
+            signed OTA goes through esp_https_ota (measured on esp32c6,
+            same image size with and without). What it does cost is
+            roughly 20 KB of RAM while the stream connection is open.
+
+            The server certificate is verified against the bundled
+            Mozilla roots; there is no way yet to pin a private CA, so a
+            self-signed server certificate will be refused.
+
     config ESPOS_SK_NOTIFICATIONS
         bool "Device-health notifications"
         default y

@@ -57,6 +57,7 @@ static struct {
     bool cfg_pin;
     char cfg_host[ESPOS_SK_HOST_MAX];
     uint16_t cfg_port;
+    bool cfg_tls;
     bool have_server;
     espos_sk_server_t server;
     char server_source[12];          /* "manual" | "discovered" | "pinned" | "" */
@@ -156,6 +157,18 @@ static void load_cfg(void)
     int32_t v = 80;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_PORT, &v);
     s.cfg_port = (uint16_t)v;
+    bool tls = false;
+    espos_config_get_bool(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_TLS, &tls);
+#if !CONFIG_ESPOS_SK_TLS
+    /* Say it once, loudly, rather than quietly talking plaintext to a server
+     * the operator believes is protected. */
+    if (tls && !s.cfg_tls) {
+        ESP_LOGW(TAG, "sk.tls is on but this firmware was built without "
+                      "CONFIG_ESPOS_SK_TLS — continuing over http/ws");
+    }
+    tls = false;
+#endif
+    s.cfg_tls = tls;
     v = 60;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_DISCOVER_S, &v);
     s.discover_interval_ms = (uint32_t)v * 1000;
@@ -268,8 +281,12 @@ static void select_server(void)
         }
         unlock();
     }
+    /* One place, whichever way the server was chosen: discovery does not
+     * advertise a scheme, so it is the configuration that decides. */
+    chosen.tls = have && s.cfg_tls;
     bool changed = have != s.have_server || (have && (strcmp(chosen.host, s.server.host) != 0 ||
-                   chosen.port != s.server.port || strcmp(chosen.self, s.server.self) != 0));
+                   chosen.port != s.server.port || chosen.tls != s.server.tls ||
+                   strcmp(chosen.self, s.server.self) != 0));
     bool source_changed = strcmp(source, s.server_source) != 0;
     s.have_server = have;
     s.server = chosen;
@@ -279,7 +296,8 @@ static void select_server(void)
     }
     if (changed) {
         if (have) {
-            ESP_LOGI(TAG, "server: %s:%u (%s%s%s)", chosen.host, chosen.port, source,
+            ESP_LOGI(TAG, "server: %s%s:%u (%s%s%s)", chosen.tls ? "https://" : "http://",
+                     chosen.host, chosen.port, source,
                      chosen.self[0] ? " " : "", chosen.self);
         } else {
             ESP_LOGI(TAG, "no server (waiting for discovery or manual host)");

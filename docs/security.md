@@ -15,6 +15,25 @@ cannot forge such a request cross-origin without a CORS preflight, which
 the device never answers — so drive-by reboots/resets from a malicious
 site are blocked even without auth. Direct network access is not.
 
+## Transport
+
+Traffic to the SignalK server is plain `http`/`ws` unless the firmware is
+built with `CONFIG_ESPOS_SK_TLS` and `sk.tls` is turned on (docs/signalk.md).
+The consequence to be clear about: the access token travels in an
+`Authorization` header over an unencrypted connection, so anyone who can
+capture traffic on the boat LAN can replay it against the server with
+whatever permissions the token was granted.
+
+That is an acceptable trade on a boat's own network — the same network
+already carries unauthenticated NMEA — and a poor one on a shared marina
+network. Firmware updates do not depend on it either way: images are
+signature-verified by the running app, so a plain-http image source cannot
+be substituted (see below).
+
+The device's own web server is http-only. The REST API is unauthenticated
+(above), so adding TLS there without authentication would encrypt an open
+door; both belong in the same future change.
+
 ## Secrets at rest
 
 WiFi passwords (M2) and the SignalK token (M3) live in NVS. For production
