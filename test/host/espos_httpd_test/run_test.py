@@ -57,8 +57,21 @@ class Harness:
         deadline = time.time() + 20
         self.log = []
         ready = False
-        # Ready when the harness says so OR when the port answers (the READY
-        # line travels through stdio, the port is the ground truth).
+        # Ready ONLY when the harness says so.
+        #
+        # An open port is not readiness. espos_httpd_start() calls httpd_start()
+        # — which binds and listens — and registers its URI handlers afterwards,
+        # static (the one serving "/") second to last. main.c writes
+        # ESPOS_HARNESS_READY after all of that, so the line is the ground truth
+        # and the port is merely the first step towards it.
+        #
+        # Accepting the port here raced: under load the window between the bind
+        # and the last handler widened, the first request of a fresh harness hit
+        # a server whose route table was incomplete, and the reply was a
+        # perfectly well-formed 404 rather than a connection error. That looks
+        # exactly like a routing bug, which is an expensive thing to chase.
+        # Observed as UiAndLogsTests.test_01 failing "404 != 200" on "/" while
+        # every endpoint registered before static passed in the same run.
         while time.time() < deadline:
             if self.proc.poll() is not None:
                 break
@@ -71,12 +84,15 @@ class Harness:
                 if "ESPOS_HARNESS_READY" in line:
                     ready = True
                     break
-            if not free_port_check(PORT):
-                ready = True
-                break
         if not ready:
+            # Distinguish "never started" from "started but never announced" —
+            # the second means main.c changed, not that the machine was slow.
+            hint = ""
+            if self.proc.poll() is None and not free_port_check(PORT):
+                hint = (f" (port {PORT} is open but ESPOS_HARNESS_READY never arrived: "
+                        "does main.c still write it after espos_httpd_start()?)")
             self.stop()
-            raise RuntimeError("harness did not become ready:\n" + "".join(self.log))
+            raise RuntimeError(f"harness did not become ready{hint}:\n" + "".join(self.log))
         # Keep draining stdout so the harness never blocks on a full pipe and
         # tests can grep self.log.
         self._reader = threading.Thread(target=self._drain, daemon=True)
