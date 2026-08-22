@@ -16,7 +16,11 @@
 
 #include "cJSON.h"
 #include "esp_http_client.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "esp_crt_bundle.h"
+#endif
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 #include "espos_sk_priv.h"
 
@@ -48,7 +52,8 @@ static int perform(const espos_sk_server_t *srv, esp_http_client_method_t method
                    const char *json_body, const char *bearer, char **body_out)
 {
     char url[8 + ESPOS_SK_HOST_MAX + 8 + ESPOS_SK_HREF_MAX]; /* scheme + host + :port + path */
-    snprintf(url, sizeof(url), "http://%s:%u%s", srv->host, (unsigned)srv->port, path);
+    snprintf(url, sizeof(url), "%s://%s:%u%s", srv->tls ? "https" : "http", srv->host,
+             (unsigned)srv->port, path);
     body_t b = { .buf = calloc(1, BODY_MAX), .len = 0 };
     *body_out = NULL;
     if (!b.buf) {
@@ -63,6 +68,14 @@ static int perform(const espos_sk_server_t *srv, esp_http_client_method_t method
         .disable_auto_redirect = true,
         .keep_alive_enable = false,
         .buffer_size_tx = 1536, /* room for "Authorization: Bearer <jwt up to 1 KiB>" */
+#if CONFIG_ESPOS_SK_TLS
+        /* Server certificates are checked against the bundled Mozilla roots.
+         * A boat server with a self-signed certificate will be refused, which
+         * is the honest outcome: espOS has nowhere to pin a private CA yet,
+         * and quietly accepting any certificate would make the setting a
+         * decoration. See docs/signalk.md. */
+        .crt_bundle_attach = srv->tls ? esp_crt_bundle_attach : NULL,
+#endif
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) {

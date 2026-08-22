@@ -20,6 +20,10 @@
 #include "esp_system.h"
 #include "esp_transport.h"
 #include "esp_transport_tcp.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "esp_crt_bundle.h"
+#include "esp_transport_ssl.h"
+#endif
 #include "esp_transport_ws.h"
 #include "sdkconfig.h"
 
@@ -559,7 +563,20 @@ static void ws_task(void *arg)
             }
             /* connect */
             if (!tcp) {
+                /* The underlying transport is the whole of the ws-vs-wss
+                 * difference: esp_transport_ws sits on either. Built once per
+                 * task, so a scheme change needs a reconnect -- which is why
+                 * sk.tls is restart_required. */
+#if CONFIG_ESPOS_SK_TLS
+                if (srv.tls) {
+                    tcp = esp_transport_ssl_init();
+                    esp_transport_ssl_crt_bundle_attach(tcp, esp_crt_bundle_attach);
+                } else {
+                    tcp = esp_transport_tcp_init();
+                }
+#else
                 tcp = esp_transport_tcp_init();
+#endif
                 ws = esp_transport_ws_init(tcp);
             }
             esp_transport_ws_set_path(ws, "/signalk/v1/stream?subscribe=none&sendMeta=all");
@@ -569,7 +586,8 @@ static void ws_task(void *arg)
                 headers[0] = '\0';
             }
             esp_transport_ws_set_headers(ws, headers[0] ? headers : NULL);
-            ESP_LOGI(TAG, "connecting to ws://%s:%u/signalk/v1/stream (subscribe=none, sendMeta=all)", srv.host, srv.port);
+            ESP_LOGI(TAG, "connecting to %s://%s:%u/signalk/v1/stream (subscribe=none, sendMeta=all)",
+                     srv.tls ? "wss" : "ws", srv.host, srv.port);
             int rc = esp_transport_connect(ws, srv.host, srv.port, 8000);
             if (rc < 0) {
                 int http = esp_transport_ws_get_upgrade_request_status(ws);
