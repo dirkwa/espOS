@@ -33,6 +33,32 @@ done
 embedded placeholder page. `npm run dev` runs the UI against an API mock;
 see [ui.md](ui.md).
 
+## Building a firmware on espOS
+
+A firmware project vendors espOS as a submodule (`espos/`) and includes the
+shared prologue; that is the whole of the espOS-specific build glue:
+
+```cmake
+cmake_minimum_required(VERSION 3.22)
+include("${CMAKE_CURRENT_LIST_DIR}/espos/cmake/espos_project.cmake")
+espos_project_prologue(NAME "my-firmware")
+project(my_firmware)
+espos_project_ui_partition()
+```
+
+`espos_project_prologue()` enforces the pinned IDF version, checks the
+submodule is populated, puts `espos/components` on `EXTRA_COMPONENT_DIRS`,
+and manages the app-signing key — including forcing a re-link when the key
+changes, without which a rebuilt image keeps the *previous* key's signature
+and the device rejects every OTA. `espos_project_ui_partition()` (after
+`project()`) packs `espos/ui/dist-gz` into the LittleFS `storage` partition.
+
+Options: `IDF_VERSION_FILE` and `SIGNING_KEY` on the prologue,
+`PARTITION`/`DIR` on the UI call, and `-DESPOS_ALLOW_IDF_MISMATCH=1` to
+downgrade a version mismatch to a warning. A project that keeps its own
+`.idf-version` must keep it equal to espOS's — disagreeing pins are a hard
+error, not a silent choice between the two.
+
 ## Host tests (no hardware)
 
 ```sh
