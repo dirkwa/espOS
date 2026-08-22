@@ -1,2 +1,2 @@
 dependencies:
-  bblanchon/arduinojson: "^7.4.0"
+  espressif/cjson: "==1.7.19~2"
