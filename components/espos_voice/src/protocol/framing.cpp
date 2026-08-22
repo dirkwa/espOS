@@ -2,35 +2,57 @@
 #include "espos_voice/protocol/framing.h"
 
 #include <cstring>
+#include <memory>
 
+#include "cJSON.h"
 #include "esp_log.h"
 
 namespace espos_voice {
 
 namespace {
+
 constexpr const char* kTag = "wyoming_frame";
+
+// cJSON hands back raw pointers; these keep the ownership visible at the call
+// site instead of relying on every early return remembering to free.
+struct JsonDeleter {
+  void operator()(cJSON* j) const { cJSON_Delete(j); }
+};
+using JsonPtr = std::unique_ptr<cJSON, JsonDeleter>;
+
+struct JsonTextDeleter {
+  void operator()(char* p) const { cJSON_free(p); }
+};
+using JsonText = std::unique_ptr<char, JsonTextDeleter>;
+
 }  // namespace
 
 void encode_event(std::vector<uint8_t>& out, const char* type,
                   const std::string& data_json, const uint8_t* payload,
                   size_t payload_len) {
-  // The header is itself JSON. Build it with a small ArduinoJson doc so
-  // escaping is correct, then splice the data block / payload after it.
+  // The header is itself JSON. Build it with cJSON so escaping is correct,
+  // then splice the data block / payload after it. Field order matters only
+  // for readability -- cJSON keeps insertion order -- but the byte counts do
+  // not include the newline, and the data block has no separator of its own.
   const bool has_data = !data_json.empty() && data_json != "{}";
 
-  JsonDocument header;
-  header["type"] = type;
-  header["version"] = kWyomingVersion;
-  if (has_data) header["data_length"] = (uint32_t)data_json.size();
+  JsonPtr header(cJSON_CreateObject());
+  if (!header) return;
+  cJSON_AddStringToObject(header.get(), "type", type);
+  cJSON_AddStringToObject(header.get(), "version", kWyomingVersion);
+  if (has_data) {
+    cJSON_AddNumberToObject(header.get(), "data_length", (double)data_json.size());
+  }
   if (payload && payload_len > 0) {
-    header["payload_length"] = (uint32_t)payload_len;
+    cJSON_AddNumberToObject(header.get(), "payload_length", (double)payload_len);
   }
 
-  std::string header_line;
-  serializeJson(header, header_line);
-  header_line.push_back('\n');
+  JsonText header_line(cJSON_PrintUnformatted(header.get()));
+  if (!header_line) return;
+  const size_t line_len = strlen(header_line.get());
 
-  out.insert(out.end(), header_line.begin(), header_line.end());
+  out.insert(out.end(), header_line.get(), header_line.get() + line_len);
+  out.push_back('\n');
   if (has_data) out.insert(out.end(), data_json.begin(), data_json.end());
   if (payload && payload_len > 0) {
     out.insert(out.end(), payload, payload + payload_len);
@@ -68,28 +90,33 @@ bool EventDecoder::read_header() {
   std::string line((const char*)&buf_[pos_], nl - pos_);
   pos_ = nl + 1;
 
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, line);
-  if (err || !doc.is<JsonObject>()) {
-    ESP_LOGE(kTag, "malformed header JSON: %s", err.c_str());
+  JsonPtr doc(cJSON_ParseWithLength(line.data(), line.size()));
+  if (!doc || !cJSON_IsObject(doc.get())) {
+    ESP_LOGE(kTag, "malformed header JSON");
     failed_ = true;
     return false;
   }
 
-  const char* type = doc["type"];
-  if (!type || type[0] == '\0') {
+  const cJSON* type = cJSON_GetObjectItemCaseSensitive(doc.get(), "type");
+  if (!cJSON_IsString(type) || !type->valuestring || type->valuestring[0] == '\0') {
     ESP_LOGE(kTag, "header missing \"type\"");
     failed_ = true;
     return false;
   }
-  type_ = type;
+  type_ = type->valuestring;
 
-  // Lengths: absent/null => 0. Reject negatives / oversize.
-  long data_len = doc["data_length"] | 0;
-  long payload_len = doc["payload_length"] | 0;
-  if (data_len < 0 || payload_len < 0 ||
-      (size_t)data_len > kMaxDataBytes) {
-    ESP_LOGE(kTag, "invalid length fields (data=%ld payload=%ld)", data_len,
+  // Lengths: absent/null/non-numeric => 0. Reject negatives, non-integers and
+  // anything past the cap -- these sizes are what the decoder is about to
+  // trust when it waits for that many bytes.
+  double data_len = 0, payload_len = 0;
+  const cJSON* dl = cJSON_GetObjectItemCaseSensitive(doc.get(), "data_length");
+  const cJSON* pl = cJSON_GetObjectItemCaseSensitive(doc.get(), "payload_length");
+  if (cJSON_IsNumber(dl)) data_len = dl->valuedouble;
+  if (cJSON_IsNumber(pl)) payload_len = pl->valuedouble;
+  if (data_len < 0 || payload_len < 0 || data_len > (double)kMaxDataBytes ||
+      payload_len > (double)SIZE_MAX || data_len != (double)(size_t)data_len ||
+      payload_len != (double)(size_t)payload_len) {
+    ESP_LOGE(kTag, "invalid length fields (data=%.0f payload=%.0f)", data_len,
              payload_len);
     failed_ = true;
     return false;
@@ -100,9 +127,10 @@ bool EventDecoder::read_header() {
   // Inline header `data` object is accepted on read (never written by the
   // reference); the out-of-line block, if present, wins over it.
   inline_data_json_.clear();
-  JsonVariantConst inline_data = doc["data"];
-  if (inline_data.is<JsonObjectConst>()) {
-    serializeJson(inline_data, inline_data_json_);
+  const cJSON* inline_data = cJSON_GetObjectItemCaseSensitive(doc.get(), "data");
+  if (cJSON_IsObject(inline_data)) {
+    JsonText text(cJSON_PrintUnformatted(inline_data));
+    if (text) inline_data_json_ = text.get();
   }
 
   have_header_ = true;

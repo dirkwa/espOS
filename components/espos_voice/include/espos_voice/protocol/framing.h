@@ -25,8 +25,6 @@
 #include <string>
 #include <vector>
 
-#include "ArduinoJson.h"
-
 namespace espos_voice {
 
 // Protocol version written into every header we send (never validated by
