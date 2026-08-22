@@ -25,6 +25,7 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_health.h"
 #include "espos_httpd_sse.h"
 #include "espos_sk.h"
 #include "espos_sk_delta.h"
@@ -285,115 +286,68 @@ static void reconcile_meta(const espos_sk_server_t *srv, const char *token)
 
 #if CONFIG_ESPOS_SK_NOTIFICATIONS
 
-/* Last state+message per key, so a caller can re-raise on every poll without
- * flooding the server with identical deltas.
+/* Conditions themselves live in espos_health: it owns the per-key state and
+ * the level-triggered dedup, and knows nothing about SignalK. What is left
+ * here is one sink that turns a change into a delta -- so a component with a
+ * condition to report (espos_voice's wake service, an application's bus
+ * timeout) depends on espos_health and not on the whole SignalK stack.
  *
- * Allocated on first use rather than as a static table: a device that never
- * notifies should not pay for the feature, and on a 320 KB-SRAM part a
- * permanently-reserved kilobyte is worth avoiding. Entries are never freed --
- * the set of conditions a firmware can raise is fixed at build time, so this
- * grows to at most CONFIG_ESPOS_SK_MAX_NOTIFY and then stops. */
-#define NOTIFY_MAX CONFIG_ESPOS_SK_MAX_NOTIFY
-#define NOTIFY_KEY_MAX 24
-#define NOTIFY_MSG_MAX 96
-typedef struct {
-    char key[NOTIFY_KEY_MAX];
-    espos_sk_alert_t state;
-    char msg[NOTIFY_MSG_MAX];
-} notify_slot_t;
-static notify_slot_t *s_notify;   /* NULL until the first notification */
-static uint8_t s_notify_count;
-/* Callers are on different tasks - publish_health() on the stream task,
- * espos_voice on its wake task - so the table needs its own lock. Not s.lock:
- * espos_sk_publish_json() takes that, and this must not be held across the
- * publish. */
-static SemaphoreHandle_t s_notify_lock;
+ * The two enums are the same three levels in the same order, and stay that
+ * way: espos_sk_notify() is public API and forwards straight through. */
+_Static_assert((int)ESPOS_SK_ALERT_NORMAL == (int)ESPOS_HEALTH_NORMAL, "alert/health enums diverged");
+_Static_assert((int)ESPOS_SK_ALERT_WARN == (int)ESPOS_HEALTH_WARN, "alert/health enums diverged");
+_Static_assert((int)ESPOS_SK_ALERT_ALARM == (int)ESPOS_HEALTH_ALARM, "alert/health enums diverged");
 
-/* Created once, before any task can race for it: espos_sk_start() runs from
- * app_main long before the stream or wake tasks exist. Creating it lazily
- * needed a double-checked lock, and the unsynchronised read that pattern
- * relies on is exactly the kind of thing that works until it does not. */
-static void notify_lock_init(void)
+/* Set once the sink is registered, which espos_sk_ws_start() does. */
+static volatile bool s_notify_ready;
+
+/* Runs on whichever task reported the condition, with no espos_health lock
+ * held. Returns void: a sink cannot fail usefully, and a delta that cannot be
+ * published now is the buffer's problem, not the reporter's. */
+static void health_sink(const char *key, espos_health_state_t state,
+                        const char *message, void *arg)
 {
-    if (!s_notify_lock) s_notify_lock = xSemaphoreCreateMutex();
-}
+    (void)arg;
+    const char *st = espos_health_state_str(state);
 
-esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
-{
-    if (!key || !key[0]) return ESP_ERR_INVALID_ARG;
-    if (!message) message = "";
-    /* Reject rather than truncate. A key clipped to fit would never match on
-     * the next lookup, so every call would consume another slot until the
-     * table filled; and a clipped path is a different SignalK path, which is
-     * worse than an error the caller can see. */
-    if (strlen(key) >= NOTIFY_KEY_MAX) return ESP_ERR_INVALID_SIZE;
-    if (strlen(message) >= NOTIFY_MSG_MAX) return ESP_ERR_INVALID_SIZE;
-
-    /* Created in espos_sk_ws_start(), which espos_sk_start() always calls. A
-     * null here means notifying before the SignalK subsystem was started,
-     * which is a caller error rather than a timeout. */
-    SemaphoreHandle_t lk = s_notify_lock;
-    if (!lk) return ESP_ERR_INVALID_STATE;
-    if (xSemaphoreTake(lk, pdMS_TO_TICKS(200)) != pdTRUE) return ESP_ERR_TIMEOUT;
-
-    int slot = -1;
-    for (int i = 0; i < s_notify_count; i++) {
-        if (strcmp(s_notify[i].key, key) == 0) { slot = i; break; }
-    }
-    if (slot < 0) {
-        /* No early-out for NORMAL here, even though allocating a slot to
-         * record "nothing is wrong" looks wasteful: after a reboot the server
-         * may still hold an alert this device raised before it restarted, and
-         * the clear that retires it is exactly a first call with NORMAL. The
-         * header promises that; skipping it would leave stale alarms on the
-         * server for conditions that no longer exist. */
-        if (s_notify_count >= NOTIFY_MAX) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
-        if (!s_notify) {
-            s_notify = calloc(NOTIFY_MAX, sizeof(*s_notify));
-            if (!s_notify) { xSemaphoreGive(lk); return ESP_ERR_NO_MEM; }
-        }
-        slot = s_notify_count++;
-        snprintf(s_notify[slot].key, sizeof(s_notify[slot].key), "%s", key);
-        s_notify[slot].state = (espos_sk_alert_t)-1;  /* forces the first send */
-    }
-    if (s_notify[slot].state == state &&
-        strcmp(s_notify[slot].msg, message) == 0) {
-        xSemaphoreGive(lk);
-        return ESP_OK;  /* unchanged - stay quiet */
-    }
-    s_notify[slot].state = state;
-    snprintf(s_notify[slot].msg, sizeof(s_notify[slot].msg), "%s", message);
-    xSemaphoreGive(lk);   /* released BEFORE publishing: publish takes s.lock */
-
-    const char *st = state == ESPOS_SK_ALERT_ALARM ? "alarm"
-                   : state == ESPOS_SK_ALERT_WARN  ? "warn"
-                                                   : "normal";
     char path[ESPOS_SK_PATH_MAX];
     if (snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key)
         >= (int)sizeof(path)) {
-        return ESP_ERR_INVALID_SIZE;   /* a clipped path is the wrong path */
+        ESP_LOGE(TAG, "condition '%s' does not fit a path", key);
+        return;   /* a clipped path is the wrong path */
     }
 
     /* Built with cJSON rather than snprintf: the message is escaped properly,
      * and a value too long to serialise fails here instead of emitting JSON
      * that is silently truncated mid-string. */
     cJSON *v = cJSON_CreateObject();
-    if (!v) return ESP_ERR_NO_MEM;
+    if (!v) return;
     cJSON_AddStringToObject(v, "state", st);
     cJSON_AddStringToObject(v, "message", message);
     cJSON *m = cJSON_AddArrayToObject(v, "method");
     /* method is the server's business; the device only states the condition. */
-    if (m && state != ESPOS_SK_ALERT_NORMAL) {
+    if (m && state != ESPOS_HEALTH_NORMAL) {
         cJSON_AddItemToArray(m, cJSON_CreateString("visual"));
     }
     char *val = cJSON_PrintUnformatted(v);
     cJSON_Delete(v);
-    if (!val) return ESP_ERR_NO_MEM;
+    if (!val) return;
 
-    ESP_LOGW(TAG, "notification %s: %s (%s)", key, st, message);
-    esp_err_t err = espos_sk_publish_json(path, val);
+    ESP_LOGI(TAG, "notification %s: %s (%s)", key, st, message);
+    espos_sk_publish_json(path, val);
     cJSON_free(val);
-    return err;
+}
+
+esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
+{
+    /* Still an error before espos_sk_start(), even though espos_health would
+     * happily record it: a caller reaching for the SignalK spelling of this
+     * wants a delta, and silently accepting one that can never be published
+     * is how a device ends up looking healthy because nothing was listening.
+     * Report conditions through espos_health_report() if you want them
+     * recorded regardless of whether SignalK is up. */
+    if (!s_notify_ready) return ESP_ERR_INVALID_STATE;
+    return espos_health_report(key, (espos_health_state_t)state, message);
 }
 
 #else  /* !CONFIG_ESPOS_SK_NOTIFICATIONS */
@@ -880,9 +834,6 @@ char *espos_sk_ws_status_json(void)
 
 esp_err_t espos_sk_ws_start(void)
 {
-#if CONFIG_ESPOS_SK_NOTIFICATIONS
-    notify_lock_init();
-#endif
     if (s.task) {
         return ESP_OK;
     }
@@ -897,11 +848,31 @@ esp_err_t espos_sk_ws_start(void)
     if (xTaskCreate(ws_task, "espos_skws", 8192, NULL, tskIDLE_PRIORITY + 3, &s.task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
+#if CONFIG_ESPOS_SK_NOTIFICATIONS
+    /* Last, not first: registering replays every condition recorded so far,
+     * and the replay publishes deltas — which needs the config loaded and the
+     * delta engine behind s.lock. A condition raised before SignalK came up
+     * (espos_voice starts its wake engine early) reaches the server here. */
+    s_notify_ready = true;
+    esp_err_t herr = espos_health_add_sink(health_sink, NULL);
+    if (herr != ESP_OK && herr != ESP_ERR_INVALID_STATE) {
+        /* Not fatal: the stream still runs, conditions just do not become
+         * notifications. Loud, because that is a silent loss otherwise. */
+        ESP_LOGE(TAG, "could not register the health sink: %s", esp_err_to_name(herr));
+        s_notify_ready = false;
+    }
+#endif
     return ESP_OK;
 }
 
 void espos_sk_ws_stop(void)
 {
+#if CONFIG_ESPOS_SK_NOTIFICATIONS
+    /* Before the task goes: a sink left registered would publish into a
+     * stopped stream, and a restart would try to register it twice. */
+    s_notify_ready = false;
+    espos_health_remove_sink(health_sink, NULL);
+#endif
     s.stop = true;
     for (int i = 0; i < 100 && s.task; i++) {
         vTaskDelay(pdMS_TO_TICKS(100));

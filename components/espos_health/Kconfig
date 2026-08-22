@@ -1,0 +1,22 @@
+menu "espOS health"
+
+    config ESPOS_HEALTH_MAX_CONDITIONS
+        int "Distinct condition keys"
+        default 8
+        range 1 32
+        help
+            Slots for remembered conditions, one per key (~128 bytes each,
+            reserved for the life of the firmware). The set of conditions a
+            firmware can raise is fixed at build time, so size this to what
+            it actually raises; further keys are rejected with ESP_ERR_NO_MEM.
+
+    config ESPOS_HEALTH_MAX_SINKS
+        int "Health sinks"
+        default 4
+        range 1 8
+        help
+            How many consumers may register for condition changes. espos_sk
+            takes one when SignalK notifications are enabled; an application
+            wanting a status LED or a line on a display takes another.
+
+endmenu

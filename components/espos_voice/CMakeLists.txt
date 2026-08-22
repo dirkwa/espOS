@@ -20,11 +20,15 @@ if(target STREQUAL "esp32s3" OR target STREQUAL "esp32p4")
              src/protocol/events.cpp src/protocol/framing.cpp
         INCLUDE_DIRS include
         REQUIRES espos_audio
-        # espos_sk for notifications: a wake service that goes away otherwise
+        # espos_health for conditions: a wake service that goes away otherwise
         # leaves a panel that silently stops waking, which is indistinguishable
         # from a dead mic. Reporting that is core behaviour, not something each
-        # application should re-derive from a callback.
-        PRIV_REQUIRES lwip bblanchon__arduinojson espressif__esp-sr espos_sk)
+        # application should re-derive from a callback -- but it is no reason
+        # to depend on SignalK, which is what espos_sk here used to mean. What
+        # becomes of a condition is the sink's business: espos_sk publishes a
+        # notification when a firmware has it, and a firmware without it can
+        # still light an LED.
+        PRIV_REQUIRES lwip bblanchon__arduinojson espressif__esp-sr espos_health)
 else()
     idf_component_register()
 endif()

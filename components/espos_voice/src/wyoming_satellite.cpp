@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include "espos_voice/wyoming_satellite.h"
 
-#include "espos_sk.h"
+#include "espos_health.h"
 
 #include <cerrno>
 #include <cmath>
@@ -153,7 +153,7 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
         }
       }
       ESP_LOGE(kTag, "wake task creation failed — kept the on-device word");
-      espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN,
+      espos_health_report("wakeService", ESPOS_HEALTH_WARN,
                       "could not start network wake; using the on-device word");
       return false;
     }
@@ -623,7 +623,7 @@ void WyomingSatellite::run_wake() {
       // to an IP before constructing the satellite.
       ESP_LOGE(kTag, "wake host '%s' is not an IPv4 address — wake disabled",
                config_.wake_host.c_str());
-      espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN,
+      espos_health_report("wakeService", ESPOS_HEALTH_WARN,
                       "wake host is not an IPv4 address");
       close(sock);
       return;
@@ -639,7 +639,7 @@ void WyomingSatellite::run_wake() {
         char m[96];
         snprintf(m, sizeof(m), "wake service %s:%u unreachable",
                  config_.wake_host.c_str(), config_.wake_port);
-        espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN, m);
+        espos_health_report("wakeService", ESPOS_HEALTH_WARN, m);
       }
       if (running_.load()) vTaskDelay(backoff);
       backoff = backoff * 2 > kMaxBackoff ? kMaxBackoff : backoff * 2;
@@ -649,7 +649,7 @@ void WyomingSatellite::run_wake() {
              config_.wake_port);
     backoff = pdMS_TO_TICKS(1000);  // reset after a good connection
     wake_connected_.store(true);
-    espos_sk_notify("wakeService", ESPOS_SK_ALERT_NORMAL, "");
+    espos_health_report("wakeService", ESPOS_HEALTH_NORMAL, "");
     wake_session(sock);
     wake_connected_.store(false);
     close(sock);
@@ -661,7 +661,7 @@ void WyomingSatellite::run_wake() {
       char m[96];
       snprintf(m, sizeof(m), "wake service %s:%u unreachable",
                config_.wake_host.c_str(), config_.wake_port);
-      espos_sk_notify("wakeService", ESPOS_SK_ALERT_WARN, m);
+      espos_health_report("wakeService", ESPOS_HEALTH_WARN, m);
     }
     if (running_.load()) vTaskDelay(pdMS_TO_TICKS(500));
   }
