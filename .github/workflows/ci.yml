@@ -81,18 +81,10 @@ jobs:
         with:
           esp_idf_version: ${{ steps.idf.outputs.version }}
           target: linux
+          # run_all.sh discovers every test/host/<project>/ — a new host test
+          # runs here without touching this workflow, which is what the
+          # hand-maintained chain this replaced kept getting wrong.
           command: >-
             bash -c "
             (apt-get update && apt-get install -y libbsd-dev) &&
-            cd test/host/espos_config_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_config_test.elf &&
-            cd ../espos_httpd_test && idf.py --preview set-target linux && idf.py build &&
-            python3 run_test.py &&
-            cd ../espos_wifi_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_wifi_test.elf &&
-            cd ../espos_sk_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_sk_test.elf &&
-            cd ../espos_log_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_log_test.elf &&
-            cd ../espos_ota_test && idf.py --preview set-target linux && idf.py build &&
-            ./build/espos_ota_test.elf"
+            ./test/host/run_all.sh"
