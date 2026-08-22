@@ -267,6 +267,27 @@ TEST_CASE("parse_detection refuses data it cannot parse", "[events]")
     TEST_ASSERT_EQUAL_STRING("", name.c_str());
 }
 
+/* cJSON stops at the end of the first value by default and ignores the rest,
+ * so this parsed as a good object until the parser was told otherwise. The
+ * data block is exactly data_length bytes off the wire: trailing junk means
+ * the sender declared a length its own JSON does not fill. */
+TEST_CASE("parse_detection refuses data with something after the object", "[events]")
+{
+    DecodedEvent ev;
+    ev.type = "detection";
+    std::string name = "stale";
+
+    ev.data_json = "{\"name\":\"wake\"}garbage";
+    TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
+    ev.data_json = "{\"name\":\"wake\"}{\"name\":\"second\"}";
+    TEST_ASSERT_FALSE(espos_voice::parse_detection(ev, &name));
+
+    /* Whitespace padding is not junk -- an orchestrator may pad the block. */
+    ev.data_json = "{\"name\":\"wake\"}\n  ";
+    TEST_ASSERT_TRUE(espos_voice::parse_detection(ev, &name));
+    TEST_ASSERT_EQUAL_STRING("wake", name.c_str());
+}
+
 TEST_CASE("parse_ping_text tolerates a ping with nothing in it", "[events]")
 {
     DecodedEvent ev;
