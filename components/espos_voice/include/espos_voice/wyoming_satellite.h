@@ -300,7 +300,7 @@ class WyomingSatellite {
   bool on_event(const DecodedEvent& ev);
 
   bool send_all(const std::vector<uint8_t>& bytes);  // thread-safe
-  void play_tone(float hz, size_t ms);
+  void play_tone(float hz, size_t ms, bool cue = false);
   void play_wake_tone();  // wake cue: rising pair, "listening"
   void play_done_tone();  // utterance captured: single blip
   void set_state(SatState s) { state_.store(s); }

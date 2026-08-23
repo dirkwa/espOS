@@ -1110,7 +1110,7 @@ bool WyomingSatellite::probe_mic_levels(
   return ok;
 }
 
-void WyomingSatellite::play_tone(float hz, size_t ms) {
+void WyomingSatellite::play_tone(float hz, size_t ms, bool cue) {
   const uint32_t rate = 16000;
   const size_t n = rate * ms / 1000;
   int16_t* pcm = (int16_t*)malloc(n * sizeof(int16_t));
@@ -1124,7 +1124,11 @@ void WyomingSatellite::play_tone(float hz, size_t ms) {
     pcm[i] = (int16_t)(0.4f * 32767.0f * env *
                        sinf(2.0f * 3.14159265f * hz * i / rate));
   }
-  audio_->play_pcm(pcm, n);
+  if (cue) {
+    audio_->play_cue(pcm, n);
+  } else {
+    audio_->play_pcm(pcm, n);
+  }
   free(pcm);
 }
 
@@ -1133,8 +1137,8 @@ void WyomingSatellite::play_wake_tone() {
   // be the same 880 Hz blip, which made them impossible to tell apart by ear:
   // a wake cue and a gave-up cue sound identical, so a failed utterance is
   // indistinguishable from a successful wake. Low-then-high reads as opening.
-  play_tone(520.0f, 70);
-  play_tone(780.0f, 90);
+  play_tone(520.0f, 70, /*cue=*/true);
+  play_tone(780.0f, 90, /*cue=*/true);
 }
 
 void WyomingSatellite::play_done_tone() {
