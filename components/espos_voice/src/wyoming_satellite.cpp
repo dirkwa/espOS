@@ -540,6 +540,20 @@ void WyomingSatellite::run_mic() {
   const TickType_t kMaxTicks = pdMS_TO_TICKS(20000);
   const TickType_t kReleaseTailTicks = pdMS_TO_TICKS(1200);
   TickType_t release_at = 0;  // 0 = still held
+
+  // Shed the tail of the wake word. Detection fires while it is still being
+  // spoken, so the first few hundred ms of this stream contain "hey moin"
+  // rather than the question. Left in, the orchestrator transcribes the wake
+  // word as the utterance and the assistant answers that instead of waiting
+  // for what was actually asked.
+  //
+  // Only for wake-triggered pipelines: pipeline_active_ is set by both wake
+  // paths and never by push-to-talk, which starts on a button press with no
+  // wake word to shed.
+  size_t skip_frames = 0;
+  if (pipeline_active_.load() && config_.wake_skip_ms > 0) {
+    skip_frames = (size_t)mic_fmt.rate * config_.wake_skip_ms / 1000;
+  }
   while (listening_.load() && running_.load() && client_connected_.load()) {
     // Muting must stop the mic NOW — abort before the next record_pcm()/send,
     // and skip the release tail, so no samples reach the orchestrator after
@@ -568,6 +582,13 @@ void WyomingSatellite::run_mic() {
       // letting the caller re-open is the safer recovery.
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
+    }
+    if (skip_frames) {
+      const size_t drop = frames < skip_frames ? frames : skip_frames;
+      skip_frames -= drop;
+      if (drop == frames) continue;  // whole chunk was still the wake word
+      memmove(buf, buf + drop, (frames - drop) * sizeof(buf[0]));
+      frames -= drop;
     }
     // Boost the quiet panel mic so the orchestrator's energy-gate endpointer
     // registers speech (RMS floor ~700) and ends the utterance ~1 s after you

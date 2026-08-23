@@ -68,6 +68,15 @@ struct WyomingSatelliteConfig {
   // amplifies the noise floor.
   int mic_stream_gain = 3;
 
+  // Milliseconds of mic audio to DISCARD at the start of a wake-triggered
+  // utterance. The wake word is still being spoken when detection fires, so
+  // without this it lands in the recording and the orchestrator transcribes
+  // the wake word itself as the question -- the assistant then answers
+  // "hey moin" and never waits for what was actually asked. Only the
+  // wake-triggered path skips; push-to-talk starts on a button press with no
+  // wake word to shed. 0 disables.
+  int wake_skip_ms = 900;
+
   // --- Hands-free wake word ------------------------------------------------
   // Two mutually exclusive back-ends:
   //
