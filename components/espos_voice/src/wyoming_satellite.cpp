@@ -818,7 +818,7 @@ bool WyomingSatellite::wake_session(int sock) {
     // whole utterance — exactly right, the mic has one owner at a time.
     if (wake_detected_.exchange(false)) {
       close_capture();
-      if (config_.awake_cue) play_done_tone();
+      if (config_.awake_cue) play_wake_tone();
       run_detection_pipeline();
       continue;
     }
@@ -960,7 +960,7 @@ void WyomingSatellite::start_wake_pipeline() {
   // snapshot the atomic once for the type.
   WakeEngine* e = wake_engine_.load();
   if (e) e->pause();  // frees the mic for run_mic()
-  if (config_.awake_cue) play_done_tone();
+  if (config_.awake_cue) play_wake_tone();
   run_detection_pipeline();
   if (e) e->resume();
 }
@@ -1110,22 +1110,36 @@ bool WyomingSatellite::probe_mic_levels(
   return ok;
 }
 
-void WyomingSatellite::play_done_tone() {
-  // Short confirmation blip so the user knows the utterance was captured.
+void WyomingSatellite::play_tone(float hz, size_t ms) {
   const uint32_t rate = 16000;
-  const size_t n = rate / 10;  // 100 ms
+  const size_t n = rate * ms / 1000;
   int16_t* pcm = (int16_t*)malloc(n * sizeof(int16_t));
   if (!pcm) return;
   for (size_t i = 0; i < n; ++i) {
     float env = 1.0f;
     size_t fade = n / 10;
+    if (fade == 0) fade = 1;
     if (i < fade) env = (float)i / fade;
     else if (i >= n - fade) env = (float)(n - i) / fade;
     pcm[i] = (int16_t)(0.4f * 32767.0f * env *
-                       sinf(2.0f * 3.14159265f * 880.0f * i / rate));
+                       sinf(2.0f * 3.14159265f * hz * i / rate));
   }
   audio_->play_pcm(pcm, n);
   free(pcm);
+}
+
+void WyomingSatellite::play_wake_tone() {
+  // "I am listening" — deliberately DIFFERENT from the done tone. Both used to
+  // be the same 880 Hz blip, which made them impossible to tell apart by ear:
+  // a wake cue and a gave-up cue sound identical, so a failed utterance is
+  // indistinguishable from a successful wake. Low-then-high reads as opening.
+  play_tone(520.0f, 70);
+  play_tone(780.0f, 90);
+}
+
+void WyomingSatellite::play_done_tone() {
+  // "I have your utterance" — single higher blip, distinct from the wake pair.
+  play_tone(880.0f, 100);
 }
 
 bool WyomingSatellite::send_all(const std::vector<uint8_t>& bytes) {
