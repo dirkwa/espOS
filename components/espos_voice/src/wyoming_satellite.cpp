@@ -590,13 +590,40 @@ void WyomingSatellite::run_mic() {
       memmove(buf, buf + drop, (frames - drop) * sizeof(buf[0]));
       frames -= drop;
     }
-    // Boost the quiet panel mic so the orchestrator's energy-gate endpointer
-    // registers speech (RMS floor ~700) and ends the utterance ~1 s after you
-    // stop talking, instead of running to the safety cap. Saturating clamp so
-    // loud peaks don't wrap. gain <= 1 leaves the samples untouched.
-    if (config_.mic_stream_gain > 1) {
+    // Lift the quiet panel mic so the orchestrator's energy-gate endpointer
+    // registers speech and ends the utterance ~1 s after you stop talking,
+    // instead of running to the safety cap every time.
+    //
+    // Normalise toward a target RMS rather than applying a fixed multiplier:
+    // the gate's floor is hardcoded (~700) for a much louder mic, so the right
+    // multiplier varies with room and speaker. Scaling each chunk toward the
+    // target puts speech above the floor while leaving silence below it --
+    // capped so a quiet room isn't amplified into apparent speech.
+    // Fractional: integer division truncated every ratio under 2 to 1, so a
+    // chunk already at 800 RMS was passed through untouched instead of being
+    // lifted to the target -- the louder the speech, the less it was
+    // normalised, which is backwards.
+    float gain = (float)config_.mic_stream_gain;
+    if (config_.mic_stream_target_rms > 0 && frames > 0) {
+      uint64_t sum_sq = 0;
       for (size_t i = 0; i < frames; i++) {
-        int32_t v = (int32_t)buf[i] * config_.mic_stream_gain;
+        sum_sq += (uint64_t)((int32_t)buf[i] * (int32_t)buf[i]);
+      }
+      const uint32_t rms = (uint32_t)sqrt((double)(sum_sq / frames));
+      // Silence has no signal to normalise; leave it alone so the gate can
+      // still see it as silence.
+      if (rms > 0) {
+        float g = (float)config_.mic_stream_target_rms / (float)rms;
+        if (g < 1.0f) g = 1.0f;
+        if (g > (float)config_.mic_stream_max_gain) {
+          g = (float)config_.mic_stream_max_gain;
+        }
+        gain = g;
+      }
+    }
+    if (gain > 1.0f) {
+      for (size_t i = 0; i < frames; i++) {
+        int32_t v = (int32_t)(buf[i] * gain);
         if (v > 32767) v = 32767;
         else if (v < -32768) v = -32768;
         buf[i] = (int16_t)v;

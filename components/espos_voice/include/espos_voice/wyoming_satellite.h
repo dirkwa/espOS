@@ -68,6 +68,28 @@ struct WyomingSatelliteConfig {
   // amplifies the noise floor.
   int mic_stream_gain = 3;
 
+  // Target RMS for the outbound STT stream, or 0 to disable normalisation and
+  // use the fixed mic_stream_gain alone.
+  //
+  // A fixed multiplier cannot work here: the orchestrator's gate is
+  // max(noise_floor * 3, ABS_MIN) with ABS_MIN hardcoded at 700, tuned for a
+  // desk mic. The panel's MEMS mic runs ~40x quieter, so the gain that clears
+  // 700 for speech differs by room and speaker, and picking it fixed either
+  // leaves speech under the floor (utterance runs to the safety cap every
+  // time) or amplifies the noise floor until silence reads as speech and the
+  // gate never closes.
+  //
+  // Instead measure each chunk and scale it toward this target, so speech
+  // lands above the gate and silence stays below it. The applied gain is
+  // clamped to mic_stream_max_gain so a silent room is not amplified into
+  // noise.
+  int mic_stream_target_rms = 1400;  // 2x the orchestrator's 700 floor
+
+  // Ceiling on the normaliser's gain. Bounds how much a near-silent chunk can
+  // be lifted: without it, room tone in a quiet cabin would be amplified past
+  // the speech floor and the endpointer would never see silence.
+  int mic_stream_max_gain = 40;
+
   // Milliseconds of mic audio to DISCARD at the start of a wake-triggered
   // utterance. The wake word is still being spoken when detection fires, so
   // without this it lands in the recording and the orchestrator transcribes
