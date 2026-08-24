@@ -37,6 +37,16 @@ class AudioDriver {
   /// disposable — never block the caller waiting for audio).
   virtual void play_pcm(const int16_t* samples, size_t frames) = 0;
 
+  /// Like play_pcm(), but for a clip that must NOT be silently dropped: the
+  /// wake cue is the user's only feedback that the panel heard them, and it
+  /// fires exactly when the pipeline is taking the mic, so the disposable-clip
+  /// policy (drop on a busy codec) loses precisely the one sound that matters.
+  /// May block briefly to get the codec; still must not be called from a task
+  /// that cannot tolerate that. Default: fall back to play_pcm().
+  virtual void play_cue(const int16_t* samples, size_t frames) {
+    play_pcm(samples, frames);
+  }
+
   /// Output volume 0-100. Applied at the codec. Default no-op.
   virtual void set_volume(uint8_t /*pct*/) {}
 

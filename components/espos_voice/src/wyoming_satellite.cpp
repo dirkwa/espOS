@@ -540,6 +540,20 @@ void WyomingSatellite::run_mic() {
   const TickType_t kMaxTicks = pdMS_TO_TICKS(20000);
   const TickType_t kReleaseTailTicks = pdMS_TO_TICKS(1200);
   TickType_t release_at = 0;  // 0 = still held
+
+  // Shed the tail of the wake word. Detection fires while it is still being
+  // spoken, so the first few hundred ms of this stream contain "hey moin"
+  // rather than the question. Left in, the orchestrator transcribes the wake
+  // word as the utterance and the assistant answers that instead of waiting
+  // for what was actually asked.
+  //
+  // Only for wake-triggered pipelines: pipeline_active_ is set by both wake
+  // paths and never by push-to-talk, which starts on a button press with no
+  // wake word to shed.
+  size_t skip_frames = 0;
+  if (pipeline_active_.load() && config_.wake_skip_ms > 0) {
+    skip_frames = (size_t)mic_fmt.rate * config_.wake_skip_ms / 1000;
+  }
   while (listening_.load() && running_.load() && client_connected_.load()) {
     // Muting must stop the mic NOW — abort before the next record_pcm()/send,
     // and skip the release tail, so no samples reach the orchestrator after
@@ -569,13 +583,47 @@ void WyomingSatellite::run_mic() {
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-    // Boost the quiet panel mic so the orchestrator's energy-gate endpointer
-    // registers speech (RMS floor ~700) and ends the utterance ~1 s after you
-    // stop talking, instead of running to the safety cap. Saturating clamp so
-    // loud peaks don't wrap. gain <= 1 leaves the samples untouched.
-    if (config_.mic_stream_gain > 1) {
+    if (skip_frames) {
+      const size_t drop = frames < skip_frames ? frames : skip_frames;
+      skip_frames -= drop;
+      if (drop == frames) continue;  // whole chunk was still the wake word
+      memmove(buf, buf + drop, (frames - drop) * sizeof(buf[0]));
+      frames -= drop;
+    }
+    // Lift the quiet panel mic so the orchestrator's energy-gate endpointer
+    // registers speech and ends the utterance ~1 s after you stop talking,
+    // instead of running to the safety cap every time.
+    //
+    // Normalise toward a target RMS rather than applying a fixed multiplier:
+    // the gate's floor is hardcoded (~700) for a much louder mic, so the right
+    // multiplier varies with room and speaker. Scaling each chunk toward the
+    // target puts speech above the floor while leaving silence below it --
+    // capped so a quiet room isn't amplified into apparent speech.
+    // Fractional: integer division truncated every ratio under 2 to 1, so a
+    // chunk already at 800 RMS was passed through untouched instead of being
+    // lifted to the target -- the louder the speech, the less it was
+    // normalised, which is backwards.
+    float gain = (float)config_.mic_stream_gain;
+    if (config_.mic_stream_target_rms > 0 && frames > 0) {
+      uint64_t sum_sq = 0;
       for (size_t i = 0; i < frames; i++) {
-        int32_t v = (int32_t)buf[i] * config_.mic_stream_gain;
+        sum_sq += (uint64_t)((int32_t)buf[i] * (int32_t)buf[i]);
+      }
+      const uint32_t rms = (uint32_t)sqrt((double)(sum_sq / frames));
+      // Silence has no signal to normalise; leave it alone so the gate can
+      // still see it as silence.
+      if (rms > 0) {
+        float g = (float)config_.mic_stream_target_rms / (float)rms;
+        if (g < 1.0f) g = 1.0f;
+        if (g > (float)config_.mic_stream_max_gain) {
+          g = (float)config_.mic_stream_max_gain;
+        }
+        gain = g;
+      }
+    }
+    if (gain > 1.0f) {
+      for (size_t i = 0; i < frames; i++) {
+        int32_t v = (int32_t)(buf[i] * gain);
         if (v > 32767) v = 32767;
         else if (v < -32768) v = -32768;
         buf[i] = (int16_t)v;
@@ -770,7 +818,7 @@ bool WyomingSatellite::wake_session(int sock) {
     // whole utterance — exactly right, the mic has one owner at a time.
     if (wake_detected_.exchange(false)) {
       close_capture();
-      if (config_.awake_cue) play_done_tone();
+      if (config_.awake_cue) play_wake_tone();
       run_detection_pipeline();
       continue;
     }
@@ -912,7 +960,7 @@ void WyomingSatellite::start_wake_pipeline() {
   // snapshot the atomic once for the type.
   WakeEngine* e = wake_engine_.load();
   if (e) e->pause();  // frees the mic for run_mic()
-  if (config_.awake_cue) play_done_tone();
+  if (config_.awake_cue) play_wake_tone();
   run_detection_pipeline();
   if (e) e->resume();
 }
@@ -1062,22 +1110,40 @@ bool WyomingSatellite::probe_mic_levels(
   return ok;
 }
 
-void WyomingSatellite::play_done_tone() {
-  // Short confirmation blip so the user knows the utterance was captured.
+void WyomingSatellite::play_tone(float hz, size_t ms, bool cue) {
   const uint32_t rate = 16000;
-  const size_t n = rate / 10;  // 100 ms
+  const size_t n = rate * ms / 1000;
   int16_t* pcm = (int16_t*)malloc(n * sizeof(int16_t));
   if (!pcm) return;
   for (size_t i = 0; i < n; ++i) {
     float env = 1.0f;
     size_t fade = n / 10;
+    if (fade == 0) fade = 1;
     if (i < fade) env = (float)i / fade;
     else if (i >= n - fade) env = (float)(n - i) / fade;
     pcm[i] = (int16_t)(0.4f * 32767.0f * env *
-                       sinf(2.0f * 3.14159265f * 880.0f * i / rate));
+                       sinf(2.0f * 3.14159265f * hz * i / rate));
   }
-  audio_->play_pcm(pcm, n);
+  if (cue) {
+    audio_->play_cue(pcm, n);
+  } else {
+    audio_->play_pcm(pcm, n);
+  }
   free(pcm);
+}
+
+void WyomingSatellite::play_wake_tone() {
+  // "I am listening" — deliberately DIFFERENT from the done tone. Both used to
+  // be the same 880 Hz blip, which made them impossible to tell apart by ear:
+  // a wake cue and a gave-up cue sound identical, so a failed utterance is
+  // indistinguishable from a successful wake. Low-then-high reads as opening.
+  play_tone(520.0f, 70, /*cue=*/true);
+  play_tone(780.0f, 90, /*cue=*/true);
+}
+
+void WyomingSatellite::play_done_tone() {
+  // "I have your utterance" — single higher blip, distinct from the wake pair.
+  play_tone(880.0f, 100);
 }
 
 bool WyomingSatellite::send_all(const std::vector<uint8_t>& bytes) {

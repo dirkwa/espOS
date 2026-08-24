@@ -68,6 +68,41 @@ struct WyomingSatelliteConfig {
   // amplifies the noise floor.
   int mic_stream_gain = 3;
 
+  // Target RMS for the outbound STT stream, or 0 to disable normalisation and
+  // use the fixed mic_stream_gain alone.
+  //
+  // A fixed multiplier cannot work here: the orchestrator's gate is
+  // max(noise_floor * 3, ABS_MIN) with ABS_MIN hardcoded at 700, tuned for a
+  // desk mic. The panel's MEMS mic runs ~40x quieter, so the gain that clears
+  // 700 for speech differs by room and speaker, and picking it fixed either
+  // leaves speech under the floor (utterance runs to the safety cap every
+  // time) or amplifies the noise floor until silence reads as speech and the
+  // gate never closes.
+  //
+  // Instead measure each chunk and scale it toward this target, so speech
+  // lands above the gate and silence stays below it. The applied gain is
+  // clamped to mic_stream_max_gain so a silent room is not amplified into
+  // noise.
+  int mic_stream_target_rms = 1400;  // 2x the orchestrator's 700 floor
+
+  // Ceiling on the normaliser's gain. This is what keeps silence BELOW the
+  // gate: room tone measures ~19 RMS on this panel, so a ceiling of 40 would
+  // lift it to ~760 -- over the 700 floor, and the endpointer would never see
+  // silence and never close the utterance. Speech is far louder than room
+  // tone, so it needs much less gain than the ceiling to reach the target;
+  // the ceiling only ever binds on near-silence, and must therefore leave
+  // near-silence under the floor.
+  int mic_stream_max_gain = 16;
+
+  // Milliseconds of mic audio to DISCARD at the start of a wake-triggered
+  // utterance. The wake word is still being spoken when detection fires, so
+  // without this it lands in the recording and the orchestrator transcribes
+  // the wake word itself as the question -- the assistant then answers
+  // "hey moin" and never waits for what was actually asked. Only the
+  // wake-triggered path skips; push-to-talk starts on a button press with no
+  // wake word to shed. 0 disables.
+  int wake_skip_ms = 900;
+
   // --- Hands-free wake word ------------------------------------------------
   // Two mutually exclusive back-ends:
   //
@@ -265,7 +300,9 @@ class WyomingSatellite {
   bool on_event(const DecodedEvent& ev);
 
   bool send_all(const std::vector<uint8_t>& bytes);  // thread-safe
-  void play_done_tone();
+  void play_tone(float hz, size_t ms, bool cue = false);
+  void play_wake_tone();  // wake cue: rising pair, "listening"
+  void play_done_tone();  // utterance captured: single blip
   void set_state(SatState s) { state_.store(s); }
 
   espos_audio::AudioDriver* audio_;
