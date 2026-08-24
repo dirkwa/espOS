@@ -461,7 +461,14 @@ bool WyomingSatellite::on_event(const DecodedEvent& ev) {
     // Only flag it here — wake_session() closes its capture and THEN runs the
     // pipeline, so run_mic() is the sole ADC reader (single mic consumer).
     std::string name;
-    parse_detection(ev, &name);
+    if (!parse_detection(ev, &name)) {
+      // Refusing it in the parser is only half the job: waking on a frame we
+      // could not read is the actual harm, and it happens here. Not a framing
+      // error though -- the event was well framed, its payload was not -- so
+      // the connection stays up.
+      ESP_LOGW(kTag, "ignoring a detection whose data did not parse");
+      return true;
+    }
     ESP_LOGI(kTag, "wake detection: \"%s\"", name.c_str());
     wake_detections_.fetch_add(1);
     wake_detected_.store(true);
