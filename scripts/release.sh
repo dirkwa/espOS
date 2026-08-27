@@ -64,12 +64,22 @@ fi
 
 printf '%s\n' "$version" > version.txt
 git add version.txt
-git commit -q -m "chore: release $version"
+# version.txt may already hold this version -- the first tag of a version
+# developed under it, or a re-cut after an aborted run. Nothing to commit is
+# then correct, not an error: tag the commit that is already there.
+if git diff --cached --quiet; then
+    echo "release.sh: version.txt already $version, tagging HEAD"
+    notes_end="HEAD"
+else
+    git commit -q -m "chore: release $version"
+    # The release commit is not a change in the release; end the notes before it.
+    notes_end="HEAD^"
+fi
 
 # Annotated, not lightweight: an annotated tag carries who cut it and when,
 # and is what `git describe` prefers.
 if [ -n "$previous" ]; then
-    git tag -a "$tag" -m "espOS $version" -m "$(git log --no-merges --pretty='- %s' "$previous..HEAD^")"
+    git tag -a "$tag" -m "espOS $version" -m "$(git log --no-merges --pretty='- %s' "$previous..$notes_end")"
 else
     git tag -a "$tag" -m "espOS $version"
 fi
