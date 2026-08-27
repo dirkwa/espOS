@@ -49,13 +49,27 @@ fi
 current=$(git rev-parse --abbrev-ref HEAD)
 echo "release.sh: $current at $(git rev-parse --short HEAD) → $tag"
 
+# The range the release notes cover. With no previous tag this is the first
+# release, and the whole history is what is new -- a first tag used to get no
+# notes at all, which is the one release where "what is this?" most needs an
+# answer.
 previous=$(git describe --tags --abbrev=0 2>/dev/null || true)
 if [ -n "$previous" ]; then
-    echo
-    echo "Changes since $previous:"
-    git log --no-merges --pretty='  %s' "$previous..HEAD"
-    echo
+    notes_from="$previous"
+    notes_label="Changes since $previous"
+else
+    notes_from=""
+    notes_label="Changes in this first release"
 fi
+
+echo
+echo "$notes_label:"
+if [ -n "$notes_from" ]; then
+    git log --no-merges --pretty='  %s' "$notes_from..HEAD"
+else
+    git log --no-merges --pretty='  %s' HEAD
+fi
+echo
 
 if [ -n "$dry_run" ]; then
     echo "release.sh: --dry-run, stopping before the commit"
@@ -78,11 +92,12 @@ fi
 
 # Annotated, not lightweight: an annotated tag carries who cut it and when,
 # and is what `git describe` prefers.
-if [ -n "$previous" ]; then
-    git tag -a "$tag" -m "espOS $version" -m "$(git log --no-merges --pretty='- %s' "$previous..$notes_end")"
+if [ -n "$notes_from" ]; then
+    notes=$(git log --no-merges --pretty='- %s' "$notes_from..$notes_end")
 else
-    git tag -a "$tag" -m "espOS $version"
+    notes=$(git log --no-merges --pretty='- %s' "$notes_end")
 fi
+git tag -a "$tag" -m "espOS $version" -m "$notes"
 
 echo
 echo "release.sh: tagged $tag at $(git rev-parse --short HEAD)"

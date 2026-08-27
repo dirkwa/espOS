@@ -14,7 +14,21 @@ git push origin main && git push origin v0.7.0
 
 The script refuses a dirty tree, refuses a tag that exists, and writes an
 *annotated* tag — `git describe` prefers annotated tags, and the firmware's
-reported version comes from `git describe` (below).
+reported version comes from `git describe` (below). The tag message carries
+the commit subjects since the previous tag, or the whole history when there
+is no previous tag.
+
+Then publish the tag on GitHub, so the Releases tab answers "what is the
+current version, and what changed" for anyone who is not already a consumer:
+
+```sh
+gh release create v0.7.0 --title "espOS 0.7.0" --notes "..."
+```
+
+There are no binaries to attach — espOS is source consumed as a submodule,
+and the tag remains the deliverable. The release is a readable front page for
+it, not a separate artifact. Lead the notes with anything that requires a
+consumer to change its own code.
 
 ## What a device reports
 
