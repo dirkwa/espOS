@@ -221,8 +221,9 @@ the valuable half.
     to match, or the transport asserts at boot: *"SDIO mode mismatch: slave
     is in streaming mode, but host is in packet mode. Aborting."*
   * **`CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`.** The transport mempool
-    is the largest `MALLOC_CAP_INTERNAL|DMA` consumer on the host. With it
-    in internal RAM, sustained inbound TCP (measured with ~270 KB/s of
+    is the transport's large DMA buffer pool; left in internal RAM
+    (the default) it is the biggest `MALLOC_CAP_INTERNAL|DMA` consumer on
+    the host, and sustained inbound TCP (measured with ~270 KB/s of
     ACK-paced MJPEG on a Waveshare 7B) drove internal free memory to
     ~12 KB, SDIO transfers stalled, the heartbeat stopped, and the link
     watchdog rebooted the host ~90 s into every streaming session. In
