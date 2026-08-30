@@ -201,7 +201,7 @@ the valuable half.
   pinout in `sdkconfig.defaults.esp32p4`). Same `esp_wifi_*` API; the MAC is
   read from the driver, not eFuse.
 
-  Two settings on that transport are load-bearing, both pinned in
+  Three settings on that transport are load-bearing, all pinned in
   `sdkconfig.defaults.esp32p4`:
 
   * **`CONFIG_WIFI_RMT_RX_BA_WIN=6`.** IDF defaults this to 6 but raises it
@@ -220,6 +220,21 @@ the valuable half.
     on.** The C6 slave firmware is fixed in streaming mode and the host has
     to match, or the transport asserts at boot: *"SDIO mode mismatch: slave
     is in streaming mode, but host is in packet mode. Aborting."*
+  * **`CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`.** The transport mempool
+    is the transport's large DMA buffer pool; left in internal RAM
+    (the default) it is the biggest `MALLOC_CAP_INTERNAL|DMA` consumer on
+    the host, and sustained inbound TCP (measured with ~270 KB/s of
+    ACK-paced MJPEG on a Waveshare 7B) drove internal free memory to
+    ~12 KB, SDIO transfers stalled, the heartbeat stopped, and the link
+    watchdog rebooted the host ~90 s into every streaming session. In
+    PSRAM (which the P4's GDMA reaches through cache) the same workload
+    left >200 KB internal free and the link never blinked. **Constraint:**
+    only valid with 64-byte L2 cache lines — the 1600-byte transport
+    stride is 64-aligned but not 128-aligned, so under
+    `CONFIG_CACHE_L2_CACHE_LINE_128B` the SDIO driver rejects PSRAM
+    buffers with `ESP_ERR_INVALID_ARG`
+    ([esp-hosted-mcu#219](https://github.com/espressif/esp-hosted-mcu/issues/219)).
+    Keep the mempool internal on 128-byte-line configurations.
 
   Since a wedged transport cannot be recovered from the host (there is no
   reconnect API, and the RPC that would carry one is exactly what times

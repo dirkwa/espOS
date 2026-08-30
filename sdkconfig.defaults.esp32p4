@@ -21,6 +21,19 @@ CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
 CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
 CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
 CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP=y
+# Keep the hosted transport mempool — the transport's large DMA buffer
+# pool — out of internal RAM: left there, sustained inbound TCP can
+# exhaust the internal pool until SDIO transfers stall and the co-processor
+# link wedges. The P4's GDMA reaches PSRAM through cache, so the pool can
+# live there. CONSTRAINT: only safe with 64-byte L2 cache lines — the
+# 1600-byte transport stride is 64-aligned but NOT 128-aligned, so with
+# CONFIG_CACHE_L2_CACHE_LINE_128B the SDIO driver rejects PSRAM buffers
+# (ESP_ERR_INVALID_ARG; esp-hosted-mcu#219). See docs/wifi.md.
+# The line size is pinned here so the prerequisite is enforced, not just
+# documented: raising the L2 cache size (256 KB forces 128-byte lines)
+# would otherwise flip it silently and wedge the transport.
+CONFIG_CACHE_L2_CACHE_LINE_64B=y
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
 # The Waveshare panels ship 16 MB flash; the shared partitions.csv assumes 4 MB
 # and still fits — keep it until a P4-specific table is needed.
 # The Waveshare panels carry ESP32-P4 rev v1.x silicon; IDF 6 defaults to
