@@ -29,6 +29,10 @@ CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP=y
 # 1600-byte transport stride is 64-aligned but NOT 128-aligned, so with
 # CONFIG_CACHE_L2_CACHE_LINE_128B the SDIO driver rejects PSRAM buffers
 # (ESP_ERR_INVALID_ARG; esp-hosted-mcu#219). See docs/wifi.md.
+# The line size is pinned here so the prerequisite is enforced, not just
+# documented: raising the L2 cache size (256 KB forces 128-byte lines)
+# would otherwise flip it silently and wedge the transport.
+CONFIG_CACHE_L2_CACHE_LINE_64B=y
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
 # The Waveshare panels ship 16 MB flash; the shared partitions.csv assumes 4 MB
 # and still fits — keep it until a P4-specific table is needed.

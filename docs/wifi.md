@@ -201,7 +201,7 @@ the valuable half.
   pinout in `sdkconfig.defaults.esp32p4`). Same `esp_wifi_*` API; the MAC is
   read from the driver, not eFuse.
 
-  Two settings on that transport are load-bearing, both pinned in
+  Three settings on that transport are load-bearing, all pinned in
   `sdkconfig.defaults.esp32p4`:
 
   * **`CONFIG_WIFI_RMT_RX_BA_WIN=6`.** IDF defaults this to 6 but raises it
