@@ -28,7 +28,8 @@ if(target STREQUAL "esp32s3" OR target STREQUAL "esp32p4")
         # becomes of a condition is the sink's business: espos_sk publishes a
         # notification when a firmware has it, and a firmware without it can
         # still light an LED.
-        PRIV_REQUIRES lwip espressif__cjson espressif__esp-sr espos_health)
+        PRIV_REQUIRES lwip espressif__cjson espressif__esp-sr espos_health
+                      esp_timer)
 else()
     idf_component_register()
 endif()
