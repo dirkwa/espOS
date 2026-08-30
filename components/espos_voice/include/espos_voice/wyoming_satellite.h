@@ -313,6 +313,16 @@ class WyomingSatellite {
   std::atomic<bool> running_{false};
   std::atomic<bool> client_connected_{false};
   std::atomic<SatState> state_{SatState::Disconnected};
+  // When the last playback ended (esp_timer µs). The wake stream holds off
+  // for a short echo tail after this, so the room's decay of our own voice
+  // can't re-trigger the wake word.
+  std::atomic<int64_t> speak_end_us_{0};
+  // Whether wake_skip_ms applies to the current pipeline. Only an ON-DEVICE
+  // detection fires while the wake word is still being spoken; a network
+  // wake service reports it after its own processing latency, by which time
+  // the talker is already into the question — skipping there discards the
+  // question's first words ("What's my depth" arrives as "depth").
+  std::atomic<bool> wake_skip_applies_{false};
 
   // Per-connection state (only one client at a time).
   int client_sock_ = -1;

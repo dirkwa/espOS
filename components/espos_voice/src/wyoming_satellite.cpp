@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lwip/sockets.h"
 
 namespace espos_voice {
@@ -431,6 +432,7 @@ bool WyomingSatellite::on_event(const DecodedEvent& ev) {
       // Leave Listening alone (a pipeline may be mid-flight); otherwise
       // playback is done, so go back to Idle.
       if (state() == SatState::Speaking) set_state(SatState::Idle);
+      speak_end_us_.store(esp_timer_get_time());
     }
     std::vector<uint8_t> out;
     build_played(out);
@@ -551,7 +553,8 @@ void WyomingSatellite::run_mic() {
   // paths and never by push-to-talk, which starts on a button press with no
   // wake word to shed.
   size_t skip_frames = 0;
-  if (pipeline_active_.load() && config_.wake_skip_ms > 0) {
+  if (pipeline_active_.load() && config_.wake_skip_ms > 0 &&
+      wake_skip_applies_.load()) {
     skip_frames = (size_t)mic_fmt.rate * config_.wake_skip_ms / 1000;
   }
   while (listening_.load() && running_.load() && client_connected_.load()) {
@@ -818,6 +821,9 @@ bool WyomingSatellite::wake_session(int sock) {
     // whole utterance — exactly right, the mic has one owner at a time.
     if (wake_detected_.exchange(false)) {
       close_capture();
+      // Network detection: the word was finished before the service replied,
+      // so there is nothing to skip (see wake_skip_applies_).
+      wake_skip_applies_.store(false);
       if (config_.awake_cue) play_wake_tone();
       run_detection_pipeline();
       continue;
@@ -828,6 +834,19 @@ bool WyomingSatellite::wake_session(int sock) {
     if (pipeline_active_.load() || listening_.load()) {
       close_capture();
       vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    // Own-voice gate: while a reply is playing — and for a short tail after,
+    // while the room echo decays — the mic mostly hears our own speaker.
+    // Streamed to the wake service, that re-triggers the wake word and the
+    // assistant answers itself in a loop (observed live: "hey moin" fired
+    // 2.7 s after audio-stop from the reply's own audio). Mirror the privacy
+    // gate below: hold the stream entirely.
+    if (state() == SatState::Speaking ||
+        (esp_timer_get_time() - speak_end_us_.load()) < 1500000) {
+      close_capture();
+      vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
 
@@ -960,6 +979,9 @@ void WyomingSatellite::start_wake_pipeline() {
   // snapshot the atomic once for the type.
   WakeEngine* e = wake_engine_.load();
   if (e) e->pause();  // frees the mic for run_mic()
+  // On-device detection fires mid-word: the wake word's tail is still in
+  // the mic and must be skipped or it gets transcribed as the question.
+  wake_skip_applies_.store(true);
   if (config_.awake_cue) play_wake_tone();
   run_detection_pipeline();
   if (e) e->resume();
