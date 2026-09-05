@@ -58,7 +58,7 @@ void WyomingSatellite::start() {
     if (!e) {
       ESP_LOGW(kTag, "on-device wake alloc failed — tap-to-talk only");
     } else {
-      e->set_muted_fn([this] { return mic_muted(); });
+      e->set_muted_fn([this] { return wake_gated(); });
       e->set_on_detect([this] { start_wake_pipeline(); });
       e->set_input_gain(config_.wake_input_gain);
       e->set_threshold(config_.wake_threshold);
@@ -143,7 +143,7 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
       config_.wake_host.clear();
       WakeEngine* e = new WakeEngine(audio_);
       if (e) {
-        e->set_muted_fn([this] { return mic_muted(); });
+        e->set_muted_fn([this] { return wake_gated(); });
         e->set_on_detect([this] { start_wake_pipeline(); });
         e->set_input_gain(config_.wake_input_gain);
         e->set_threshold(config_.wake_threshold);

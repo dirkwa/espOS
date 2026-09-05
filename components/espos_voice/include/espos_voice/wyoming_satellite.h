@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -304,6 +305,19 @@ class WyomingSatellite {
   void play_wake_tone();  // wake cue: rising pair, "listening"
   void play_done_tone();  // utterance captured: single blip
   void set_state(SatState s) { state_.store(s); }
+
+  // True when the on-device wake engine must NOT listen: the mic is muted,
+  // a reply is playing, or we are within the echo tail after playback. The
+  // last two keep WakeNet from ingesting the panel's own TTS reply (heard
+  // as a self-triggered "detection" of the reply text). The network wake
+  // path has always had this via wake_session(); the on-device engine gets
+  // it by routing this through its muted_fn.
+  bool wake_gated() const {
+    if (mic_muted()) return true;
+    if (state_.load() == SatState::Speaking) return true;
+    return (esp_timer_get_time() - speak_end_us_.load()) < kEchoTailUs;
+  }
+  static constexpr int64_t kEchoTailUs = 1500000;  // 1.5 s
 
   espos_audio::AudioDriver* audio_;
   WyomingSatelliteConfig config_;
