@@ -46,7 +46,7 @@ typedef struct {
     uint32_t scan_hits;       /* advertisements seen by the scanner */
     uint32_t adv_received;    /* handed to the gateway */
     uint32_t adv_posted;      /* accepted by the server */
-    uint32_t adv_dropped;     /* shed because the buffer was full */
+    uint32_t adv_dropped;     /* shed: buffer full, or ingest lock busy */
     size_t adv_pending;       /* waiting for the next POST */
     uint32_t post_success;
     uint32_t post_fail;
@@ -55,6 +55,12 @@ typedef struct {
     uint32_t gatt_max;        /* concurrent session ceiling */
 } espos_ble_status_t;
 
+/* Fills *out with a consistent snapshot.
+ *
+ * ESP_ERR_TIMEOUT if the advertisement buffer's lock could not be taken:
+ * adv_dropped and adv_pending would otherwise be a partial total that no
+ * caller could tell from a real one. Callers should surface the failure
+ * rather than serve the struct. */
 esp_err_t espos_ble_get_status(espos_ble_status_t *out);
 
 /** Status document for docs/api.md (malloc'ed JSON; caller frees). */

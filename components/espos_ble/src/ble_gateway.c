@@ -19,12 +19,14 @@
 
 #if defined(CONFIG_BT_BLUEDROID_ENABLED)
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "ble_gattc.h"
 #include "ble_proto.h"
 #include "ble_types.h"
 #include "cJSON.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -87,6 +89,10 @@ static struct {
 
     /* counters */
     uint32_t adv_received, adv_posted, post_ok, post_fail;
+    /* Advertisements dropped because the ingest callback could not take
+     * g.lock. Written on the Bluetooth stack task without the lock, read on
+     * the API task, so it is atomic rather than a plain counter. */
+    atomic_uint_least32_t lock_drops;
 } g;
 
 /* ---------------------------------------------------------------- */
@@ -97,12 +103,34 @@ static void on_advertisement(const espos_ble_adv_t *adv, void *arg)
 {
     (void)arg;
     g.adv_received++;
-    /* A short timeout, never portMAX_DELAY: this runs on the Bluetooth stack
-     * task, and blocking it stalls the whole radio. Dropping one
-     * advertisement is much cheaper than that. */
-    if (xSemaphoreTake(g.lock, pdMS_TO_TICKS(5)) != pdTRUE) return;
+    /* Try-lock, not a timeout: this runs on the Bluetooth stack task, and any
+     * wait there stalls the radio -- advertisements the controller discards
+     * while it is stalled never reach a counter, so the cost is invisible.
+     * Every holder of this lock pushes or swaps and gives it straight back,
+     * so a collision costs at most the one advertisement we drop here. */
+    if (xSemaphoreTake(g.lock, 0) != pdTRUE) {
+        /* Its own counter, not q->dropped: that one is a read-modify-write
+         * every other writer performs under g.lock, and incrementing it from
+         * here -- the one path that by definition does not hold the lock --
+         * would race the ring's own eviction counting. Summed into
+         * adv_dropped at read time so the reported tally stays whole. */
+        atomic_fetch_add_explicit(&g.lock_drops, 1, memory_order_relaxed);
+        return;
+    }
     espos_ble_advq_push(&g.q, adv);
     xSemaphoreGive(g.lock);
+}
+
+/* esp_get_free_heap_size() asks for MALLOC_CAP_INTERNAL without
+ * MALLOC_CAP_8BIT, so it counts the 32-bit-access-only IRAM region that no
+ * byte buffer can ever come from -- on an ESP32 that is ~31 kB of heap the
+ * server is told about and nothing can use. Report what an allocation would
+ * actually find. Credit: SensESP/BLE-gateway, which measured 50776 reported
+ * against 19016 real on a HALMET.
+ */
+static uint32_t free_heap_bytes(void)
+{
+    return (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT);
 }
 
 /* ---------------------------------------------------------------- */
@@ -117,7 +145,7 @@ static char *build_adv_body(const espos_ble_adv_t *ads, size_t n)
     cJSON_AddStringToObject(root, "gateway_id", espos_ble_mac());
     cJSON_AddStringToObject(root, "mac", espos_ble_mac());
     cJSON_AddNumberToObject(root, "uptime", esp_timer_get_time() / 1000000);
-    cJSON_AddNumberToObject(root, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "free_heap", (double)free_heap_bytes());
 
     cJSON *devs = cJSON_AddArrayToObject(root, "devices");
     for (size_t i = 0; i < n && devs; i++) {
@@ -242,7 +270,7 @@ static void send_status(void)
     cJSON_AddStringToObject(d, "type", "status");
     cJSON_AddStringToObject(d, "gateway_id", espos_ble_mac());
     cJSON_AddNumberToObject(d, "uptime", esp_timer_get_time() / 1000000);
-    cJSON_AddNumberToObject(d, "free_heap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(d, "free_heap", (double)free_heap_bytes());
     cJSON_AddNumberToObject(d, "scan_hits", espos_ble_scan_hits());
     cJSON_AddNumberToObject(d, "post_success", g.post_ok);
     cJSON_AddNumberToObject(d, "post_fail", g.post_fail);
@@ -925,13 +953,25 @@ esp_err_t espos_ble_get_status(espos_ble_status_t *out)
     out->adv_received = g.adv_received;
     out->adv_posted = g.adv_posted;
     /* Under the lock like every other q access: this runs on the httpd task
-     * while the Bluetooth stack task is pushing. A torn read here would only
-     * misreport a counter, but the inconsistency is not worth keeping. */
-    if (g.lock && xSemaphoreTake(g.lock, pdMS_TO_TICKS(100)) == pdTRUE) {
-        out->adv_dropped = g.q.dropped;
-        out->adv_pending = espos_ble_advq_count(&g.q);
-        xSemaphoreGive(g.lock);
+     * while the Bluetooth stack task is pushing.
+     *
+     * Failing to take it means the ring counters cannot be read at all, and a
+     * partial adv_dropped -- contention drops without the ring's evictions --
+     * would be an undercount indistinguishable from a real one on the public
+     * endpoint. Report the failure instead of a plausible wrong number; every
+     * holder is short (a push, a drain that copies out before it POSTs, this
+     * read), so a timeout here means something is genuinely wrong. */
+    if (!g.lock) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(g.lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
     }
+    out->adv_dropped = g.q.dropped;
+    out->adv_pending = espos_ble_advq_count(&g.q);
+    xSemaphoreGive(g.lock);
+    /* Separately synchronised, so it is read outside the lock and summed in:
+     * adv_dropped is the whole tally, both eviction and lock contention. */
+    out->adv_dropped +=
+        (uint32_t)atomic_load_explicit(&g.lock_drops, memory_order_relaxed);
     out->post_success = g.post_ok;
     out->post_fail = g.post_fail;
     out->ws_connected = g.ws_connected;
