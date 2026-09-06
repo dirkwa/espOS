@@ -58,7 +58,7 @@ void WyomingSatellite::start() {
     if (!e) {
       ESP_LOGW(kTag, "on-device wake alloc failed — tap-to-talk only");
     } else {
-      e->set_muted_fn([this] { return mic_muted(); });
+      e->set_muted_fn([this] { return wake_gated(); });
       e->set_on_detect([this] { start_wake_pipeline(); });
       e->set_input_gain(config_.wake_input_gain);
       e->set_threshold(config_.wake_threshold);
@@ -143,7 +143,7 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
       config_.wake_host.clear();
       WakeEngine* e = new WakeEngine(audio_);
       if (e) {
-        e->set_muted_fn([this] { return mic_muted(); });
+        e->set_muted_fn([this] { return wake_gated(); });
         e->set_on_detect([this] { start_wake_pipeline(); });
         e->set_input_gain(config_.wake_input_gain);
         e->set_threshold(config_.wake_threshold);
@@ -348,6 +348,10 @@ void WyomingSatellite::handle_client(int sock) {
   if (streaming_) {
     audio_->end_stream();
     streaming_ = false;
+    // Same ordering as audio-stop: stamp the echo tail, then drop the gate,
+    // so a quick reconnect can't listen through our own decaying playback.
+    speak_end_us_.store(esp_timer_get_time());
+    playback_active_.store(false);
   }
   close(sock);
   client_sock_ = -1;
@@ -406,6 +410,7 @@ bool WyomingSatellite::on_event(const DecodedEvent& ev) {
       streaming_ = false;
     } else {
       streaming_ = true;
+      playback_active_.store(true);  // gates the wake engine (see wake_gated)
       // Reflect TTS playback in the UI-facing state (unless a voice-in
       // pipeline is mid-flight — don't stomp Listening).
       if (state() != SatState::Listening) set_state(SatState::Speaking);
@@ -429,10 +434,15 @@ bool WyomingSatellite::on_event(const DecodedEvent& ev) {
     if (streaming_) {
       audio_->end_stream();
       streaming_ = false;
+      // Order: stamp the echo-tail start, THEN drop the gate. Clearing
+      // playback_active_ first would open a window where the wake engine
+      // sees neither active playback nor a fresh timestamp and re-triggers
+      // on the reply's decaying tail.
+      speak_end_us_.store(esp_timer_get_time());
+      playback_active_.store(false);
       // Leave Listening alone (a pipeline may be mid-flight); otherwise
       // playback is done, so go back to Idle.
       if (state() == SatState::Speaking) set_state(SatState::Idle);
-      speak_end_us_.store(esp_timer_get_time());
     }
     std::vector<uint8_t> out;
     build_played(out);

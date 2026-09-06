@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -305,6 +306,23 @@ class WyomingSatellite {
   void play_done_tone();  // utterance captured: single blip
   void set_state(SatState s) { state_.store(s); }
 
+  // True when the on-device wake engine must NOT listen: the mic is muted,
+  // a reply is playing, or we are within the echo tail after playback. The
+  // last two keep WakeNet from ingesting the panel's own TTS reply (heard
+  // as a self-triggered "detection" of the reply text). The network wake
+  // path has always had this via wake_session(); the on-device engine gets
+  // it by routing this through its muted_fn.
+  bool wake_gated() const {
+    if (mic_muted()) return true;
+    // playback_active_, not state()==Speaking: during a voice-in pipeline
+    // audio-start deliberately keeps the UI state at Listening, so a
+    // Speaking check would miss the reply that IS playing. This flag tracks
+    // real playback (audio-start..audio-stop, and disconnect teardown).
+    if (playback_active_.load()) return true;
+    return (esp_timer_get_time() - speak_end_us_.load()) < kEchoTailUs;
+  }
+  static constexpr int64_t kEchoTailUs = 1500000;  // 1.5 s
+
   espos_audio::AudioDriver* audio_;
   WyomingSatelliteConfig config_;
 
@@ -329,6 +347,10 @@ class WyomingSatellite {
   SemaphoreHandle_t send_mutex_ = nullptr;  // serialises socket writes
   bool armed_ = false;      // orchestrator sent run-satellite (mic allowed)
   bool streaming_ = false;  // playback: between audio-start and audio-stop
+  // Cross-task mirror of streaming_ for wake_gated() (WakeEngine feed task).
+  // Set true at audio-start; the echo tail begins only once this is cleared,
+  // so it MUST be cleared after speak_end_us_ is stored, never before.
+  std::atomic<bool> playback_active_{false};
   AudioFormat play_fmt_;
 
   // Voice-in (push-to-talk). Level-triggered: ptt_held_ reflects the button
