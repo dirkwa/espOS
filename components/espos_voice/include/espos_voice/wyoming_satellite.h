@@ -314,7 +314,11 @@ class WyomingSatellite {
   // it by routing this through its muted_fn.
   bool wake_gated() const {
     if (mic_muted()) return true;
-    if (state_.load() == SatState::Speaking) return true;
+    // playback_active_, not state()==Speaking: during a voice-in pipeline
+    // audio-start deliberately keeps the UI state at Listening, so a
+    // Speaking check would miss the reply that IS playing. This flag tracks
+    // real playback (audio-start..audio-stop, and disconnect teardown).
+    if (playback_active_.load()) return true;
     return (esp_timer_get_time() - speak_end_us_.load()) < kEchoTailUs;
   }
   static constexpr int64_t kEchoTailUs = 1500000;  // 1.5 s
@@ -343,6 +347,10 @@ class WyomingSatellite {
   SemaphoreHandle_t send_mutex_ = nullptr;  // serialises socket writes
   bool armed_ = false;      // orchestrator sent run-satellite (mic allowed)
   bool streaming_ = false;  // playback: between audio-start and audio-stop
+  // Cross-task mirror of streaming_ for wake_gated() (WakeEngine feed task).
+  // Set true at audio-start; the echo tail begins only once this is cleared,
+  // so it MUST be cleared after speak_end_us_ is stored, never before.
+  std::atomic<bool> playback_active_{false};
   AudioFormat play_fmt_;
 
   // Voice-in (push-to-talk). Level-triggered: ptt_held_ reflects the button
