@@ -140,7 +140,7 @@ jobs:
         run: |
           for m in components/espos_*/idf_component.yml; do
             case "$m" in components/espos_wifi/*|components/espos_n2k/*) continue;; esac
-            ! grep -q 'espressif/mdns' "$m" || { echo "$m: depend on espos_wifi instead"; exit 1; }
+            ! grep -qE '^\s+espressif/mdns:' "$m" || { echo "$m: depend on espos_wifi instead"; exit 1; }
           done
 
   ui:

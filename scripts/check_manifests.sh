@@ -11,7 +11,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 v=$(cat version.txt)
-dest="${1:-build/registry-pack}"
+# compote resolves a relative --dest-dir against --project-dir, not $PWD;
+# absolute keeps the archives in one place.
+dest=$(realpath -m "${1:-build/registry-pack}")
 mkdir -p "$dest"
 for c in components/espos_*/; do
   n=$(basename "$c")
