@@ -1,8 +1,14 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# espos_core starts whatever is built. The optional components are named here
+# so the reference project keeps building every one of them (CI covers all
+# targets that way), not because main.c calls into them.
 idf_component_register(
     SRCS main.c
     INCLUDE_DIRS "."
-    PRIV_REQUIRES espos_config espos_log espos_httpd espos_wifi espos_sk espos_ota)
+    PRIV_REQUIRES espos_core espos_config espos_sk espos_wifi
+                  espos_ota espos_ble espos_n2k espos_voice espos_audio)
 
 espos_config_add_descriptor(config/app.json)
 

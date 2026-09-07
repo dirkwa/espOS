@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Device port: esp_wifi / esp_netif / esp_event glue for the state
  * machine. On ESP32-P4 the same calls reach the C6 co-processor through
@@ -18,6 +19,7 @@
 #include "esp_wifi.h"
 #include "sdkconfig.h"
 
+#include "espos_event.h"
 #include "espos_wifi_priv.h"
 
 static const char *TAG = "espos_wifi";
@@ -31,6 +33,18 @@ static bool s_disconnect_requested;   /* our own esp_wifi_disconnect() is in fli
 static bool s_portal_up;
 static int s_portal_clients;
 static bool s_inited;
+static char s_ssid[33];     /* of the current association, for the GOT_IP line */
+static bool s_net_up;       /* a NETWORK_UP was posted and no NETWORK_DOWN yet */
+
+/* Station connectivity as one edge per direction: a connect attempt that
+ * fails before DHCP never had the network, so it posts nothing. */
+static void net_down(void)
+{
+    if (s_net_up) {
+        s_net_up = false;
+        (void)espos_event_post(ESPOS_EVENT_NETWORK_DOWN, NULL, 0);
+    }
+}
 
 esp_err_t espos_wifi_portal_dns_start(const char *ip);
 void espos_wifi_portal_dns_stop(void);
@@ -49,6 +63,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         memcpy(link.ssid, e->ssid, n);
         memcpy(link.bssid, e->bssid, 6);
         link.channel = e->channel;
+        memcpy(s_ssid, link.ssid, sizeof(s_ssid));
         wifi_ap_record_t ap;
         if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
             link.rssi = ap.rssi; /* we are on the event task, not under the SM lock */
@@ -67,6 +82,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         }
         ESP_LOGW(TAG, "disconnected: %d (%s)", reason, espos_wifi_reason_str(reason));
         espos_wifi_dispatch(ESPOS_WIFI_EV_STA_DISCONNECTED, &reason);
+        net_down();
         break;
     }
     case WIFI_EVENT_SCAN_DONE: {
@@ -131,11 +147,23 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id, void *data
         snprintf(ip.ip, sizeof(ip.ip), IPSTR, IP2STR(&e->ip_info.ip));
         snprintf(ip.netmask, sizeof(ip.netmask), IPSTR, IP2STR(&e->ip_info.netmask));
         snprintf(ip.gateway, sizeof(ip.gateway), IPSTR, IP2STR(&e->ip_info.gw));
-        ESP_LOGI(TAG, "got ip %s", ip.ip);
+        const char *hostname = NULL;
+        if (!s_sta_netif || esp_netif_get_hostname(s_sta_netif, &hostname) != ESP_OK || !hostname) {
+            hostname = "espos";
+        }
+        ESP_LOGI(TAG, "connected to \"%s\" as %s — web UI: http://%s.local", s_ssid, ip.ip, hostname);
+        /* The machine first, so a handler that asks espos_wifi_get_status()
+         * already sees CONNECTED; the post is queued behind this handler. */
         espos_wifi_dispatch(ESPOS_WIFI_EV_GOT_IP, &ip);
+        espos_event_network_t ev = { 0 };
+        snprintf(ev.ip, sizeof(ev.ip), "%s", ip.ip);
+        snprintf(ev.hostname, sizeof(ev.hostname), "%s", hostname);
+        s_net_up = true;
+        (void)espos_event_post(ESPOS_EVENT_NETWORK_UP, &ev, sizeof(ev));
     } else if (id == IP_EVENT_STA_LOST_IP) {
         ESP_LOGW(TAG, "lost ip");
         espos_wifi_dispatch(ESPOS_WIFI_EV_LOST_IP, NULL);
+        net_down();
     }
 }
 
@@ -224,7 +252,7 @@ static esp_err_t p_portal_start(void *ctx)
     s_portal_clients = 0;
     s_portal_up = true;
     espos_wifi_portal_dns_start(PORTAL_IP);
-    ESP_LOGI(TAG, "portal up: SSID '%s' (%s), http://%s/", ssid, psk[0] ? "WPA2" : "open", PORTAL_IP);
+    ESP_LOGI(TAG, "portal up: join \"%s\" (%s) and open http://%s/", ssid, psk[0] ? "WPA2" : "open", PORTAL_IP);
     return ESP_OK;
 }
 

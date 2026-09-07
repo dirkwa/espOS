@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_config — NVS-backed, schema-described configuration store.
  *
@@ -44,6 +45,11 @@ extern "C" {
  * @param backend_ctx  passed through to the backend.
  */
 esp_err_t espos_config_init(const espos_config_backend_t *backend, void *backend_ctx);
+
+/** true once espos_config_init() has succeeded (until deinit). The order
+ * guard the other components use: espos_httpd_start() refuses to run before
+ * the store is up, because every handler it registers reads from it. */
+bool espos_config_is_ready(void);
 
 /** Close namespaces and release resources (tests). */
 void espos_config_deinit(void);

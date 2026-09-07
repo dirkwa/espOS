@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_wifi core: owns the state machine behind a mutex, loads the "wifi"
  * config namespace, follows config changes, exposes status/scan JSON and
@@ -19,7 +20,9 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_httpd.h"
 #include "espos_httpd_sse.h"
+#include "espos_mdns.h"
 #include "espos_wifi.h"
 #include "espos_wifi_priv.h"
 
@@ -46,7 +49,11 @@ static struct {
      * after it is released: driver calls may block on the WiFi task (or the
      * hosted RPC task), which itself needs to deliver events into the SM. */
     struct {
-        enum { ACT_NONE, ACT_CONNECT, ACT_DISCONNECT, ACT_PORTAL_START, ACT_PORTAL_STOP } type;
+        enum { ACT_NONE,
+               ACT_CONNECT,
+               ACT_DISCONNECT,
+               ACT_PORTAL_START,
+               ACT_PORTAL_STOP } type;
         espos_wifi_net_t net;
     } actions[8];
     size_t action_head, action_count;
@@ -189,9 +196,24 @@ static esp_err_t q_connect(void *ctx, const espos_wifi_net_t *net)
     queue_action(ACT_CONNECT, net);
     return ESP_OK;
 }
-static esp_err_t q_disconnect(void *ctx) { (void)ctx; queue_action(ACT_DISCONNECT, NULL); return ESP_OK; }
-static esp_err_t q_portal_start(void *ctx) { (void)ctx; queue_action(ACT_PORTAL_START, NULL); return ESP_OK; }
-static esp_err_t q_portal_stop(void *ctx) { (void)ctx; queue_action(ACT_PORTAL_STOP, NULL); return ESP_OK; }
+static esp_err_t q_disconnect(void *ctx)
+{
+    (void)ctx;
+    queue_action(ACT_DISCONNECT, NULL);
+    return ESP_OK;
+}
+static esp_err_t q_portal_start(void *ctx)
+{
+    (void)ctx;
+    queue_action(ACT_PORTAL_START, NULL);
+    return ESP_OK;
+}
+static esp_err_t q_portal_stop(void *ctx)
+{
+    (void)ctx;
+    queue_action(ACT_PORTAL_STOP, NULL);
+    return ESP_OK;
+}
 
 /* status_changed from the SM (lock held): snapshot now, publish after unlock. */
 static void on_status_changed(void *ctx)
@@ -595,6 +617,13 @@ esp_err_t espos_wifi_start(void)
     if (s.started) {
         return ESP_OK;
     }
+    /* The /wifi endpoints and the portal's page live on the HTTP server; a
+     * portal that comes up with nothing to serve is the worst first
+     * impression a device can make. */
+    if (!espos_httpd_handle()) {
+        ESP_LOGE(TAG, "espos_wifi_start: call espos_httpd_start() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
+    }
     s.drv = espos_wifi_driver();
     if (!s.lock) {
         s.lock = xSemaphoreCreateMutex();
@@ -664,6 +693,17 @@ esp_err_t espos_wifi_start(void)
     s.started = true;
     ESP_LOGI(TAG, "hostname %s, %u network(s), portal %s", s.hostname, (unsigned)cfg.net_count,
              cfg.portal_enabled ? s.portal_ssid : "off");
+    if (cfg.net_count == 0 && cfg.portal_enabled) {
+        /* The machine brings the portal up at once when nothing is
+         * configured; say what to do next before the driver lines start. */
+        ESP_LOGI(TAG, "no network configured: join \"%s\" and open http://%s", s.portal_ssid,
+                 s.drv->portal_ip ? s.drv->portal_ip : "192.168.4.1");
+    }
+    /* The responder needs the netif and event loop the driver just made and
+     * takes records before the station has an address (espos_mdns.h). A
+     * failure costs discoverability, not WiFi; NOT_SUPPORTED in builds
+     * without it. */
+    (void)espos_mdns_start();
     espos_wifi_dispatch(ESPOS_WIFI_EV_START, NULL);
     return ESP_OK;
 }

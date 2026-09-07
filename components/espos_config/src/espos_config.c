@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_config core: descriptor lookup, validated typed access, versioning and
  * migrations, factory reset, change notification. Storage goes through the
@@ -124,7 +125,11 @@ static esp_err_t lookup(const char *ns, const char *key, ns_state_t **nss, const
 bool espos_config_validate(const espos_cfg_key_t *key, const espos_cfg_value_t *val,
                            char *msg, size_t msg_size)
 {
-#define FAIL(...) do { if (msg && msg_size) { snprintf(msg, msg_size, __VA_ARGS__); } return false; } while (0)
+#define FAIL(...)                                                      \
+    do {                                                               \
+        if (msg && msg_size) { snprintf(msg, msg_size, __VA_ARGS__); } \
+        return false;                                                  \
+    } while (0)
     if (val->type != key->type) {
         static const char *const names[] = { "?", "boolean", "integer", "number", "string", "blob(base64)" };
         FAIL("expected %s", names[key->type <= ESPOS_CFG_TYPE_BLOB ? key->type : 0]);
@@ -193,6 +198,11 @@ void espos_config_unlock(void)
 }
 
 bool espos_config_is_inited(void)
+{
+    return s.inited;
+}
+
+bool espos_config_is_ready(void)
 {
     return s.inited;
 }
@@ -389,7 +399,10 @@ static esp_err_t reset_locked(ns_state_t *nss, const espos_cfg_key_t *key, bool 
     case ESPOS_CFG_TYPE_INT: def.v.i = key->def.i; break;
     case ESPOS_CFG_TYPE_FLOAT: def.v.f = key->def.f; break;
     case ESPOS_CFG_TYPE_STRING: def.v.s = key->def.s; break;
-    case ESPOS_CFG_TYPE_BLOB: def.v.blob.p = NULL; def.v.blob.len = 0; break;
+    case ESPOS_CFG_TYPE_BLOB:
+        def.v.blob.p = NULL;
+        def.v.blob.len = 0;
+        break;
     }
     bool eq = false;
     esp_err_t err = value_equals_effective(nss->desc, key, &def, &eq);
@@ -766,7 +779,10 @@ esp_err_t espos_config_factory_reset(void)
 
 /* -------------------------------------------------------------- accessors */
 
-#define CHECK_INITED() do { if (!s.inited) { return ESP_ERR_INVALID_STATE; } } while (0)
+#define CHECK_INITED()                                   \
+    do {                                                 \
+        if (!s.inited) { return ESP_ERR_INVALID_STATE; } \
+    } while (0)
 
 static esp_err_t get_scalar(const char *ns, const char *key, espos_cfg_type_t type, espos_cfg_value_t *out)
 {

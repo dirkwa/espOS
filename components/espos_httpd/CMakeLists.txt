@@ -1,6 +1,7 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 idf_build_get_property(target IDF_TARGET)
-set(priv_reqs esp_timer esp_app_format esp_system esp_event espos_log espressif__cjson)
+set(priv_reqs esp_timer esp_app_format esp_system esp_event espos_log espos_event espos_health espressif__cjson)
 if(NOT target STREQUAL "linux")
     list(APPEND priv_reqs esp_netif espcoredump esp_partition joltwallet__littlefs)
 endif()

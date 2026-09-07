@@ -1,0 +1,20 @@
+menu "espOS core"
+
+    config ESPOS_CORE_HEALTH_WATCHDOG
+        bool "Restart on health conditions the device cannot recover from"
+        default y
+        help
+            When on, espos_init() arms espos_health's watchdog policy: the
+            device restarts after three consecutive 10 s ticks with a
+            condition in ALARM that was reported with
+            ESPOS_HEALTH_F_REBOOT_ON_ALARM (internal RAM exhausted, the
+            SignalK stream dead for sk.stall_s while WiFi is up, a watched
+            task stalled). A WiFi loss never counts. The per-app
+            espos_start_opts_t.health_watchdog can still turn it off at
+            runtime. Details: docs/health.md.
+
+            Turn it off for a device whose application handles such
+            conditions itself, or where a restart would be worse than the
+            condition (a display mid-passage).
+
+endmenu

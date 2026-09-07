@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_sk — SignalK server discovery and access-token management (M3);
  * WebSocket delta output and meta reconciliation follow in M4.
@@ -40,7 +41,7 @@ typedef struct {
 esp_err_t espos_sk_start(void);
 esp_err_t espos_sk_stop(void);
 
-/** Status document of docs/api.md (malloc'ed JSON). */
+/** Status document of docs/rest-api.md (malloc'ed JSON). */
 esp_err_t espos_sk_status_json(char **out_json);
 /** Discovered servers as JSON array document {"servers":[...]} (malloc'ed). */
 esp_err_t espos_sk_servers_json(char **out_json);
@@ -161,6 +162,16 @@ esp_err_t espos_sk_get_token(char *buf, size_t size);
 /** Copy the current server (host/port/self); ESP_ERR_NOT_FOUND if none. */
 esp_err_t espos_sk_get_server(espos_sk_server_t *out);
 const char *espos_sk_client_id(void);
+
+/**
+ * Name the device in the server's access-request list. The default
+ * description is "<name> <hostname>" when sk.description is empty; without a
+ * name it is "espOS <hostname>", which tells an operator approving five
+ * requests nothing. espos_start() passes the application name. Takes effect
+ * on the next configuration load (before espos_sk_start(), or a config
+ * change). Copies at most 32 characters; ESP_ERR_INVALID_ARG on NULL.
+ */
+esp_err_t espos_sk_set_app_name(const char *name);
 
 #ifdef __cplusplus
 }
