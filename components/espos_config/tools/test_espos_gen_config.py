@@ -1,5 +1,7 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
-"""Unit tests for espos_gen_config.py (run: python3 -m unittest discover -s tools -p 'test_*.py')."""
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+"""Unit tests for espos_gen_config.py
+(run: python3 -m unittest discover -s components/espos_config/tools -p 'test_*.py')."""
 import json
 import os
 import shutil
@@ -130,9 +132,26 @@ class GenTests(unittest.TestCase):
         # float32 max itself is fine
         self.run_gen(write(self.tmp, "f3.json", dict(BASE, keys=[{"name": "f", "type": "float", "default": 3.4e38, "max": 3.4e38}])))
 
-    def test_no_descriptors(self):
-        with self.assertRaises(g.DescriptorError):
-            self.run_gen()
+    def test_no_descriptors_yields_empty_tables(self):
+        ns, schema, c, h = self.run_gen()
+        self.assertEqual(ns, [])
+        self.assertEqual(schema["properties"], {})
+        self.assertEqual(schema["$id"], "urn:espos:config")
+        self.assertIn("espos_cfg_namespace_count = 0", c)
+        self.assertIn("espos_cfg_namespaces[1]", c)
+        self.assertIn("espos_cfg_schema_etag[]", c)
+        self.assertNotIn("#define ESPOS_CFG_NS_", h)
+        self.assertIn("#define ESPOS_CFG_SCHEMA_ETAG", h)
+        # the empty tables compile standalone, like the full ones do
+        src = os.path.join(self.tmp, "gen.c")
+        inc = os.path.join(os.path.dirname(__file__), "..", "include")
+        r = subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", "-I", inc, src],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # and the CLI, as CMake invokes it with an empty descriptor list, succeeds
+        rc = g.main(["--schema-out", os.path.join(self.tmp, "s.json"), "--c-out", os.path.join(self.tmp, "g.c"),
+                     "--h-out", os.path.join(self.tmp, "k.h"), ""])
+        self.assertEqual(rc, 0)
 
     def test_all_types_and_flags(self):
         d = {
@@ -169,7 +188,7 @@ class GenTests(unittest.TestCase):
         self.assertIn(r'he said \"hi\"\\ \303\251', c)
         # generated C compiles standalone
         src = os.path.join(self.tmp, "gen.c")
-        inc = os.path.join(os.path.dirname(__file__), "..", "components", "espos_config", "include")
+        inc = os.path.join(os.path.dirname(__file__), "..", "include")
         r = subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", "-I", inc, src],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
