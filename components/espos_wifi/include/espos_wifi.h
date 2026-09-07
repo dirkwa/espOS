@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_wifi — station connection manager with an explicit status model,
  * multi-network priority list, exponential backoff, and a SoftAP
@@ -57,7 +58,7 @@ esp_err_t espos_wifi_get_status(espos_wifi_status_t *out);
  * answer. */
 esp_err_t espos_wifi_refresh_rssi(void);
 
-/** Serialise the status as the JSON document of docs/api.md (malloc'ed). */
+/** Serialise the status as the JSON document of docs/rest-api.md (malloc'ed). */
 esp_err_t espos_wifi_status_json(char **out_json);
 
 /* Scan API: start is asynchronous; results are cached and a "wifi_scan"

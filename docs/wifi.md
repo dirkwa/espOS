@@ -182,6 +182,98 @@ than one sitting unreachable until someone power-cycles it, which is the
 behaviour this replaces — and that, not the in-place repair, was always
 the valuable half.
 
+## mDNS
+
+`espos_wifi` runs the device's mDNS responder (`espos_mdns.h`, `src/mdns.c`).
+It answers for **`<hostname>.local`** — `wifi.hostname`, default
+`espos-<last 4 hex of MAC>` — with that name as the instance name, and
+advertises two services on `httpd.port`:
+
+| Service        | TXT                                                                                    | For                                         |
+|----------------|----------------------------------------------------------------------------------------|---------------------------------------------|
+| `_http._tcp`   | `path=/`                                                                               | browsers, "open the device" in any mDNS app |
+| `_espos._tcp`  | `v=<app version>` `app=<app name>` `espos=<espOS version>` `target=<chip>` `id=<short id>` `api=/api/v1` `auth=0` | finding every espOS device with one query and knowing what it is before fetching anything |
+
+`v` and `app` are IDF's `PROJECT_VER` / `PROJECT_NAME` (the values
+`esp_app_desc_t` carries, `git describe` for the version in a tagged
+checkout), compiled in by the component's `CMakeLists.txt`; `espos` is
+espOS's own `version.txt` (the manifest version in a registry-installed
+copy). `id` is `espos_wifi_short_id()`. `auth=0` says the REST API takes no
+credentials; it flips when it grows some.
+
+`espos_wifi_start()` brings the responder up right after the driver — before
+the station has an address. That is deliberate: the responder accepts
+records without a link and announces them itself on GOT_IP, and doing the
+work there rather than in a `NETWORK_UP` handler keeps the event loop free
+(`mdns_hostname_set()` waits for the responder task; `mdns_service_add()`
+takes a lock that task holds while it parses packets — neither belongs in a
+handler). The link state is tracked separately:
+**`ESPOS_EVENT_MDNS_READY`** is posted on every `NETWORK_UP` once the
+responder runs, and `espos_mdns_is_ready()` answers true exactly while a
+query or an announcement can reach the network (false again on
+`NETWORK_DOWN`). SignalK discovery starts browsing on that signal.
+
+### Registering a service
+
+```c
+#include "espos_mdns.h"
+
+static const char *const txt[] = { "schema=1", "widgets=label,value,toggle", "api=/layout,/hello" };
+ESP_ERROR_CHECK(espos_mdns_add_service("_signalk-player", "_tcp", 8081, txt, 3));
+/* ... */
+espos_mdns_remove_service("_signalk-player", "_tcp");
+```
+
+* Callable **any time**, from any application task or `app_main()` — before
+  `espos_start()`, before WiFi, before the responder exists. The entry waits
+  in a table of `CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES` (default 6) slots and
+  is registered when the responder comes up; afterwards it is registered at
+  once. There is no readiness to wait for and nothing to retry.
+* Adding a `(type, proto)` that is already in the table replaces its port
+  and TXT: the old record is withdrawn, the new one announced.
+* Limits (refused, never truncated): type < 32 chars starting with `_`,
+  proto `_tcp` or `_udp`, up to 8 TXT items totalling 256 bytes with their
+  separators. `"k"` without `=` is a flag item (empty value).
+* Returns `ESP_ERR_INVALID_ARG` / `ESP_ERR_INVALID_SIZE` for a malformed
+  request, `ESP_ERR_NO_MEM` when the table is full, and the responder's own
+  error when it refuses the record (its ceiling is `CONFIG_MDNS_MAX_SERVICES`,
+  default 10: the two built-ins, these slots and anything a component adds
+  with `mdns_service_add()` directly all count) — then the entry is
+  dropped, not queued. `ESP_ERR_NOT_SUPPORTED` when built without the
+  responder.
+* Threading: `espos_mdns_start()`, `espos_mdns_add_service()` and
+  `espos_mdns_remove_service()` run on the caller's task and may block for a
+  few milliseconds on the responder — not from an `ESPOS_EVENT` handler or a
+  URI handler. `espos_mdns_is_ready()` only takes the table mutex.
+
+What this replaces in consumers: a 2-second retry loop around
+`mdns_service_add()` that watched for `ESP_ERR_INVALID_STATE` until espOS
+happened to have started the responder (the P4 cockpit's
+`mdns_announce.cpp`) becomes the one call above. `espos_n2k` keeps its own
+`mdns_service_add()` in the candump server: that component deliberately has
+no espOS dependencies, and the responder is the same one either way.
+
+### Configuration
+
+* `CONFIG_ESPOS_WIFI_MDNS` (default y) — the responder and the whole API.
+  Off saves the responder task and its sockets (~4 KB) and makes the device
+  reachable by address only; SignalK discovery cannot run without it and
+  `sk.server_host` must be set. Not available on the linux target
+  (`espressif/mdns` does not exist there), where `espos_mdns_*` compile to
+  stubs returning `ESP_ERR_NOT_SUPPORTED` / `false`.
+* `CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES` (default 6, 1..16) — application
+  service slots.
+* `wifi.hostname` (restart required) — the `.local` name.
+
+### Why here, and where it goes
+
+mDNS follows an interface, not a radio. It sits in `espos_wifi` because the
+WiFi station is the only interface espOS has today and the responder needs
+that component's netif and event loop to exist; when Ethernet arrives the
+file and the header move, unchanged, to a transport-neutral `espos_net`
+that `espos_wifi` and an Ethernet driver both feed. Nothing in the API names
+WiFi, so that move costs consumers an include path at most.
+
 ## Design notes
 
 * The state machine (`wifi_sm.c`) is pure C over an injected port and runs
@@ -198,11 +290,11 @@ the valuable half.
   deadline (whichever is earlier), so there is nothing to keep in sync.
 * ESP32-P4: WiFi is an ESP32-C6 co-processor over SDIO (`esp_hosted` +
   `esp_wifi_remote`, P4-only dependencies in `main/idf_component.yml`;
-  pinout in `sdkconfig.defaults.esp32p4`). Same `esp_wifi_*` API; the MAC is
+  pinout in `sdkconfig.d/espos.defaults.esp32p4`). Same `esp_wifi_*` API; the MAC is
   read from the driver, not eFuse.
 
   Three settings on that transport are load-bearing, all pinned in
-  `sdkconfig.defaults.esp32p4`:
+  `sdkconfig.d/espos.defaults.esp32p4`:
 
   * **`CONFIG_WIFI_RMT_RX_BA_WIN=6`.** IDF defaults this to 6 but raises it
     to 16 as soon as a project enables PSRAM

@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * OTA task: manifest checks, installs, and the confirm/rollback policy for
  * a freshly booted image. One task, one command queue; blocking downloads
@@ -18,6 +19,8 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_event.h"
+#include "espos_httpd.h"
 #include "espos_httpd_sse.h"
 #include "espos_ota.h"
 #include "espos_ota_manifest.h"
@@ -26,16 +29,17 @@
 
 static const char *TAG = "espos_ota";
 
-#define CMD_CHECK        1
-#define CMD_INSTALL_URL  2
+#define CMD_CHECK         1
+#define CMD_INSTALL_URL   2
 #define CMD_INSTALL_AVAIL 3
-#define CMD_CONFIRM      4
-#define CMD_ROLLBACK     5
-#define CMD_STOP         6
+#define CMD_CONFIRM       4
+#define CMD_ROLLBACK      5
+#define CMD_STOP          6
 
-#define MANIFEST_MAX     (16 * 1024)
-#define BOOT_CHECK_DELAY_S 20      /* let WiFi come up before the first manifest fetch */
-#define NO_STA_GRACE_S    60       /* confirm without station config after this */
+/* Sized in Kconfig ("espOS OTA"); the short names keep the code readable. */
+#define MANIFEST_MAX       CONFIG_ESPOS_OTA_MANIFEST_MAX
+#define BOOT_CHECK_DELAY_S CONFIG_ESPOS_OTA_BOOT_CHECK_DELAY_S  /* let WiFi come up before the first manifest fetch */
+#define NO_STA_GRACE_S     CONFIG_ESPOS_OTA_NO_STA_GRACE_S      /* confirm without station config after this */
 
 typedef struct {
     int cmd;
@@ -99,7 +103,8 @@ static void load_config(void)
 
 static void on_config(const char *ns, const char *key, void *arg)
 {
-    (void)key; (void)arg;
+    (void)key;
+    (void)arg;
     if (strcmp(ns, ESPOS_CFG_NS_OTA) == 0) {
         s.cfg_dirty = true;
     }
@@ -204,6 +209,9 @@ static void do_check(void)
     }
     ESP_LOGI(TAG, "manifest: %s available (running %s)%s", b.version, info.version, auto_install ? ", installing" : "");
     set_state(ESPOS_OTA_AVAILABLE, NULL);
+    espos_event_ota_t ev = { 0 };
+    snprintf(ev.version, sizeof(ev.version), "%s", b.version);
+    (void)espos_event_post(ESPOS_EVENT_OTA_AVAILABLE, &ev, sizeof(ev));
     if (auto_install) {
         cmd_t c = { .cmd = CMD_INSTALL_AVAIL };
         xQueueSend(s.q, &c, 0);
@@ -338,6 +346,17 @@ esp_err_t espos_ota_start(void)
     if (s.task) {
         return ESP_OK;
     }
+    /* The API goes onto the HTTP server and the confirm/rollback policy
+     * watches the WiFi state; neither can be retrofitted later. */
+    if (!espos_httpd_handle()) {
+        ESP_LOGE(TAG, "espos_ota_start: call espos_httpd_start() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
+    }
+    espos_wifi_status_t wifi;
+    if (espos_wifi_get_status(&wifi) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_ota_start: call espos_wifi_start() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!s.lock) {
         s.lock = xSemaphoreCreateMutex();
         s.q = xQueueCreate(4, sizeof(cmd_t));
@@ -355,7 +374,7 @@ esp_err_t espos_ota_start(void)
     ESP_LOGI(TAG, "running %s %s in %s (%s)%s", info.project, info.version, info.slot, info.state,
              info.rolled_back ? " — previous update was rolled back" : "");
     /* 8 KB words on the simulator would overflow the 16-bit depth; bytes on chips. */
-    const uint32_t stack = configMINIMAL_STACK_SIZE > 3072 ? configMINIMAL_STACK_SIZE * 2 : 8192;
+    const uint32_t stack = configMINIMAL_STACK_SIZE > 3072 ? configMINIMAL_STACK_SIZE * 2 : CONFIG_ESPOS_OTA_STACK_SIZE;
     if (xTaskCreate(ota_task, "espos_ota", stack, NULL, tskIDLE_PRIORITY + 3, &s.task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

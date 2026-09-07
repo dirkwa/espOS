@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 // Shell: nav + a hand-rolled history router (no router dependency).
 import { useEffect, useState } from "preact/hooks";
 import { linkStore, useStore, wifiStore, skStore } from "./api";

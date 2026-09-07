@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 """
-Drives build/espos_httpd_test.elf through the REST API contract in docs/api.md.
+Drives build/espos_httpd_test.elf through the REST API contract in docs/rest-api.md.
 Standard library only. Exit code 0 == all checks passed.
 """
 import gzip
@@ -446,6 +447,7 @@ class MockSignalK:
         self.ws_auth = None     # last Authorization header seen on the stream
         self.meta = {}          # path -> meta dict
         self.meta_puts = []
+        self.values = {}        # path -> current value, served as the REST node {"value": …}
         self.subs = []          # subscribe frames received on the stream
         self.unsubs = []
         self.puts = []          # {"requestId","path","value"} received via the stream
@@ -577,6 +579,14 @@ class MockSignalK:
                     if path in mock.meta:
                         return self._send(200, mock.meta[path])
                     return self._send(404, {"error": "no meta"})
+                if self.path.startswith("/signalk/v1/api/vessels/self/"):
+                    # The REST node of a leaf path, as signalk-server serves it: the
+                    # reading sits under "value" next to its source and timestamp.
+                    path = self.path[len("/signalk/v1/api/vessels/self/"):].replace("/", ".")
+                    if path in mock.values:
+                        return self._send(200, {"value": mock.values[path], "$source": "mock.1",
+                                                "timestamp": "2026-08-18T10:00:00.000Z"})
+                    return self._send(404, {"error": "no such path"})
                 if self.path == "/signalk":
                     return self._send(200, {"endpoints": {"v1": {"version": "2.31.1"}}})
                 if self.path.startswith("/signalk/v1/requests/"):
@@ -634,6 +644,8 @@ class MockSignalK:
                         return self._send(200, {})
                     if cmd == "log":
                         return self._send(200, mock.log)
+                    if cmd == "blob":        # n bytes of body, for the client's size cap
+                        return self._send(200, raw=b"x" * int(arg), ctype="text/plain")
                 return self._send(404, {"error": "nope"})
 
             def do_POST(self):
@@ -1562,6 +1574,92 @@ class SkTests(unittest.TestCase):
         req("PUT", "/api/v1/config", {"sk": {"server_host": None, "server_port": None}})
         js = wait_sk(lambda j: j["server"].get("source") == "discovered", timeout=10)
         self.assertIsNotNone(js, sk_status())
+
+    # ---- espos_sk_http_* (the real esp_http_client, through the harness probe) ----
+
+    def http(self, op, path, **kw):
+        st, _, _, js = req("POST", "/__harness/sk/http", dict(op=op, path=path, **kw))
+        self.assertEqual(st, 200, js)
+        return js
+
+    def test_10_http_helper_get_200_with_body_and_bearer_header(self):
+        js = self.http("get", "/signalk")
+        self.assertEqual(js["err"], "ESP_OK")
+        self.assertEqual(js["status"], 200)
+        self.assertFalse(js["truncated"])
+        self.assertEqual(js["len"], len(js["body"]))
+        self.assertEqual(json.loads(js["body"])["endpoints"]["v1"]["version"], "2.31.1")
+        # the token rode as an Authorization header, never in the URL
+        seen = [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1].startswith("/signalk")]
+        self.assertTrue(seen[-1][2].startswith("Bearer "), seen[-1])
+        self.assertNotIn("token=", seen[-1][1])
+        # opting out of auth drops the header entirely
+        self.http("get", "/signalk", no_auth=True)
+        seen = [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1] == "/signalk"]
+        self.assertIsNone(seen[-1][2])
+
+    def test_11_http_helper_404_is_a_reply_not_an_error(self):
+        js = self.http("get", "/signalk/v1/api/vessels/self/nothing/here")
+        self.assertEqual(js["err"], "ESP_OK")
+        self.assertEqual(js["status"], 404)
+        self.assertEqual(json.loads(js["body"]), {"error": "no such path"})
+
+    def test_12_http_helper_oversize_body_is_truncated_not_parsed(self):
+        js = self.http("get", "/__test/blob/40000")          # default cap 16 KiB
+        self.assertEqual(js["status"], 200)
+        self.assertTrue(js["truncated"])
+        self.assertEqual(js["len"], 16384)
+        self.assertEqual(js["body"], "x" * 16384)
+        js = self.http("get", "/__test/blob/40000", max_body=1000)
+        self.assertTrue(js["truncated"])
+        self.assertEqual(js["len"], 1000)
+        js = self.http("get", "/__test/blob/1000", max_body=1000)   # exactly at the cap: whole
+        self.assertFalse(js["truncated"])
+        self.assertEqual(js["len"], 1000)
+        js = self.http("get", "/__test/blob/0")
+        self.assertEqual(js["status"], 200)
+        self.assertEqual(js["len"], 0)
+        self.assertEqual(js["body"], "")
+
+    def test_12b_value_meta_urls_and_put_share_the_core(self):
+        self.mock.values["navigation.speedOverGround"] = 3.25
+        self.mock.values["navigation.position"] = {"latitude": 54.1, "longitude": 10.2}
+        self.mock.meta["navigation.speedOverGround"] = {"units": "m/s"}
+        js = self.http("value", "navigation.speedOverGround")
+        self.assertEqual(js["err"], "ESP_OK")
+        self.assertEqual(js["json"], 3.25)
+        js = self.http("value", "navigation.position")
+        self.assertEqual(js["json"], {"latitude": 54.1, "longitude": 10.2})
+        js = self.http("value", "navigation.nothing")
+        self.assertEqual(js["err"], "ESP_ERR_NOT_FOUND")
+        self.assertIsNone(js["json"])
+        js = self.http("meta", "navigation.speedOverGround")
+        self.assertEqual(js["json"], {"units": "m/s"})
+        js = self.http("meta", "navigation.position")
+        self.assertEqual(js["err"], "ESP_ERR_NOT_FOUND")
+        base = f"127.0.0.1:{self.mock.port}"
+        self.assertEqual(self.http("url", "/signalk/v1/api")["url"], f"http://{base}/signalk/v1/api")
+        self.assertEqual(self.http("ws_url", "signalk/v1/stream")["url"], f"ws://{base}/signalk/v1/stream")
+        # PUT goes through the same core: the meta lands on the mock under our token
+        js = self.http("put", "/signalk/v1/api/vessels/self/espos/http/test/meta", json='{"value":{"units":"Hz"}}')
+        self.assertEqual(js["status"], 200, js)
+        self.assertEqual(self.mock.meta["espos.http.test"], {"units": "Hz"})
+
+    def test_13_http_helper_401_reports_unauthorized(self):
+        # A long check interval, so what flips the token machine below is the
+        # helper's report and not the periodic re-verify.
+        req("PUT", "/api/v1/config", {"sk": {"check_s": 3600}})
+        js = wait_sk(lambda j: j["token"]["state"] == "approved", timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        before = js["token"]["counts"]["unauthorized"]
+        self.mock.ctl("revoke", js["client_id"])
+        js = self.http("get", "/signalk/v1/api/self")
+        self.assertEqual(js["err"], "ESP_OK")
+        self.assertEqual(js["status"], 401)
+        js = wait_sk(lambda j: j["token"]["counts"]["unauthorized"] == before + 1, timeout=10)
+        self.assertIsNotNone(js, sk_status())
+        self.assertFalse(js["token"]["has_token"])
+        self.assertIn(js["token"]["state"], ("requesting", "pending"))
 
 
 if __name__ == "__main__":

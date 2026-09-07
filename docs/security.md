@@ -39,11 +39,11 @@ door; both belong in the same future change.
 WiFi passwords (M2) and the SignalK token (M3) live in NVS. For production
 builds enable flash encryption; IDF then defaults `CONFIG_NVS_ENCRYPTION=y`
 and encrypts the `nvs` partition transparently using keys in the
-`nvs_keys` partition (already in `partitions.csv`, flagged `encrypted`),
+`nvs_keys` partition (present in every bundled `partitions/*.csv`, flagged `encrypted`),
 or the HMAC peripheral on chips that have one.
 
-Suggested release overlay (`sdkconfig.defaults.release`, not committed
-yet):
+The release overlay is `sdkconfig.d/release.defaults`, selected with
+`espos_project_prologue(... PROFILE release)` or `-DESPOS_PROFILE=release`:
 
 ```
 CONFIG_SECURE_FLASH_ENC_ENABLED=y

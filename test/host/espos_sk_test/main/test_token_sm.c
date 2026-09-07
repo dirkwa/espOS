@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Token state machine tests: every transition of the M3 diagram, including
  * 404 on poll, reboot mid-approval (store round trip), token revoked while
@@ -20,24 +21,74 @@ static struct {
     uint32_t rnd;
 } F;
 
-static void f_request(void *ctx, const espos_sk_server_t *srv, const espos_sk_tok_cfg_t *cfg) { (void)ctx; (void)srv; (void)cfg; F.requests++; }
-static void f_poll(void *ctx, const espos_sk_server_t *srv, const char *href) { (void)ctx; (void)srv; F.polls++; strcpy(F.last_href, href); }
-static void f_verify(void *ctx, const espos_sk_server_t *srv, const char *tok) { (void)ctx; (void)srv; F.verifies++; strcpy(F.last_verify_token, tok); }
-static void f_save(void *ctx, const espos_sk_tok_store_t *st) { (void)ctx; F.saves++; F.saved = *st; }
-static void f_arm(void *ctx, uint32_t ms) { (void)ctx; F.timer_armed = true; F.timer_due = F.now + ms; }
-static void f_cancel(void *ctx) { (void)ctx; F.timer_armed = false; }
-static uint32_t f_now(void *ctx) { (void)ctx; return F.now; }
-static uint32_t f_random(void *ctx) { (void)ctx; return F.rnd; }
-static void f_notify(void *ctx) { (void)ctx; F.notifies++; }
+static void f_request(void *ctx, const espos_sk_server_t *srv, const espos_sk_tok_cfg_t *cfg)
+{
+    (void)ctx;
+    (void)srv;
+    (void)cfg;
+    F.requests++;
+}
+static void f_poll(void *ctx, const espos_sk_server_t *srv, const char *href)
+{
+    (void)ctx;
+    (void)srv;
+    F.polls++;
+    strcpy(F.last_href, href);
+}
+static void f_verify(void *ctx, const espos_sk_server_t *srv, const char *tok)
+{
+    (void)ctx;
+    (void)srv;
+    F.verifies++;
+    strcpy(F.last_verify_token, tok);
+}
+static void f_save(void *ctx, const espos_sk_tok_store_t *st)
+{
+    (void)ctx;
+    F.saves++;
+    F.saved = *st;
+}
+static void f_arm(void *ctx, uint32_t ms)
+{
+    (void)ctx;
+    F.timer_armed = true;
+    F.timer_due = F.now + ms;
+}
+static void f_cancel(void *ctx)
+{
+    (void)ctx;
+    F.timer_armed = false;
+}
+static uint32_t f_now(void *ctx)
+{
+    (void)ctx;
+    return F.now;
+}
+static uint32_t f_random(void *ctx)
+{
+    (void)ctx;
+    return F.rnd;
+}
+static void f_notify(void *ctx)
+{
+    (void)ctx;
+    F.notifies++;
+}
 
 static const espos_sk_tok_port_t PORT = {
-    .http_request = f_request, .http_poll = f_poll, .http_verify = f_verify, .store_save = f_save,
-    .arm_timer = f_arm, .cancel_timer = f_cancel, .now_ms = f_now, .random = f_random, .status_changed = f_notify,
+    .http_request = f_request,
+    .http_poll = f_poll,
+    .http_verify = f_verify,
+    .store_save = f_save,
+    .arm_timer = f_arm,
+    .cancel_timer = f_cancel,
+    .now_ms = f_now,
+    .random = f_random,
+    .status_changed = f_notify,
 };
 
 static espos_sk_tok_sm_t SM;
-static const espos_sk_tok_cfg_t CFG = { .client_id = "11111111-2222-4333-8444-555555555555", .description = "espOS test",
-                                        .permissions = "readwrite", .check_interval_ms = 60000 };
+static const espos_sk_tok_cfg_t CFG = { .client_id = "11111111-2222-4333-8444-555555555555", .description = "espOS test", .permissions = "readwrite", .check_interval_ms = 60000 };
 static const espos_sk_server_t SRV_A = { .host = "10.0.0.10", .port = 80, .self = "urn:mrn:signalk:uuid:aaaa" };
 static const espos_sk_server_t SRV_B = { .host = "10.0.0.11", .port = 3000, .self = "urn:mrn:signalk:uuid:bbbb" };
 static const espos_sk_server_t SRV_MANUAL = { .host = "192.168.1.5", .port = 80, .self = "" };
@@ -63,7 +114,10 @@ static void tick(uint32_t ms)
 static void request_result(int status, const char *href, const char *msg)
 {
     espos_sk_http_result_t r = { .http_status = status };
-    if (href) { strcpy(r.href, href); strcpy(r.state, "PENDING"); }
+    if (href) {
+        strcpy(r.href, href);
+        strcpy(r.state, "PENDING");
+    }
     if (msg) { strcpy(r.message, msg); }
     espos_sk_tok_event(&SM, ESPOS_SK_EV_REQUEST_RESULT, &r);
 }

@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Compile the codec directly rather than depending on espos_n2k: the
 # component needs the TWAI peripheral and lwIP, which the linux target has

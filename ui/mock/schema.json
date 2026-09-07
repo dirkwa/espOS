@@ -264,6 +264,15 @@
           "minimum": 0,
           "maximum": 3600,
           "x-espos-unit": "s"
+        },
+        "stall_s": {
+          "title": "Stream stall before restart",
+          "description": "Restart the device when WiFi is up but the SignalK stream, which worked once this boot, has been down this long. 0 is not allowed; raise it on a boat whose server is often off.",
+          "type": "integer",
+          "default": 300,
+          "minimum": 60,
+          "maximum": 3600,
+          "x-espos-unit": "s"
         }
       },
       "additionalProperties": false,

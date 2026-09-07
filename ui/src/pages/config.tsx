@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 // Generic settings editor rendered from the JSON Schema (GET /config/schema).
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { get, put, post, useStore, configChangeStore, errText, type ConfigDoc, type ConfigSchema, type JsonSchemaProp, type PutResult } from "../api";

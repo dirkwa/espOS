@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_n2k/candump_tcp_server.h"
 
 #include <cstring>
@@ -6,14 +7,28 @@
 #include "mdns.h"
 #include "esp_log.h"
 #include "lwip/sockets.h"
+#include "sdkconfig.h"
 
 #include "espos_n2k/candump_format.h"
-#include <cstdlib>   // malloc, free
+#include <cstdlib>  // malloc, free
 
 namespace espos_n2k {
 
 namespace {
 constexpr const char* kTag = "candump_srv";
+
+// The service type and the "model" tag stay `sensesp-n2k` by default even
+// though this component no longer has anything to do with SensESP: they are
+// on the wire, and SignalK servers already browse for them. Renaming would
+// make every existing gateway invisible to every existing client for the
+// sake of tidiness -- so the new names are opt-in (Kconfig, "espOS NMEA 2000").
+#if CONFIG_ESPOS_N2K_MDNS_LEGACY_TYPE
+constexpr const char* kMdnsServiceType = "_sensesp-n2k";
+constexpr const char* kMdnsModel = "sensesp-n2k-gateway";
+#else
+constexpr const char* kMdnsServiceType = "_espos-n2k";
+constexpr const char* kMdnsModel = "espos-n2k-gateway";
+#endif
 
 struct ClientContext {
   CandumpTcpServer* server;
@@ -51,8 +66,8 @@ void CandumpTcpServer::start() {
   // Subscribe to TwaiReceiver's output.
   receiver_->set_on_frame([this](const CanMessage& m) { this->on_frame(m); });
 
-  xTaskCreate(&CandumpTcpServer::server_task, "candump_srv", 4096,
-              this, 3, &server_task_);
+  xTaskCreate(&CandumpTcpServer::server_task, "candump_srv", 4096, this, 3,
+              &server_task_);
   ESP_LOGI(kTag, "Candump TCP server starting on port %u", config_.port);
 
   // Advertise via mDNS so canboatjs / SignalK Server can auto-discover the
@@ -62,23 +77,21 @@ void CandumpTcpServer::start() {
 
 void CandumpTcpServer::advertise() {
   if (advertised_) return;
-  // The service type and the "model" tag stay `sensesp-n2k` even though this
-  // component no longer has anything to do with SensESP: they are on the
-  // wire, and SignalK servers already browse for them. Renaming would make
-  // every existing gateway invisible to every existing client for the sake
-  // of tidiness.
   mdns_txt_item_t txt[] = {
       {"txtvers", "1"},
       {"format", "candump3"},
       {"iface", config_.interface_name},
-      {"model", "sensesp-n2k-gateway"},
+      {"model", kMdnsModel},
   };
-  esp_err_t err = mdns_service_add(NULL, "_sensesp-n2k", "_tcp", config_.port, txt, 4);
+  esp_err_t err =
+      mdns_service_add(NULL, kMdnsServiceType, "_tcp", config_.port, txt, 4);
   if (err == ESP_OK) {
     advertised_ = true;
-    ESP_LOGI(kTag, "Advertising mDNS service _sensesp-n2k._tcp on port %u", config_.port);
-  } else if (err != ESP_ERR_INVALID_STATE) {   // INVALID_STATE = mdns not started yet
-    advertised_ = true;                        // do not spam on a hard failure
+    ESP_LOGI(kTag, "Advertising mDNS service %s._tcp on port %u",
+             kMdnsServiceType, config_.port);
+  } else if (err !=
+             ESP_ERR_INVALID_STATE) {  // INVALID_STATE = mdns not started yet
+    advertised_ = true;                // do not spam on a hard failure
     ESP_LOGW(kTag, "mdns_service_add failed: %s", esp_err_to_name(err));
   }
 }
@@ -133,7 +146,7 @@ void CandumpTcpServer::server_task(void* arg) {
     FD_SET(listen_sock, &fds);
 
     int sel = select(listen_sock + 1, &fds, nullptr, nullptr, &tv);
-    self->advertise();   // no-op once registered / after mDNS is up
+    self->advertise();  // no-op once registered / after mDNS is up
     if (sel <= 0) continue;
 
     struct sockaddr_in client_addr;
@@ -147,8 +160,7 @@ void CandumpTcpServer::server_task(void* arg) {
     if (xSemaphoreTake(self->clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
       for (int i = 0; i < kMaxClients; i++) {
         if (self->client_queues_[i] == nullptr) {
-          self->client_queues_[i] =
-              xQueueCreate(128, sizeof(CanMessage));
+          self->client_queues_[i] = xQueueCreate(128, sizeof(CanMessage));
           slot = i;
           break;
         }
@@ -168,8 +180,8 @@ void CandumpTcpServer::server_task(void* arg) {
     self->connected_clients_.fetch_add(1, std::memory_order_relaxed);
 
     auto* ctx = new ClientContext{self, client_sock, slot};
-    xTaskCreate(&CandumpTcpServer::client_task, "candump_cli", 4096,
-                ctx, 3, nullptr);
+    xTaskCreate(&CandumpTcpServer::client_task, "candump_cli", 4096, ctx, 3,
+                nullptr);
   }
 
   close(listen_sock);
@@ -207,8 +219,8 @@ void CandumpTcpServer::client_task(void* arg) {
   // NOTE: buffer is heap-allocated, NOT on stack — the candump_cli task
   // has a 4KB stack and a 2.5KB on-stack buffer overflows it (causes
   // "Guru Meditation Error: Stack protection fault" within ~30s).
-  constexpr int kTxBufSize = 2560;       // ~50 candump lines per flush
-  constexpr int kFlushIntervalMs = 20;   // max latency added per line
+  constexpr int kTxBufSize = 2560;      // ~50 candump lines per flush
+  constexpr int kFlushIntervalMs = 20;  // max latency added per line
   static_assert(kTxBufSize >= 128, "must fit one max-length line");
   char* tx_buf = static_cast<char*>(malloc(kTxBufSize));
   if (!tx_buf) {
@@ -238,11 +250,10 @@ void CandumpTcpServer::client_task(void* arg) {
     if (sent < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         dropped_tx += tx_len;  // approximate: byte count, not frame count
-        if (xTaskGetTickCount() - last_drop_log >
-            pdMS_TO_TICKS(5000)) {
+        if (xTaskGetTickCount() - last_drop_log > pdMS_TO_TICKS(5000)) {
           ESP_LOGW("candump_srv",
-                   "slot %d: dropped %lu bytes (slow client / WiFi)",
-                   slot, (unsigned long)dropped_tx);
+                   "slot %d: dropped %lu bytes (slow client / WiFi)", slot,
+                   (unsigned long)dropped_tx);
           last_drop_log = xTaskGetTickCount();
         }
         tx_len = 0;
@@ -260,8 +271,8 @@ void CandumpTcpServer::client_task(void* arg) {
     // 1. Drain queued frames → encode into batch buffer, flush when full.
     CanMessage msg;
     while (xQueueReceive(queue, &msg, 0) == pdTRUE) {
-      int n = candump_encode(msg, self->config_.interface_name,
-                             encode_buf, sizeof(encode_buf));
+      int n = candump_encode(msg, self->config_.interface_name, encode_buf,
+                             sizeof(encode_buf));
       if (n > 0) {
         if (tx_len + n > kTxBufSize) {
           if (!flush_tx()) goto disconnect;

@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "twai_node.h"
 
 #include <cstring>
@@ -38,8 +39,10 @@ esp_err_t TwaiNode::acquire(const TwaiNodeConfig& config) {
     if (config.tx_pin != GPIO_NUM_NC &&
         (config.tx_pin != config_.tx_pin || config.rx_pin != config_.rx_pin ||
          config.bitrate != config_.bitrate)) {
-      ESP_LOGW(kTag, "bus already up on TX=%d RX=%d %ukbps — ignoring the new config",
-               (int)config_.tx_pin, (int)config_.rx_pin, (unsigned)(config_.bitrate / 1000));
+      ESP_LOGW(kTag,
+               "bus already up on TX=%d RX=%d %ukbps — ignoring the new config",
+               (int)config_.tx_pin, (int)config_.rx_pin,
+               (unsigned)(config_.bitrate / 1000));
     }
     refs_.fetch_add(1);
     xSemaphoreGive(lock_);
@@ -92,14 +95,16 @@ esp_err_t TwaiNode::acquire(const TwaiNodeConfig& config) {
   };
   err = twai_node_register_event_callbacks(node_, &cbs, this);
   if (err != ESP_OK) {
-    ESP_LOGE(kTag, "twai_node_register_event_callbacks failed: %s", esp_err_to_name(err));
+    ESP_LOGE(kTag, "twai_node_register_event_callbacks failed: %s",
+             esp_err_to_name(err));
     teardown();
     xSemaphoreGive(lock_);
     return err;
   }
 
   task_running_.store(true);
-  if (xTaskCreate(&TwaiNode::rx_task, "twai_rx", 4096, this, 5, &task_) != pdPASS) {
+  if (xTaskCreate(&TwaiNode::rx_task, "twai_rx", 4096, this, 5, &task_) !=
+      pdPASS) {
     task_running_.store(false);
     ESP_LOGE(kTag, "could not start the twai task");
     teardown();
@@ -133,7 +138,7 @@ void TwaiNode::release() {
     xSemaphoreGive(lock_);
     return;
   }
-  if (refs_.fetch_sub(1) != 1) {   // somebody else is still using the bus
+  if (refs_.fetch_sub(1) != 1) {  // somebody else is still using the bus
     xSemaphoreGive(lock_);
     return;
   }
@@ -184,7 +189,8 @@ esp_err_t TwaiNode::transmit(const CanFrame& frame, int timeout_ms) {
 
 /* ---------------------------------------------------------------- ISR side */
 
-bool TwaiNode::on_rx_done(twai_node_handle_t node, const twai_rx_done_event_data_t* edata, void* ctx) {
+bool TwaiNode::on_rx_done(twai_node_handle_t node,
+                          const twai_rx_done_event_data_t* edata, void* ctx) {
   (void)edata;
   auto* self = static_cast<TwaiNode*>(ctx);
 
@@ -200,7 +206,8 @@ bool TwaiNode::on_rx_done(twai_node_handle_t node, const twai_rx_done_event_data
   item.msg.frame.id = rx.header.id;
   item.msg.frame.extended = rx.header.ide;
   item.msg.frame.remote = rx.header.rtr;
-  item.msg.frame.dlc = rx.header.dlc > kCanMaxData ? kCanMaxData : (uint8_t)rx.header.dlc;
+  item.msg.frame.dlc =
+      rx.header.dlc > kCanMaxData ? kCanMaxData : (uint8_t)rx.header.dlc;
   memcpy(item.msg.frame.data, data, item.msg.frame.dlc);
   item.msg.timestamp_us = esp_timer_get_time();
 
@@ -212,7 +219,9 @@ bool TwaiNode::on_rx_done(twai_node_handle_t node, const twai_rx_done_event_data
   return woken == pdTRUE;
 }
 
-bool TwaiNode::on_state_change(twai_node_handle_t node, const twai_state_change_event_data_t* edata, void* ctx) {
+bool TwaiNode::on_state_change(twai_node_handle_t node,
+                               const twai_state_change_event_data_t* edata,
+                               void* ctx) {
   (void)node;
   auto* self = static_cast<TwaiNode*>(ctx);
   if (edata->new_sta == TWAI_ERROR_BUS_OFF) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Build and run every host-test project under test/host/ on the linux target.
 #
@@ -41,6 +42,15 @@ if [ -z "${IDF_PATH:-}" ]; then
     exit 1
 fi
 
+# Same compile budget as scripts/build.sh: IDF 6's idf.py has no -j, so the
+# parallelism is ninja's, and ninja's default is every core. On the 4-core
+# development host that has frozen the machine; half the cores, floor 1.
+# Scratch stays out of /tmp for the same reason (it is RAM there).
+export TMPDIR="${TMPDIR:-$HOME/dev/tmp}"
+mkdir -p "$TMPDIR"
+JOBS="${BUILD_JOBS:-$(( $(nproc) / 2 ))}"
+[ "$JOBS" -lt 1 ] && JOBS=1
+
 passed=()
 failed=()
 
@@ -55,11 +65,11 @@ for name in "${projects[@]}"; do
     cd "${here}/${name}" || { failed+=("${name} (cd)"); continue; }
 
     # --preview because the linux target is still a preview target in IDF 6.
-    if ! idf.py --preview set-target linux >/dev/null; then
+    if ! nice -n 15 ionice -c 3 idf.py --preview set-target linux >/dev/null; then
         failed+=("${name} (set-target)")
         continue
     fi
-    if ! idf.py build; then
+    if ! { nice -n 15 ionice -c 3 idf.py reconfigure >/dev/null && nice -n 15 ionice -c 3 ninja -C build -j "$JOBS"; }; then
         failed+=("${name} (build)")
         continue
     fi

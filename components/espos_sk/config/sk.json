@@ -33,6 +33,8 @@
     {"name": "drain_per_s", "type": "int", "default": 20, "min": 1, "max": 200, "unit": "1/s", "title": "Backlog drain rate",
      "description": "Buffered messages per second sent after a reconnect, so the server is not swamped."},
     {"name": "health_s", "type": "int", "default": 10, "min": 0, "max": 3600, "unit": "s", "title": "Device health interval",
-     "description": "Publish uptime, heap, RSSI, reconnects and reset reason this often. 0 = off."}
+     "description": "Publish uptime, heap, RSSI, reconnects and reset reason this often. 0 = off."},
+    {"name": "stall_s", "type": "int", "default": 300, "min": 60, "max": 3600, "unit": "s", "title": "Stream stall before restart",
+     "description": "WiFi reports connected and the stream has worked since boot, yet it has been down this long: the device raises skLinkStalled as a fatal health condition and the health watchdog restarts it, because a wedged radio link is the one network fault a restart fixes. Generous on purpose so a server restart never reboots the device; raise it if your server takes longer to come back."}
   ]
 }

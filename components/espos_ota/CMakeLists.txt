@@ -1,7 +1,8 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 idf_build_get_property(target IDF_TARGET)
 set(srcs src/manifest.c src/espos_ota.c src/api_ota.c)
-set(priv_reqs espressif__cjson esp_http_client)
+set(priv_reqs espressif__cjson esp_http_client espos_event)
 if(target STREQUAL "linux")
     list(APPEND srcs src/port_sim.c)
 else()

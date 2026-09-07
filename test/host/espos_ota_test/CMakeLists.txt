@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Host unit tests for the espos_ota manifest / version logic (pure C).
 #   idf.py --preview set-target linux && idf.py build && ./build/espos_ota_test.elf

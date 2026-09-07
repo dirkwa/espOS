@@ -2,13 +2,15 @@ menu "espOS health"
 
     config ESPOS_HEALTH_MAX_CONDITIONS
         int "Distinct condition keys"
-        default 8
+        default 12
         range 1 32
         help
             Slots for remembered conditions, one per key (~128 bytes each,
             reserved for the life of the firmware). The set of conditions a
             firmware can raise is fixed at build time, so size this to what
             it actually raises; further keys are rejected with ESP_ERR_NO_MEM.
+            espOS itself uses up to four: lowMemory, taskStalled, netDown and
+            skLinkStalled.
 
     config ESPOS_HEALTH_MAX_SINKS
         int "Health sinks"
@@ -18,5 +20,71 @@ menu "espOS health"
             How many consumers may register for condition changes. espos_sk
             takes one when SignalK notifications are enabled; an application
             wanting a status LED or a line on a display takes another.
+
+    menu "Watchdog policy"
+
+        config ESPOS_HEALTH_POLICY_TICK_S
+            int "Policy tick (seconds)"
+            default 10
+            range 1 60
+            help
+                How often the policy reads the heap, re-evaluates the built-in
+                conditions and counts strikes. With the default strikes below,
+                a fatal condition has to be held for tick × strikes = 30 s
+                before the device restarts.
+
+        config ESPOS_HEALTH_POLICY_STRIKES
+            int "Consecutive fatal ticks before a restart"
+            default 3
+            range 1 10
+            help
+                A condition raised with ESPOS_HEALTH_F_REBOOT_ON_ALARM must be
+                in ALARM on this many consecutive ticks for the device to
+                restart; one tick without it resets the count. A warning or
+                an ALARM without the flag never restarts anything.
+
+        config ESPOS_HEALTH_HEAP_WARN_KB
+            int "lowMemory: warn below total free heap (KB)"
+            default 40
+            range 0 4096
+            help
+                Warning only. 0 disables the check.
+
+        config ESPOS_HEALTH_INTERNAL_WARN_KB
+            int "lowMemory: warn below free internal RAM (KB)"
+            default 20
+            range 0 4096
+            help
+                Internal RAM is judged separately from the total because on a
+                board with PSRAM it is the scarce pool: the radio, DMA and
+                every task stack come from it, and tens of megabytes free
+                overall can hide its exhaustion. Warning only; 0 disables.
+
+        config ESPOS_HEALTH_INTERNAL_ALARM_KB
+            int "lowMemory: fatal alarm below free internal RAM (KB)"
+            default 12
+            range 0 4096
+            help
+                Below this the device is about to lose the radio or a task
+                stack, and a restart is the recovery. Held for the strike
+                window it restarts the device. 0 disables.
+
+                Sits below the deepest legitimate trough seen so far: an
+                ESP32-P4 panel measured ~24 KB free / ~23 KB largest block
+                while esp-sr's wake pipeline allocates at start, settling
+                near 95 KB afterwards. A threshold above that trough would
+                restart the panel on every boot.
+
+        config ESPOS_HEALTH_LARGEST_BLOCK_ALARM_KB
+            int "lowMemory: fatal alarm below largest free internal block (KB)"
+            default 8
+            range 0 4096
+            help
+                Fragmentation check: the free total can look fine while no
+                single block is left for a socket buffer or a task stack.
+                Same trough as above applies (~23 KB largest block seen). 0
+                disables.
+
+    endmenu
 
 endmenu

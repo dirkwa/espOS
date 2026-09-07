@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_sk core: one task owns discovery, server selection and the token
  * state machine. Everything else (HTTP handlers, config changes, other
@@ -21,6 +22,7 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_event.h"
 #include "espos_httpd_sse.h"
 #include "espos_sk.h"
 #include "espos_sk_priv.h"
@@ -28,13 +30,22 @@
 
 static const char *TAG = "espos_sk";
 
-typedef enum { CMD_CONFIG, CMD_DISCOVER, CMD_REQUEST, CMD_TOKEN, CMD_FORGET, CMD_UNAUTHORIZED, CMD_STOP } cmd_type_t;
+typedef enum { CMD_CONFIG,
+               CMD_DISCOVER,
+               CMD_REQUEST,
+               CMD_TOKEN,
+               CMD_FORGET,
+               CMD_UNAUTHORIZED,
+               CMD_STOP } cmd_type_t;
 typedef struct {
     cmd_type_t type;
     char *str; /* CMD_TOKEN: malloc'ed token */
 } cmd_t;
 
-typedef enum { ACT_NONE, ACT_REQUEST, ACT_POLL, ACT_VERIFY } action_t;
+typedef enum { ACT_NONE,
+               ACT_REQUEST,
+               ACT_POLL,
+               ACT_VERIFY } action_t;
 
 static struct {
     TaskHandle_t task;
@@ -61,6 +72,7 @@ static struct {
     bool have_server;
     espos_sk_server_t server;
     char server_source[12];          /* "manual" | "discovered" | "pinned" | "" */
+    espos_sk_tok_state_t narrated;   /* last token state announced on the log / event bus */
 
     /* shared snapshot */
     espos_sk_tok_status_t snap;
@@ -74,6 +86,10 @@ static struct {
     char snap_source[12];
     char hostname[33];
 } s;
+
+/* Set once by espos_start() before the first config load; a plain static
+ * because it is read on the SK task and written before that task exists. */
+static char s_app_name[33];
 
 static uint32_t now_ms(void)
 {
@@ -94,18 +110,22 @@ static void unlock(void) { xSemaphoreGive(s.lock); }
 
 static void p_request(void *ctx, const espos_sk_server_t *srv, const espos_sk_tok_cfg_t *cfg)
 {
-    (void)ctx; (void)srv; (void)cfg;
+    (void)ctx;
+    (void)srv;
+    (void)cfg;
     s.action = ACT_REQUEST;
 }
 static void p_poll(void *ctx, const espos_sk_server_t *srv, const char *href)
 {
-    (void)ctx; (void)srv;
+    (void)ctx;
+    (void)srv;
     s.action = ACT_POLL;
     snprintf(s.action_href, sizeof(s.action_href), "%s", href);
 }
 static void p_verify(void *ctx, const espos_sk_server_t *srv, const char *token)
 {
-    (void)ctx; (void)srv;
+    (void)ctx;
+    (void)srv;
     s.action = ACT_VERIFY;
     snprintf(s.action_token, sizeof(s.action_token), "%s", token);
 }
@@ -119,15 +139,57 @@ static void p_arm(void *ctx, uint32_t ms)
     (void)ctx;
     s.timer_due_ms = at(ms);
 }
-static void p_cancel(void *ctx) { (void)ctx; s.timer_due_ms = 0; }
-static uint32_t p_now(void *ctx) { (void)ctx; return now_ms(); }
-static uint32_t p_random(void *ctx) { (void)ctx; return esp_random(); }
+static void p_cancel(void *ctx)
+{
+    (void)ctx;
+    s.timer_due_ms = 0;
+}
+static uint32_t p_now(void *ctx)
+{
+    (void)ctx;
+    return now_ms();
+}
+static uint32_t p_random(void *ctx)
+{
+    (void)ctx;
+    return esp_random();
+}
 
 static char *status_json_from(const espos_sk_tok_status_t *st, const char *source);
+
+/* The transitions a newcomer sits at the monitor waiting for, said in plain
+ * words, plus the bus events for them. SK task only: the machine never
+ * moves anywhere else. State changes, not every status change — APPROVED
+ * re-verifies periodically and must not repeat itself. */
+static void narrate_token_state(void)
+{
+    if (s.sm.st.state == s.narrated) {
+        return;
+    }
+    s.narrated = s.sm.st.state;
+    switch (s.sm.st.state) {
+    case ESPOS_SK_TOK_REQUESTED:
+        ESP_LOGI(TAG, "access requested — approve it in the server UI: Security → Access Requests");
+        break;
+    case ESPOS_SK_TOK_APPROVED:
+        ESP_LOGI(TAG, "approved, streaming");
+        (void)espos_event_post(ESPOS_EVENT_SK_TOKEN_APPROVED, NULL, 0);
+        break;
+    case ESPOS_SK_TOK_OPEN:
+        ESP_LOGI(TAG, "server security is off: no token needed, streaming");
+        break;
+    case ESPOS_SK_TOK_DENIED:
+        ESP_LOGW(TAG, "access denied by the server — request again from the device's web UI when it is allowed");
+        break;
+    default:
+        break;
+    }
+}
 
 static void p_status_changed(void *ctx)
 {
     (void)ctx;
+    narrate_token_state();
     lock();
     s.snap = s.sm.st;
     snprintf(s.snap_token, sizeof(s.snap_token), "%s", espos_sk_tok_token(&s.sm));
@@ -141,8 +203,14 @@ static void p_status_changed(void *ctx)
 }
 
 static const espos_sk_tok_port_t k_port = {
-    .http_request = p_request, .http_poll = p_poll, .http_verify = p_verify, .store_save = p_save,
-    .arm_timer = p_arm, .cancel_timer = p_cancel, .now_ms = p_now, .random = p_random,
+    .http_request = p_request,
+    .http_poll = p_poll,
+    .http_verify = p_verify,
+    .store_save = p_save,
+    .arm_timer = p_arm,
+    .cancel_timer = p_cancel,
+    .now_ms = p_now,
+    .random = p_random,
     .status_changed = p_status_changed,
 };
 
@@ -180,7 +248,7 @@ static void load_cfg(void)
     if (d[0]) {
         snprintf(c.description, sizeof(c.description), "%s", d);
     } else {
-        snprintf(c.description, sizeof(c.description), "espOS %s", s.hostname);
+        snprintf(c.description, sizeof(c.description), "%s %s", s_app_name[0] ? s_app_name : "espOS", s.hostname);
     }
     espos_config_get_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_PERMISSIONS, c.permissions, sizeof(c.permissions), NULL);
     v = 60;
@@ -242,8 +310,7 @@ static void select_server(void)
              * request belongs to, (2) reachable "master" servers by self URN,
              * (3) any reachable server by self URN. mDNS answer order is not
              * stable, so never "first in the list". */
-            const char *anchor = s.sm.store.token[0] ? s.sm.store.token_self :
-                                 (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
+            const char *anchor = s.sm.store.token[0] ? s.sm.store.token_self : (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
             for (size_t i = 0; i < s.server_count && anchor[0]; i++) {
                 if (strcmp(s.servers[i].self, anchor) == 0) {
                     idx = (int)i;
@@ -285,8 +352,8 @@ static void select_server(void)
      * advertise a scheme, so it is the configuration that decides. */
     chosen.tls = have && s.cfg_tls;
     bool changed = have != s.have_server || (have && (strcmp(chosen.host, s.server.host) != 0 ||
-                   chosen.port != s.server.port || chosen.tls != s.server.tls ||
-                   strcmp(chosen.self, s.server.self) != 0));
+                                                      chosen.port != s.server.port || chosen.tls != s.server.tls ||
+                                                      strcmp(chosen.self, s.server.self) != 0));
     bool source_changed = strcmp(source, s.server_source) != 0;
     s.have_server = have;
     s.server = chosen;
@@ -296,9 +363,23 @@ static void select_server(void)
     }
     if (changed) {
         if (have) {
-            ESP_LOGI(TAG, "server: %s%s:%u (%s%s%s)", chosen.tls ? "https://" : "http://",
-                     chosen.host, chosen.port, source,
+            /* The advertised instance name is what the operator knows the
+             * server as; a manual host has none unless discovery saw it. */
+            char name[48] = "";
+            lock();
+            for (size_t i = 0; i < s.server_count; i++) {
+                if (strcmp(s.servers[i].host, chosen.host) == 0 && s.servers[i].port == chosen.port) {
+                    snprintf(name, sizeof(name), "%s", s.servers[i].name);
+                    break;
+                }
+            }
+            unlock();
+            ESP_LOGI(TAG, "found signalk-server \"%s\" at %s:%u (%s%s%s%s)", name[0] ? name : chosen.host,
+                     chosen.host, chosen.port, source, chosen.tls ? ", tls" : "",
                      chosen.self[0] ? " " : "", chosen.self);
+            espos_event_sk_server_t ev = { .port = chosen.port };
+            snprintf(ev.host, sizeof(ev.host), "%s", chosen.host);
+            (void)espos_event_post(ESPOS_EVENT_SK_SERVER_SELECTED, &ev, sizeof(ev));
         } else {
             ESP_LOGI(TAG, "no server (waiting for discovery or manual host)");
         }
@@ -333,8 +414,7 @@ static void run_discovery(void)
      * reachable server was dropped with "no server". Reserving its slot
      * first means a full list can never cost us the one entry that
      * matters. */
-    const char *keep = s.sm.store.token[0] ? s.sm.store.token_self :
-                       (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
+    const char *keep = s.sm.store.token[0] ? s.sm.store.token_self : (s.sm.store.pending_href[0] ? s.sm.store.pending_self : "");
     bool keep_reserved = false;
     if (keep[0]) {
         for (size_t i = 0; i < s.server_count; i++) {
@@ -729,8 +809,7 @@ esp_err_t espos_sk_servers_json(char **out_json)
         cJSON_AddStringToObject(e, "swname", d->swname);
         cJSON_AddStringToObject(e, "swvers", d->swvers);
         cJSON_AddNumberToObject(e, "seen_s", (t - d->seen_ms) / 1000);
-        cJSON_AddBoolToObject(e, "selected", s.snap.has_server && strcmp(s.snap.server.host, d->host) == 0 &&
-                              s.snap.server.port == d->port);
+        cJSON_AddBoolToObject(e, "selected", s.snap.has_server && strcmp(s.snap.server.host, d->host) == 0 && s.snap.server.port == d->port);
         cJSON_AddItemToArray(arr, e);
     }
     if (s.last_discovery_ms) {
@@ -802,6 +881,15 @@ esp_err_t espos_sk_get_server(espos_sk_server_t *out)
     return have ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
+esp_err_t espos_sk_set_app_name(const char *name)
+{
+    if (!name) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    snprintf(s_app_name, sizeof(s_app_name), "%s", name);
+    return ESP_OK;
+}
+
 const char *espos_sk_client_id(void)
 {
     return s.client_id;
@@ -839,6 +927,14 @@ esp_err_t espos_sk_start(void)
     if (s.started) {
         return ESP_OK;
     }
+    /* Discovery is mDNS and the stream opens when the station is up; both
+     * poll the WiFi status, which does not exist before espos_wifi_start()
+     * (and that in turn needs the HTTP server, so the whole chain holds). */
+    espos_wifi_status_t wifi;
+    if (espos_wifi_get_status(&wifi) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_sk_start: call espos_wifi_start() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!s.lock) {
         s.lock = xSemaphoreCreateMutex();
         s.cmds = xQueueCreate(8, sizeof(cmd_t));
@@ -846,7 +942,7 @@ esp_err_t espos_sk_start(void)
             return ESP_ERR_NO_MEM;
         }
     }
-    /* hostname for the request description / mDNS advertisement */
+    /* hostname for the request description (the mDNS name is espos_wifi's) */
     char h[33] = { 0 };
     espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
     if (h[0]) {

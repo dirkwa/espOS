@@ -1,0 +1,78 @@
+name: Hardware report
+description: A board you ran espOS on -- what worked, what did not, and how it is wired.
+title: "hw: "
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports of boards that simply work are as useful as reports of boards that do not:
+        they are what lets the README say more than "ESP32-P4 panels".
+  - type: input
+    id: board
+    attributes:
+      label: Board
+      description: Exact model and revision; a link to the vendor page helps.
+      placeholder: e.g. Waveshare ESP32-P4-WIFI6-Touch-LCD-4B, rev 1.x silicon
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target chip
+      options:
+        - esp32
+        - esp32s3
+        - esp32c3
+        - esp32c6
+        - esp32p4
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: Result
+      options:
+        - Works
+        - Works with the changes below
+        - Does not work
+    validations:
+      required: true
+  - type: checkboxes
+    id: exercised
+    attributes:
+      label: What you exercised
+      options:
+        - label: WiFi station (joins the configured network, reconnects)
+        - label: Provisioning portal (captive portal on the espOS-xxxx AP)
+        - label: Web UI and REST API
+        - label: SignalK discovery, token and delta stream
+        - label: OTA install and rollback
+        - label: BLE gateway
+        - label: NMEA 2000 over TWAI (espos_n2k)
+        - label: Audio / voice satellite (espos_voice)
+  - type: textarea
+    id: pins
+    attributes:
+      label: Pins and wiring
+      description: Everything you had to tell the firmware about the board -- TWAI TX/RX, I2S/codec pins, SDIO to a co-processor, LEDs -- and anything unusual (transceiver, level shifter, power).
+      render: text
+  - type: textarea
+    id: sdkconfig
+    attributes:
+      label: sdkconfig deltas
+      description: What differs from `sdkconfig.d/espos.defaults` (and `.<target>`) for this board. Paste only the changed lines.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: ESP-IDF and espOS versions
+      description: "`idf.py --version` and `version` from `GET /api/v1/system/info`."
+      placeholder: v6.0.2 / 0.7.0-3-gabc1234
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: What did not work, or what you had to change
+      description: Log ring excerpts (`GET /api/v1/logs`) for anything that failed; patches you carry locally.

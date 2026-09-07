@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  */
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 
 #include "espos_config.h"
 #include "espos_cfg_keys.h"
+#include "espos_event.h"
 #include "espos_httpd.h"
 #include "espos_httpd_priv.h"
 #include "espos_httpd_sse.h"
@@ -53,27 +55,60 @@ static esp_err_t json_err_handler(httpd_req_t *req, httpd_err_code_t err)
     const char *status, *code, *msg;
     switch (err) {
     case HTTPD_404_NOT_FOUND:
-        status = "404 Not Found"; code = "not_found"; msg = "no such resource"; break;
+        status = "404 Not Found";
+        code = "not_found";
+        msg = "no such resource";
+        break;
     case HTTPD_405_METHOD_NOT_ALLOWED:
-        status = "405 Method Not Allowed"; code = "method_not_allowed"; msg = "method not allowed for this resource"; break;
+        status = "405 Method Not Allowed";
+        code = "method_not_allowed";
+        msg = "method not allowed for this resource";
+        break;
     case HTTPD_400_BAD_REQUEST:
-        status = "400 Bad Request"; code = "bad_request"; msg = "malformed request"; break;
+        status = "400 Bad Request";
+        code = "bad_request";
+        msg = "malformed request";
+        break;
     case HTTPD_408_REQ_TIMEOUT:
-        status = "408 Request Timeout"; code = "timeout"; msg = "request timed out"; break;
+        status = "408 Request Timeout";
+        code = "timeout";
+        msg = "request timed out";
+        break;
     case HTTPD_411_LENGTH_REQUIRED:
-        status = "411 Length Required"; code = "length_required"; msg = "Content-Length required"; break;
+        status = "411 Length Required";
+        code = "length_required";
+        msg = "Content-Length required";
+        break;
     case HTTPD_413_CONTENT_TOO_LARGE:
-        status = "413 Payload Too Large"; code = "too_large"; msg = "request too large"; break;
+        status = "413 Payload Too Large";
+        code = "too_large";
+        msg = "request too large";
+        break;
     case HTTPD_414_URI_TOO_LONG:
-        status = "414 URI Too Long"; code = "uri_too_long"; msg = "URI too long"; break;
+        status = "414 URI Too Long";
+        code = "uri_too_long";
+        msg = "URI too long";
+        break;
     case HTTPD_431_REQ_HDR_FIELDS_TOO_LARGE:
-        status = "431 Request Header Fields Too Large"; code = "headers_too_large"; msg = "request headers too large"; break;
+        status = "431 Request Header Fields Too Large";
+        code = "headers_too_large";
+        msg = "request headers too large";
+        break;
     case HTTPD_501_METHOD_NOT_IMPLEMENTED:
-        status = "501 Not Implemented"; code = "not_implemented"; msg = "method not implemented"; break;
+        status = "501 Not Implemented";
+        code = "not_implemented";
+        msg = "method not implemented";
+        break;
     case HTTPD_505_VERSION_NOT_SUPPORTED:
-        status = "505 HTTP Version Not Supported"; code = "version_not_supported"; msg = "HTTP version not supported"; break;
+        status = "505 HTTP Version Not Supported";
+        code = "version_not_supported";
+        msg = "HTTP version not supported";
+        break;
     default:
-        status = "500 Internal Server Error"; code = "internal"; msg = "internal server error"; break;
+        status = "500 Internal Server Error";
+        code = "internal";
+        msg = "internal server error";
+        break;
     }
     /* Errors that abort request parsing leave the connection unusable. */
     if (err != HTTPD_404_NOT_FOUND && err != HTTPD_405_METHOD_NOT_ALLOWED) {
@@ -86,6 +121,12 @@ esp_err_t espos_httpd_start(void)
 {
     if (s_server) {
         return ESP_OK;
+    }
+    /* Every handler registered below reads the store; without it the port
+     * alone would already be the wrong one. */
+    if (!espos_config_is_ready()) {
+        ESP_LOGE(TAG, "espos_httpd_start: call espos_config_init() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
     }
     espos_log_init();   /* idempotent; apps call it earlier to catch boot logs */
     int32_t port = 80;
@@ -149,6 +190,7 @@ esp_err_t espos_httpd_start(void)
     /* config changes are pushed to UIs as "config" events */
     (void)espos_config_subscribe(config_changed, NULL);
     ESP_LOGI(TAG, "listening on port %ld", (long)port);
+    (void)espos_event_post(ESPOS_EVENT_HTTPD_STARTED, NULL, 0);
     return ESP_OK;
 }
 

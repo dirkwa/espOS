@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_ota component manifest: registry metadata for signalk-espos/espos_ota.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "Signed OTA with rollback, from a URL or a version manifest"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_ota"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/ota.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - ota
+  - rollback
+  - signed-images
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
+  # Sibling espOS components. override_path makes an in-tree build (and a
+  # firmware that vendors espOS as a submodule) use the checkout next to this
+  # file instead of downloading espos/<name> from the registry; a copy fetched
+  # from the registry has no such directory and the field is ignored there.
+  signalk-espos/espos_config:
+    version: "^0.7.0"
+    override_path: "../espos_config"
+  signalk-espos/espos_httpd:
+    version: "^0.7.0"
+    override_path: "../espos_httpd"
+  signalk-espos/espos_wifi:
+    version: "^0.7.0"
+    override_path: "../espos_wifi"
+  # cJSON, exact-pinned like every other registry dependency here.
+  espressif/cjson: "==1.7.19~2"

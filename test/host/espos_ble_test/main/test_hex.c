@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Hex encode/decode. The case asymmetry is a contract with signalk-server,
  * not a style choice, so it is pinned here.
@@ -10,7 +11,7 @@
 
 TEST_CASE("adv_data hex is UPPERCASE", "[hex]")
 {
-    const uint8_t in[] = {0x02, 0x01, 0x06, 0xab, 0xcd, 0xef};
+    const uint8_t in[] = { 0x02, 0x01, 0x06, 0xab, 0xcd, 0xef };
     char out[13];
     espos_ble_hex_encode_upper(in, sizeof(in), out);
     TEST_ASSERT_EQUAL_STRING("020106ABCDEF", out);
@@ -18,7 +19,7 @@ TEST_CASE("adv_data hex is UPPERCASE", "[hex]")
 
 TEST_CASE("gatt_data hex is lowercase", "[hex]")
 {
-    const uint8_t in[] = {0x02, 0x01, 0x06, 0xab, 0xcd, 0xef};
+    const uint8_t in[] = { 0x02, 0x01, 0x06, 0xab, 0xcd, 0xef };
     char out[13];
     espos_ble_hex_encode_lower(in, sizeof(in), out);
     TEST_ASSERT_EQUAL_STRING("020106abcdef", out);
@@ -42,7 +43,7 @@ TEST_CASE("decode accepts both cases", "[hex]")
 
 TEST_CASE("decode round-trips an encode", "[hex]")
 {
-    const uint8_t in[] = {0x00, 0xff, 0x10, 0x7f, 0x80};
+    const uint8_t in[] = { 0x00, 0xff, 0x10, 0x7f, 0x80 };
     char hex[11];
     uint8_t back[5];
     espos_ble_hex_encode_lower(in, sizeof(in), hex);

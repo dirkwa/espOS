@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Advertisement ring buffer. The drop accounting matters: the firmware this
  * replaces computed the drop count from a size delta taken AFTER the erase,
@@ -35,7 +36,7 @@ TEST_CASE("drain returns entries oldest first", "[advq]")
     espos_ble_advq_t q;
     espos_ble_advq_init(&q, storage, 4);
     for (uint8_t i = 0; i < 3; i++) {
-        TEST_ASSERT_FALSE(espos_ble_advq_push(&q, &(espos_ble_adv_t){0}));
+        TEST_ASSERT_FALSE(espos_ble_advq_push(&q, &(espos_ble_adv_t) { 0 }));
     }
     espos_ble_advq_init(&q, storage, 4);
     for (uint8_t i = 0; i < 3; i++) {

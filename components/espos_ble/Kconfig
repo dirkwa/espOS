@@ -1,0 +1,50 @@
+menu "espOS BLE gateway"
+
+    config ESPOS_BLE_POST_BATCH_MAX
+        int "Advertisements per POST"
+        default 40
+        range 1 200
+        help
+            How many buffered advertisements one POST to
+            /signalk/v2/api/ble/gateway/advertisements carries. Bounded so a
+            flush in a busy marina cannot build an unbounded JSON document;
+            what does not fit waits for the next ble.post_int_ms. The batch
+            scratch is a static array (about 128 bytes per slot) and the
+            serialised JSON is built on the heap, so raising this costs RAM
+            twice over.
+
+    config ESPOS_BLE_WS_BUFFER
+        int "Control WebSocket frame buffer (bytes)"
+        default 4096
+        range 1024 16384
+        help
+            esp_websocket_client's buffer for the control socket. A
+            gatt_subscribe for a device with many characteristics and init
+            writes has to arrive in one frame -- the 1 KiB buffer of the
+            implementation this replaced could not reassemble it. It also
+            bounds the status frames going the other way.
+
+    config ESPOS_BLE_GATTC_MAX_CONN
+        int "Simultaneous GATT connections"
+        default 3
+        range 1 7
+        help
+            Connection slots in the GATT client and in the gateway's session
+            table. The runtime setting ble.max_gatt_sess is clamped to this
+            and its descriptor (config/ble.json) also says 3, so raise both.
+            Bluedroid must be built for at least this many ACL links
+            (BT_ACL_CONNECTIONS); on the ESP32-P4 the C6 co-processor's
+            controller sets the real ceiling.
+
+    config ESPOS_BLE_STACK_SIZE
+        int "Gateway task stack size (bytes)"
+        default 8192
+        range 4096 32768
+        help
+            The task that serialises batches with cJSON and POSTs them
+            through esp_http_client. The big scratch buffers are static, so
+            this covers call depth, not payloads; a stack-protection fault
+            here is a reboot loop rather than a degraded mode, hence the
+            headroom.
+
+endmenu

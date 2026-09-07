@@ -10,8 +10,8 @@ idf_component_register(...)
 espos_config_add_descriptor(config/myns.json)   # after idf_component_register
 ```
 
-At build time `tools/espos_gen_config.py` merges all registered descriptors
-into
+At build time `components/espos_config/tools/espos_gen_config.py` merges all
+registered descriptors into
 
 * `espos_cfg_keys.h` — `ESPOS_CFG_NS_<NS>` / `ESPOS_CFG_<NS>_<KEY>` name
   constants (never spell an NVS key by hand),
@@ -65,7 +65,7 @@ Key name `config_version` is reserved.
   fire change callbacks (`espos_config_subscribe`) only when the effective
   value changed. Callbacks run on the caller's task without the store lock.
 * `espos_config_export_json` / `espos_config_import_json` implement the
-  document semantics in `docs/api.md`; import validates everything before
+  document semantics in `docs/rest-api.md`; import validates everything before
   writing anything.
 * `espos_config_factory_reset()` erases the partition and re-initialises;
   the caller reboots.

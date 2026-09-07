@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ESPOS_N2K_TWAI_MESSAGE_H_
 #define ESPOS_N2K_TWAI_MESSAGE_H_
 

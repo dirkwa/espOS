@@ -2,9 +2,10 @@
 
 ## Prerequisites
 
-* ESP-IDF exactly `.idf-version` (v6.0.2) installed and exported
-  (`. $IDF_PATH/export.sh            # ESP-IDF v6.0.2, see .idf-version`). The top-level CMake refuses a different
-  version unless `-DESPOS_ALLOW_IDF_MISMATCH=1`.
+* ESP-IDF 6.0.x installed and exported (`. $IDF_PATH/export.sh`). v6.0.2
+  (`.idf-version`) is the release CI tests; any other 6.0.x builds with one
+  warning, versions outside `[6.0.0, 6.1.0)` are refused unless
+  `-DESPOS_ALLOW_IDF_MISMATCH=1`.
 * For host tests: `libbsd-dev` (Debian/Ubuntu) — required by IDF's linux
   target.
 * Python ≥ 3.10 (IDF's own venv is used at build time; the generator needs
@@ -13,105 +14,151 @@
 ## Build & flash the example app
 
 ```sh
-idf.py set-target esp32c6           # any of: esp32 esp32s3 esp32c3 esp32c6 esp32p4
-idf.py build flash monitor
+. $IDF_PATH/export.sh                                    # ESP-IDF v6.0.2, see .idf-version
+scripts/build.sh -DIDF_TARGET=esp32c6                    # any of: esp32 esp32s3 esp32c3 esp32c6 esp32p4
+scripts/build.sh flash monitor
 ```
 
-Multi-target check without touching the main build dir:
+`scripts/build.sh` is the build entry point: one lock per machine, half the
+cores, `nice`/`ionice`, `idf.py reconfigure` followed by a capped `ninja`.
+Anything that is not a plain build (`flash`, `monitor`, `menuconfig`,
+`set-target`) it hands to `idf.py` unchanged, still locked. When `ccache` is
+on `PATH` it is enabled automatically (`IDF_CCACHE_ENABLE`; IDF wires the
+launcher in on the *first* configure of a build directory, so recreate the
+directory to pick it up).
 
-```sh
-for t in esp32 esp32s3 esp32c3 esp32c6 esp32p4; do
-  idf.py -B build-$t -DSDKCONFIG=build-$t/sdkconfig -DIDF_TARGET=$t build || break
-done
-```
+There is no `sdkconfig.defaults` in the root. The example app is configured
+exactly like every consumer: `espos_project_prologue()` puts
+`sdkconfig.d/espos.defaults` (IDF adds the `.esp32`/`.esp32p4` sibling for
+those targets) and the partition table on `SDKCONFIG_DEFAULTS`. Bench-local
+overrides go in `sdkconfig.local` next to the root `CMakeLists.txt`
+(git-ignored, never committed); a profile is selected with
+`-DESPOS_PROFILE=debug` or `release` (`sdkconfig.d/<profile>.defaults`, each
+commented). After changing any defaults file delete the build's `sdkconfig`
+— IDF applies defaults only to options the existing `sdkconfig` does not
+already set.
 
 ## Web UI
 
-`ui/` is a Vite project; `npm ci && npm run build` there produces
-`ui/dist-gz/`, which the firmware build packs into `build/storage.bin`
-(flashed by `idf.py flash`). Skipping it is fine — the device serves the
-embedded placeholder page. `npm run dev` runs the UI against an API mock;
-see [ui.md](ui.md).
+`ui/dist-gz/` — the gzipped Vite bundle the firmware packs into the LittleFS
+`storage` image (`build/storage.bin`, flashed by `idf.py flash`) — is
+committed. Building a firmware therefore needs no Node. The bundle is absent
+only in a damaged checkout, and the configure stops with an error then rather
+than ship the placeholder page.
+
+Node is needed to *change* the UI: `npm ci && npm run build` in `ui/`
+regenerates `dist-gz/`, and the result is committed together with the source
+change. CI rebuilds the bundle and fails when the committed one differs, so a
+UI change without its `npm run build` does not merge. `npm run dev` runs the
+UI against an API mock; see [ui.md](ui.md).
 
 ## Building a firmware on espOS
 
 A firmware project vendors espOS as a submodule (`espos/`) and includes the
-shared prologue; that is the whole of the espOS-specific build glue:
+shared prologue; that is the whole of the espOS-specific build glue — no
+copied `sdkconfig.defaults`, no copied partition table:
 
 ```cmake
 cmake_minimum_required(VERSION 3.22)
 include("${CMAKE_CURRENT_LIST_DIR}/espos/cmake/espos_project.cmake")
-espos_project_prologue(NAME "my-firmware")
+espos_project_prologue(NAME "my-firmware"
+                       PARTITIONS "${ESPOS_DIR}/partitions/16mb.csv"
+                       COMPONENTS espos_ble)      # the optional espOS parts this firmware uses
 project(my_firmware)
 espos_project_ui_partition()
 ```
 
-`espos_project_prologue()` enforces the pinned IDF version, checks the
-submodule is populated, puts `espos/components` on `EXTRA_COMPONENT_DIRS`,
-sets `PROJECT_VER` from your project's own `git describe`/`version.txt`
-(docs/releasing.md), and manages the app-signing key — including forcing a re-link when the key
-changes, without which a rebuilt image keeps the *previous* key's signature
-and the device rejects every OTA. `espos_project_ui_partition()` (after
-`project()`) packs `espos/ui/dist-gz` into the LittleFS `storage` partition.
+`espos_project_prologue()`:
 
-Options: `IDF_VERSION_FILE` and `SIGNING_KEY` on the prologue,
-`PARTITION`/`DIR` on the UI call, and `-DESPOS_ALLOW_IDF_MISMATCH=1` to
-downgrade a version mismatch to a warning. A project that keeps its own
-`.idf-version` must keep it equal to espOS's — disagreeing pins are a hard
-error, not a silent choice between the two.
+* enforces the IDF version policy (`cmake/espos_version.cmake`):
+  `.idf-version` (v6.0.2) is what CI tests; another release in
+  `[6.0.0, 6.1.0)` builds with one warning naming the tested one; anything
+  else is refused with the install link unless `-DESPOS_ALLOW_IDF_MISMATCH=1`.
+  A project that keeps its own `.idf-version` must keep it equal to espOS's
+  — disagreeing pins are a hard error, not a silent choice between the two.
+* assembles `SDKCONFIG_DEFAULTS`, later files winning:
+  `espos/sdkconfig.d/espos.defaults` (IDF appends the `.<target>` sibling
+  itself), the optional profile (`PROFILE release` on the call, or
+  `-DESPOS_PROFILE=release` on the command line, which wins), your
+  `sdkconfig.defaults` (and its `.<target>`), your git-ignored
+  `sdkconfig.local`, then a generated fragment that selects the partition
+  table. Your `sdkconfig.defaults` holds only what differs from espOS — a BLE
+  gateway's is the Bluetooth stack and nothing else. An explicit
+  `-DSDKCONFIG_DEFAULTS=a;b` replaces the assembled list (only the partition
+  fragment is still appended, so the OTA slots cannot silently vanish).
+* selects the partition table with `PARTITIONS` (absolute, or relative to the
+  project). Bundled: `espos/partitions/4mb.csv` (the default), `8mb.csv`,
+  `16mb.csv` — same layout, bigger app slots and storage, and each sets the
+  matching flash size. A project's own CSV sets `CONFIG_ESPTOOLPY_FLASHSIZE_*`
+  in its own defaults.
+* turns on IDF's `MINIMAL_BUILD`, so only what `main/` requires (transitively)
+  is compiled: `espos_ble`, `espos_n2k`, `espos_voice` cost nothing unless a
+  component requires them. espOS's own tree keeps the full set so its CI
+  covers them.
+* puts `espos/components` on `EXTRA_COMPONENT_DIRS`, sets `PROJECT_VER` from
+  your project's own `git describe`/`version.txt` (docs/releasing.md), and
+  manages the app-signing key — including forcing a re-link when the key
+  changes, without which a rebuilt image keeps the *previous* key's signature
+  and the device rejects every OTA.
+
+`espos_project_ui_partition()` (after `project()`) packs the committed
+`espos/ui/dist-gz` into the LittleFS `storage` partition; `PARTITION` and
+`DIR` change that, and a custom `DIR` that is missing is a warning, not an
+error. Further prologue options: `IDF_VERSION_FILE`, `SIGNING_KEY`.
+
+A project that installs espOS's components from the registry and writes its
+own `CMakeLists.txt` bypasses the prologue. `espos_core`'s
+`project_include.cmake` then checks the sdkconfig values whose absence shows
+only in the field — the event and timer task stacks, and on the ESP32-P4 the
+L2 cache line with the hosted mempool in PSRAM and the block-ack window with
+PSRAM — and fails the configure with the exact line to add.
+
+## Multi-target
+
+One build directory per target, each with its own `sdkconfig`:
+
+```sh
+for t in esp32 esp32s3 esp32c3 esp32c6 esp32p4; do
+  scripts/build.sh -B build-$t -DSDKCONFIG=build-$t/sdkconfig -DIDF_TARGET=$t build || break
+done
+```
+
+`managed_components/` is synced to the current target's dependency set
+(ESP32-P4 pulls extra components), so build targets one after another, not
+concurrently, from the same checkout — the lock in `scripts/build.sh` sees to
+that.
 
 ## Host tests (no hardware)
 
+`./test/host/run_all.sh` discovers every `test/host/*/` project (any
+directory there with a `CMakeLists.txt`), builds it for the linux target and
+runs it: `run_test.py` where a project has one, otherwise the Unity ELF from
+its `build/`. It is what CI runs, so a new test directory is covered the
+moment it exists; pass project names to run a subset. One project by hand:
+
 ```sh
-cd test/host/espos_config_test
+cd test/host/espos_sk_test
 idf.py --preview set-target linux && idf.py build
-./build/espos_config_test.elf              # Unity; exit code 0 == pass
-
-cd ../espos_httpd_test
-idf.py --preview set-target linux && idf.py build
-python3 run_test.py                        # drives the real REST server over HTTP,
-                                           # incl. WiFi status/scan/SSE with the simulated driver
-
-cd ../espos_wifi_test
-idf.py --preview set-target linux && idf.py build
-./build/espos_wifi_test.elf                # WiFi state machine, every transition
-
-cd ../espos_sk_test
-idf.py --preview set-target linux && idf.py build
-./build/espos_sk_test.elf                  # SignalK token state machine, store, delta pipeline
-
-cd ../espos_log_test
-idf.py --preview set-target linux && idf.py build
-./build/espos_log_test.elf                 # log ring: hook, wrap, paging
-
-cd ../espos_ota_test
-idf.py --preview set-target linux && idf.py build
-./build/espos_ota_test.elf                 # manifest selection, version compare
-
-cd ../espos_ble_test
-idf.py --preview set-target linux && idf.py build
-./build/espos_ble_test.elf                 # BLE wire format: hex, ad ring, UUIDs, with_response
+./build/espos_sk_test.elf                  # Unity; exit code 0 == pass
 ```
 
-`run_test.py` also covers M5's firmware side (`UiAndLogsTests`): static
-serving from a directory (`ESPOS_WWW_DIR`, gzip, SPA fallback, cache
-headers), `/logs` paging and the `logs` SSE event, `/logs/level`, and the
-core-dump endpoints' host behaviour (absent); and M6 (`OtaTests`,
-`OtaRollbackTimeoutTests`): the OTA task against the sim port with a
-throwaway firmware server.
-
-Multi-target caveat: `managed_components/` is synced to the current target's
-dependency set (ESP32-P4 pulls extra components), so build targets one after
-another, not concurrently, from the same checkout.
+`test/host/espos_httpd_test` is the one with a `run_test.py`: it drives the
+real REST server over HTTP -- config, WiFi status/scan/SSE with the simulated
+driver, static serving (`ESPOS_WWW_DIR`, gzip, SPA fallback, cache headers),
+`/logs` paging and the `logs` SSE event, the core-dump endpoints' host
+behaviour, the OTA task against the sim port with a throwaway firmware
+server, and the SignalK token/stream flows against a Python mock of
+signalk-server. The rest are Unity binaries over the pure-C/C++ parts of one
+component each.
 
 ## Flashing the Waveshare ESP32-P4 panels
 
-`sdkconfig.defaults.esp32p4` carries the SDIO pinout of the C6 co-processor
+`sdkconfig.d/espos.defaults.esp32p4` carries the SDIO pinout of the C6 co-processor
 and allows the rev-1.x silicon those boards use. `idf.py -p /dev/ttyACM0
 flash` as usual; credentials via the portal or an NVS image (docs/wifi.md).
 
-`tools/espos_gen_config.py` has its own tests: `python3 -m unittest
-discover -s tools -p 'test_*.py'`.
+`components/espos_config/tools/espos_gen_config.py` has its own tests:
+`python3 -m unittest discover -s components/espos_config/tools -p 'test_*.py'`.
 
 ## Repository layout
 
@@ -122,7 +169,7 @@ components/espos_wifi/     WiFi state machine, portal, /wifi endpoints
 components/espos_sk/       SignalK discovery, token state machine, /sk endpoints
 components/espos_ble/      BLE gateway to signalk-server's BLE provider API (optional)
 main/                      example app
-tools/                     build-time generators
+tools/                     tree-wide checks (Kconfig docs, public headers) and the size report
 test/host/                 linux-target unit/integration tests
 docs/                      contracts and guides
 ui/                        Vite SPA (M5)
@@ -132,6 +179,76 @@ ui/                        Vite SPA (M5)
 
 * Small, reviewable commits; one milestone per branch.
 * Ask before adding a third-party dependency (`idf_component.yml`).
-* `docs/api.md` is a contract; changes there are discussed first.
+* `docs/rest-api.md` is a contract; changes there are discussed first.
 * No absolute paths or machine-specific config in committed files.
 * Warnings are errors (IDF 6 default); keep the build clean.
+
+## Public API rules
+
+The headers under `components/*/include` are the public API, and their C ABI
+is the stable contract ([decisions.md](decisions.md), 2026-09-07): a binding
+in another language is generated from them as they are (`bindgen` for Rust),
+so whatever a header contains, every consumer gets.
+`tools/check_public_headers.py` checks the rules below (CI's `headers` job;
+standard library only, no IDF environment needed).
+
+* **Includes.** The C standard library, other espOS public headers and
+  `esp_err.h` — nothing else. `esp_err_t` is the return type of the whole
+  API, which is why it is the one IDF type allowed. Two more exceptions exist
+  and are **frozen** (the script's `ALLOWLIST`; adding one is a decision for
+  decisions.md, not a convenience):
+  * `espos_event.h` → `esp_event.h`: the thing on offer is the IDF default
+    event loop itself — base, handler signature and subscribe are
+    `esp_event`'s, and look-alike copies would only hide the loop an
+    application already handles `WIFI_EVENT` on.
+  * `espos_httpd.h` → `esp_http_server.h`: URI handlers are
+    `esp_http_server` handlers (`httpd_req_t`, `httpd_uri_t`); a plain-C
+    route/SSE shim is on the remediation list.
+
+  `sdkconfig.h` is not an exception: it exists only to carry `CONFIG_` tokens
+  and is reported together with them (below).
+* **C only in the exported surface.** `#pragma once`, an `extern "C"` block,
+  a file-level doc comment saying what the component is and on which task it
+  calls back, the two SPDX lines. No classes, namespaces, templates,
+  references, default arguments or `std::` types. `espos_n2k`, `espos_voice`
+  and `espos_audio` are C++ interfaces by design (the script's `CPP_ONLY`):
+  not part of the C ABI until they get C wrappers, and the check says so
+  instead of failing on them.
+* **Types.** Opaque handles for anything with a lifetime
+  (`typedef struct espos_x espos_x_t;`, the struct defined in the `.c`).
+  Fixed-width integers from `<stdint.h>` in structs and buffers, `size_t` for
+  lengths, `bool`, `esp_err_t`; plain `int` only as a scalar return or count.
+  Enums with explicit values and a `_MAX` last; the values are ABI — append,
+  never renumber. No bitfields, anonymous unions, flexible array members or
+  variadic functions: a generated binding cannot express the first three and
+  cannot call the fourth.
+* **Buffers** are pointer + length (`const uint8_t *buf, size_t len`);
+  fixed-size character arrays are sized by a named `_MAX` macro of the
+  header's own, never by a `CONFIG_` value.
+* **Callbacks** are `void (*)(..., void *arg)` — the caller's context pointer
+  handed back untouched (the existing headers put it last; keep that) — and
+  the header states which task the callback runs on and what it may do
+  there; [concepts.md](concepts.md) keeps the table. A new API prefers
+  handing results to a queue over calling back from an internal task.
+* **No `CONFIG_` in new public headers.** A header whose contents depend on
+  `sdkconfig.h` means a different ABI per build. A limit a caller needs is a
+  runtime query (`espos_x_max_y(void)`) or a fixed `_MAX` of the header's
+  own; a comment may still name the knob. The existing uses are warnings the
+  script counts down, not errors: `espos_wifi_sm.h` (`ESPOS_WIFI_MAX_NETWORKS`
+  from `CONFIG_ESPOS_WIFI_MAX_NETWORKS`) and, in the C++-only components,
+  `candump_tcp_server.h`, `twai_receiver.h` and `wyoming_satellite.h`
+  (a default port or queue depth taken from Kconfig).
+* **`ESPOS_ABI_VERSION`** (`espos.h`, currently 1; `espos_abi_version()`
+  returns the value the linked `espos_core` was built with) is bumped by any
+  change to a public header that is not purely additive: a removal or rename;
+  a changed signature; any change to a struct's members — an appended member
+  changes `sizeof`, which a caller compiled against the old header has baked
+  in; a changed enum or macro value; a changed callback contract; a new
+  include exception. Additive, no bump: a new function, macro or header; an
+  enum value appended before its `_MAX` when no public struct is sized by
+  that `_MAX`. A bump is a changelog line of its own ("abi: 1 → 2, because
+  …").
+* **The check.** `python3 tools/check_public_headers.py` — exit 1 on a
+  non-allowlisted include or a missing guard, exit 0 with the `CONFIG_`
+  warnings (`--strict` makes those fatal too, for the day the backlog is
+  empty; `--quiet` drops the notes). CI runs it as the `headers` job.

@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "preact/hooks";
 import { get, put, post, useStore, skStore, skServersStore, skWsStore, fmtDuration, fmtBytes, errText, type SkServersDoc, type ConfigDoc, type PutResult } from "../api";
 import { Badge, Row, Msg } from "../app";

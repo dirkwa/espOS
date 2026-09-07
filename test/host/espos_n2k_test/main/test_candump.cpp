@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * candump ASCII codec.
  *
@@ -17,7 +18,8 @@
 
 using espos_n2k::CanMessage;
 
-namespace {
+namespace
+{
 
 CanMessage frame(uint32_t id, std::initializer_list<uint8_t> bytes)
 {
@@ -45,7 +47,7 @@ std::string body(const char *line)
 TEST_CASE("an extended frame encodes as 8 hex digits and upper-case data", "[candump]")
 {
     char buf[128];
-    const CanMessage m = frame(0x09F80203, {0xFF, 0x00, 0xA5, 0x5A});
+    const CanMessage m = frame(0x09F80203, { 0xFF, 0x00, 0xA5, 0x5A });
     const int n = espos_n2k::candump_encode(m, "can0", buf, sizeof(buf));
 
     TEST_ASSERT_GREATER_THAN_INT(0, n);
@@ -68,7 +70,7 @@ TEST_CASE("a frame with no data still names the id", "[candump]")
 TEST_CASE("data is clamped to eight bytes", "[candump]")
 {
     char buf[128];
-    CanMessage m = frame(0x0DF00203, {1, 2, 3, 4, 5, 6, 7, 8});
+    CanMessage m = frame(0x0DF00203, { 1, 2, 3, 4, 5, 6, 7, 8 });
     m.frame.dlc = 15;   /* as a corrupt bus frame might claim */
     TEST_ASSERT_GREATER_THAN_INT(0, espos_n2k::candump_encode(m, "can0", buf, sizeof(buf)));
     TEST_ASSERT_EQUAL_STRING("can0 0DF00203#0102030405060708\n", body(buf).c_str());
@@ -78,7 +80,7 @@ TEST_CASE("a buffer too small is refused, not overrun", "[candump]")
 {
     char small[8];
     memset(small, 'x', sizeof(small));
-    const CanMessage m = frame(0x09F80203, {0xFF, 0x00});
+    const CanMessage m = frame(0x09F80203, { 0xFF, 0x00 });
     TEST_ASSERT_EQUAL_INT(-1, espos_n2k::candump_encode(m, "can0", small, sizeof(small)));
 }
 
@@ -92,7 +94,7 @@ TEST_CASE("a candump line decodes to the frame it names", "[candump]")
     TEST_ASSERT_TRUE(got.frame.extended);
     TEST_ASSERT_FALSE(got.frame.remote);
     TEST_ASSERT_EQUAL_UINT8(4, got.frame.dlc);
-    const uint8_t want[4] = {0xFF, 0x00, 0xA5, 0x5A};
+    const uint8_t want[4] = { 0xFF, 0x00, 0xA5, 0x5A };
     TEST_ASSERT_EQUAL_HEX8_ARRAY(want, got.frame.data, 4);
     TEST_ASSERT_EQUAL_INT64(1755600000123456LL, got.timestamp_us);
 }
@@ -124,7 +126,7 @@ TEST_CASE("more than eight data bytes on the wire are truncated", "[candump]")
     TEST_ASSERT_TRUE(espos_n2k::candump_decode(
         "(1.000000) can0 09F80203#0102030405060708FFFF", &got));
     TEST_ASSERT_EQUAL_UINT8(8, got.frame.dlc);
-    const uint8_t want[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint8_t want[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
     TEST_ASSERT_EQUAL_HEX8_ARRAY(want, got.frame.data, 8);
 }
 
@@ -147,7 +149,7 @@ TEST_CASE("junk is rejected", "[candump]")
 TEST_CASE("encode and decode round-trip", "[candump]")
 {
     char buf[128];
-    const CanMessage sent = frame(0x1DEFFF03, {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF});
+    const CanMessage sent = frame(0x1DEFFF03, { 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF });
     TEST_ASSERT_GREATER_THAN_INT(0, espos_n2k::candump_encode(sent, "can0", buf, sizeof(buf)));
 
     CanMessage got = {};

@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Host unit tests for the espos_log ring (vprintf hook, wrap, paging).
 #   idf.py --preview set-target linux && idf.py build && ./build/espos_log_test.elf

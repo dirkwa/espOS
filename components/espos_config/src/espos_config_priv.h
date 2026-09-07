@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 #include <stdbool.h>
@@ -19,7 +20,10 @@ typedef struct {
         int32_t i;
         float f;
         const char *s;      /* NUL-terminated */
-        struct { const uint8_t *p; size_t len; } blob;
+        struct {
+            const uint8_t *p;
+            size_t len;
+        } blob;
     } v;
 } espos_cfg_value_t;
 

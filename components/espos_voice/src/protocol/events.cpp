@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_voice/protocol/events.h"
 
 #include <memory>
@@ -47,7 +48,8 @@ JsonPtr parse(const std::string& json) {
   //
   // size() + 1 so the string's own NUL is inside the buffer: the check reads
   // the byte after the value and fails if it is past the end.
-  JsonPtr doc(cJSON_ParseWithLengthOpts(json.data(), json.size() + 1, nullptr, 1));
+  JsonPtr doc(
+      cJSON_ParseWithLengthOpts(json.data(), json.size() + 1, nullptr, 1));
   if (!cJSON_IsObject(doc.get())) return JsonPtr();
   return doc;
 }

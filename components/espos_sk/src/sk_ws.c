@@ -1,11 +1,14 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * WebSocket delta stream: one task keeps ws://<server>/signalk/v1/stream
  * open with the access token, sends batched deltas from the delta engine
  * (draining the offline buffer after a reconnect), reconciles declared
- * metadata on every connect and publishes device health. Built on IDF's
- * esp_transport_ws (no extra dependency); the transport answers pings.
+ * metadata on every connect and publishes device telemetry (uptime, heap,
+ * RSSI). Built on IDF's esp_transport_ws (no extra dependency); the transport
+ * answers pings. Raises skLinkStalled when the stream stays down while WiFi
+ * claims to be up — the one network condition a restart fixes.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +32,7 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_event.h"
 #include "espos_health.h"
 #include "espos_httpd_sse.h"
 #include "espos_sk.h"
@@ -62,7 +66,7 @@ static struct {
     volatile bool cfg_dirty;
     /* config */
     bool enabled;
-    uint32_t batch_ms, drain_per_s, health_ms;
+    uint32_t batch_ms, drain_per_s, health_ms, stall_ms;
     size_t buffer_msgs, buffer_bytes;
     /* status */
     espos_sk_ws_status_t st;
@@ -106,6 +110,9 @@ static void load_cfg(void)
     v = 10;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_HEALTH_S, &v);
     uint32_t health = (uint32_t)v * 1000;
+    v = 300;
+    espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_STALL_S, &v);
+    uint32_t stall = (uint32_t)v * 1000;
     char h[33] = { 0 };
     espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
     lock();
@@ -113,6 +120,7 @@ static void load_cfg(void)
     s.batch_ms = batch;
     s.drain_per_s = drain;
     s.health_ms = health;
+    s.stall_ms = stall;
     if (h[0]) {
         snprintf(s.label, sizeof(s.label), "%s", h);
     } else {
@@ -315,8 +323,7 @@ static void health_sink(const char *key, espos_health_state_t state,
     const char *st = espos_health_state_str(state);
 
     char path[ESPOS_SK_PATH_MAX];
-    if (snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key)
-        >= (int)sizeof(path)) {
+    if (snprintf(path, sizeof(path), "notifications.espos.%s.%s", s.label, key) >= (int)sizeof(path)) {
         ESP_LOGE(TAG, "condition '%s' does not fit a path", key);
         return;   /* a clipped path is the wrong path */
     }
@@ -358,7 +365,9 @@ esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *m
 
 esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *message)
 {
-    (void)key; (void)state; (void)message;
+    (void)key;
+    (void)state;
+    (void)message;
     return ESP_ERR_NOT_SUPPORTED;
 }
 
@@ -379,6 +388,10 @@ static void publish_health(void)
         espos_sk_declare_meta(p, "{\"description\":\"Free heap (bytes)\"}", period);
         snprintf(p, sizeof(p), "%sminFreeHeap", base);
         espos_sk_declare_meta(p, "{\"description\":\"Minimum free heap since boot (bytes)\"}", period);
+        snprintf(p, sizeof(p), "%sinternalFree", base);
+        espos_sk_declare_meta(p, "{\"description\":\"Free internal RAM (bytes)\"}", period);
+        snprintf(p, sizeof(p), "%slargestBlock", base);
+        espos_sk_declare_meta(p, "{\"description\":\"Largest free internal RAM block (bytes)\"}", period);
         snprintf(p, sizeof(p), "%srssi", base);
         espos_sk_declare_meta(p, "{\"units\":\"dB\",\"description\":\"WiFi RSSI\"}", period);
         snprintf(p, sizeof(p), "%swifiReconnects", base);
@@ -395,6 +408,14 @@ static void publish_health(void)
     espos_sk_publish_number(p, esp_get_free_heap_size());
     snprintf(p, sizeof(p), "%sminFreeHeap", base);
     espos_sk_publish_number(p, esp_get_minimum_free_heap_size());
+    /* Internal RAM separately from the total: on a PSRAM board it is the
+     * scarce pool, and the total hides it. Telemetry only -- the thresholds
+     * and the lowMemory condition live in espos_health's policy, which runs
+     * with or without SignalK. */
+    snprintf(p, sizeof(p), "%sinternalFree", base);
+    espos_sk_publish_number(p, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    snprintf(p, sizeof(p), "%slargestBlock", base);
+    espos_sk_publish_number(p, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     espos_wifi_status_t ws;
     if (espos_wifi_get_status(&ws) == ESP_OK) {
         snprintf(p, sizeof(p), "%srssi", base);
@@ -404,28 +425,6 @@ static void publish_health(void)
     }
     snprintf(p, sizeof(p), "%sskReconnects", base);
     espos_sk_publish_number(p, s.st.reconnects > 0 ? s.st.reconnects - 1 : 0);
-#if CONFIG_ESPOS_SK_NOTIFICATIONS
-    /* Device-health conditions espOS can judge for itself. An operator sees a
-     * warning while there is still time to act, instead of finding a device
-     * that rebooted overnight with no explanation. Thresholds are deliberately
-     * conservative: a warning nobody can act on is noise.
-     *
-     * Internal RAM is checked separately from total heap because it is the
-     * scarce pool on targets with PSRAM -- tens of megabytes free overall can
-     * hide an internal-RAM exhaustion that will take the radio down. */
-    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    if (internal_free < 20 * 1024) {
-        char m[96];
-        snprintf(m, sizeof(m), "internal RAM low: %u bytes free", (unsigned)internal_free);
-        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_WARN, m);
-    } else if (esp_get_free_heap_size() < 40 * 1024) {
-        char m[96];
-        snprintf(m, sizeof(m), "heap low: %u bytes free", (unsigned)esp_get_free_heap_size());
-        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_WARN, m);
-    } else {
-        espos_sk_notify("lowMemory", ESPOS_SK_ALERT_NORMAL, "");
-    }
-#endif
 
     snprintf(p, sizeof(p), "%sresetReason", base);
     static const char *const reasons[] = { "unknown", "poweron", "external", "software", "panic", "int_wdt",
@@ -433,6 +432,53 @@ static void publish_health(void)
                                            "efuse", "power_glitch", "cpu_lockup" };
     int r = (int)esp_reset_reason();
     espos_sk_publish_string(p, (r >= 0 && r < (int)(sizeof(reasons) / sizeof(reasons[0]))) ? reasons[r] : "unknown");
+}
+
+/* ------------------------------------------------------------- stream */
+
+/* The inbound side and the event bus learn about the stream together, so a
+ * subscriber never sees SK_STREAM_CONNECTED while espos_sk_put() would still
+ * refuse. Runs on the ws task. */
+static void set_stream_connected(bool up)
+{
+    espos_sk_inbound_set_connected(up);
+    (void)espos_event_post(up ? ESPOS_EVENT_SK_STREAM_CONNECTED : ESPOS_EVENT_SK_STREAM_DISCONNECTED, NULL, 0);
+}
+
+/* skLinkStalled: the device is trying (enabled, WiFi up, server and token in
+ * hand), the stream has worked at least once this boot, and it has now been
+ * down for sk.stall_s. The WiFi state machine cannot see a wedged radio link
+ * -- on a co-processor board the disconnect event never crosses the jammed
+ * transport, so it keeps reporting CONNECTED while nothing reaches the
+ * network. The stream is real traffic over that same link and drops within
+ * seconds of a wedge, which makes "connected, yet no stream for minutes" the
+ * honest signal; it is also the one network condition a restart fixes, hence
+ * the fatal flag. A plain WiFi loss is never reported here (espos_core's
+ * netDown, a warning) and a server that is merely down for a while is covered
+ * by the generous default -- raise sk.stall_s if servers reboot slowly. */
+static void check_stall(bool trying, bool connected, uint32_t *down_since_ms)
+{
+    lock();
+    bool ever = s.st.reconnects > 0;
+    uint32_t stall_ms = s.stall_ms;
+    unlock();
+    if (!trying || !ever || connected) {
+        *down_since_ms = 0;
+        espos_health_report_ex("skLinkStalled", ESPOS_HEALTH_NORMAL, "", ESPOS_HEALTH_F_REBOOT_ON_ALARM);
+        return;
+    }
+    uint32_t t = now_ms();
+    if (!*down_since_ms) {
+        *down_since_ms = t ? t : 1;
+        return;
+    }
+    if (t - *down_since_ms >= stall_ms) {
+        /* The threshold, not the running count: a message that changes every
+         * second is a delta every second into a buffer the stall keeps full. */
+        char m[ESPOS_HEALTH_MSG_MAX];
+        snprintf(m, sizeof(m), "stream down for over %u s while WiFi reports connected", (unsigned)(stall_ms / 1000));
+        espos_health_report_ex("skLinkStalled", ESPOS_HEALTH_ALARM, m, ESPOS_HEALTH_F_REBOOT_ON_ALARM);
+    }
 }
 
 /* -------------------------------------------------------------- task */
@@ -450,13 +496,21 @@ static void ws_task(void *arg)
     esp_transport_handle_t tcp = NULL, ws = NULL;
     bool connected = false;
     uint32_t next_health = 0;
+    uint32_t down_since_ms = 0;
     size_t cap = RX_BUF_MIN;
     char *buf = malloc(cap);
     char headers[ESPOS_SK_TOKEN_MAX + 32];
     espos_sk_server_t cur_srv = { 0 };
     char cur_token[ESPOS_SK_TOKEN_MAX] = { 0 };
 
+    /* The loop never blocks longer than the 8 s connect timeout, so a 20 s
+     * budget separates "slow network" from "wedged task" without false
+     * alarms; a wedged stream task is exactly the failure the health policy
+     * exists to name and recover from. */
+    espos_health_watch_task("espos_skws", 20000);
+
     while (!s.stop) {
+        espos_health_kick();
         if (s.cfg_dirty) {
             s.cfg_dirty = false;
             load_cfg();
@@ -471,13 +525,16 @@ static void ws_task(void *arg)
         bool have = espos_sk_get_server(&srv) == ESP_OK && espos_sk_get_token(token, sizeof(token)) == ESP_OK &&
                     espos_sk_stream_allowed();
         bool ready = s.enabled && wifi_up && have;
+        check_stall(ready, connected, &down_since_ms);
         if (connected) {
             bool changed = strcmp(srv.host, cur_srv.host) != 0 || srv.port != cur_srv.port || strcmp(token, cur_token) != 0;
             if (!ready || changed) {
-                ESP_LOGI(TAG, "closing stream (%s)", !s.enabled ? "disabled" : !wifi_up ? "wifi down" : changed ? "server/token changed" : "no server");
+                ESP_LOGI(TAG, "closing stream (%s)", !s.enabled ? "disabled" : !wifi_up ? "wifi down"
+                                                                           : changed    ? "server/token changed"
+                                                                                        : "no server");
                 esp_transport_close(ws);
                 connected = false;
-                espos_sk_inbound_set_connected(false);
+                set_stream_connected(false);
                 lock();
                 s.st.connected = false;
                 if (s.delta) {
@@ -581,7 +638,7 @@ static void ws_task(void *arg)
             s.connected_since_ms = now_ms();
             unlock();
             ESP_LOGI(TAG, "stream connected");
-            espos_sk_inbound_set_connected(true);
+            set_stream_connected(true);
             publish_status();
             /* meta first, so the server knows units before values arrive */
             reconcile_meta(&srv, token);
@@ -612,7 +669,7 @@ static void ws_task(void *arg)
                 set_error("send failed");
                 esp_transport_close(ws);
                 connected = false;
-                espos_sk_inbound_set_connected(false);
+                set_stream_connected(false);
                 s.retry_at_ms = now_ms() + 1000;
                 publish_status();
             }
@@ -636,7 +693,7 @@ static void ws_task(void *arg)
                 set_error("send failed");
                 esp_transport_close(ws);
                 connected = false;
-                espos_sk_inbound_set_connected(false);
+                set_stream_connected(false);
                 s.retry_at_ms = now_ms() + 1000;
                 publish_status();
                 continue;
@@ -748,7 +805,7 @@ static void ws_task(void *arg)
                 set_error("closed by server");
                 esp_transport_close(ws);
                 connected = false;
-                espos_sk_inbound_set_connected(false);
+                set_stream_connected(false);
                 s.retry_at_ms = now_ms() + 1000;
                 publish_status();
             }
@@ -759,14 +816,14 @@ static void ws_task(void *arg)
             set_error("connection error");
             esp_transport_close(ws);
             connected = false;
-            espos_sk_inbound_set_connected(false);
+            set_stream_connected(false);
             s.retry_at_ms = now_ms() + 1000;
             publish_status();
         }
     }
     if (connected) {
         esp_transport_close(ws);
-        espos_sk_inbound_set_connected(false);
+        set_stream_connected(false);
     }
     if (ws) {
         esp_transport_destroy(ws);
@@ -775,6 +832,9 @@ static void ws_task(void *arg)
         esp_transport_destroy(tcp);
     }
     free(buf);
+    /* A task still registered with the task watchdog after it exits is
+     * exactly what trips the TWDT; leave the registry before the handle dies. */
+    espos_health_unwatch_task();
     s.task = NULL;
     vTaskDelete(NULL);
 }

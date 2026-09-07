@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 // BLE gateway status. The component has had /api/v1/ble/status since it
 // landed, but no page — so the one number that says whether a gateway is
 // keeping up (adv_dropped) was only visible with curl.

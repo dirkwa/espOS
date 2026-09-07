@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 //
-// espOS API mock for UI development: implements docs/api.md well enough to
+// espOS API mock for UI development: implements docs/rest-api.md well enough to
 // exercise every page without a device — config with schema validation of
 // the basics, a simulated WiFi state machine, SignalK discovery/token flow,
 // a log ring, SSE. Zero dependencies (node:http only).
@@ -8,7 +9,7 @@
 //   node mock/server.mjs [port]      (vite dev starts it automatically)
 //
 // The schema is regenerated from the real descriptors when python3 is
-// available (tools/espos_gen_config.py); otherwise mock/schema.json is used.
+// available (components/espos_config/tools/espos_gen_config.py); otherwise mock/schema.json is used.
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { readFileSync, mkdtempSync } from "node:fs";
@@ -21,7 +22,7 @@ const root = path.resolve(here, "..", "..");
 
 function loadSchema() {
   try {
-    const gen = path.join(root, "tools", "espos_gen_config.py");
+    const gen = path.join(root, "components", "espos_config", "tools", "espos_gen_config.py");
     const descs = ["main/config/app.json", "components/espos_httpd/config/httpd.json",
       "components/espos_wifi/config/wifi.json", "components/espos_sk/config/sk.json",
       "components/espos_ota/config/ota.json"].map((p) => path.join(root, p));

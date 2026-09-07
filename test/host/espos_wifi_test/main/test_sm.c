@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * State machine tests. A fake port records driver calls and owns a manual
  * clock; "tick(ms)" advances time and fires the armed timer when due, so
@@ -30,19 +31,61 @@ static esp_err_t f_connect(void *ctx, const espos_wifi_net_t *net)
     F.last_has_bssid = net->has_bssid;
     return F.connect_result;
 }
-static esp_err_t f_disconnect(void *ctx) { (void)ctx; F.disconnects++; return ESP_OK; }
-static esp_err_t f_portal_start(void *ctx) { (void)ctx; F.portal_starts++; return ESP_OK; }
-static esp_err_t f_portal_stop(void *ctx) { (void)ctx; F.portal_stops++; return ESP_OK; }
-static void f_arm(void *ctx, uint32_t ms) { (void)ctx; F.timer_armed = true; F.timer_due = F.now + ms; }
-static void f_cancel(void *ctx) { (void)ctx; F.timer_armed = false; }
-static uint32_t f_now(void *ctx) { (void)ctx; return F.now; }
-static uint32_t f_random(void *ctx) { (void)ctx; return F.rnd; }
-static void f_notify(void *ctx) { (void)ctx; F.notifies++; }
+static esp_err_t f_disconnect(void *ctx)
+{
+    (void)ctx;
+    F.disconnects++;
+    return ESP_OK;
+}
+static esp_err_t f_portal_start(void *ctx)
+{
+    (void)ctx;
+    F.portal_starts++;
+    return ESP_OK;
+}
+static esp_err_t f_portal_stop(void *ctx)
+{
+    (void)ctx;
+    F.portal_stops++;
+    return ESP_OK;
+}
+static void f_arm(void *ctx, uint32_t ms)
+{
+    (void)ctx;
+    F.timer_armed = true;
+    F.timer_due = F.now + ms;
+}
+static void f_cancel(void *ctx)
+{
+    (void)ctx;
+    F.timer_armed = false;
+}
+static uint32_t f_now(void *ctx)
+{
+    (void)ctx;
+    return F.now;
+}
+static uint32_t f_random(void *ctx)
+{
+    (void)ctx;
+    return F.rnd;
+}
+static void f_notify(void *ctx)
+{
+    (void)ctx;
+    F.notifies++;
+}
 
 static const espos_wifi_port_t PORT = {
-    .connect = f_connect, .disconnect = f_disconnect, .portal_start = f_portal_start,
-    .portal_stop = f_portal_stop, .arm_timer = f_arm, .cancel_timer = f_cancel,
-    .now_ms = f_now, .random = f_random, .status_changed = f_notify,
+    .connect = f_connect,
+    .disconnect = f_disconnect,
+    .portal_start = f_portal_start,
+    .portal_stop = f_portal_stop,
+    .arm_timer = f_arm,
+    .cancel_timer = f_cancel,
+    .now_ms = f_now,
+    .random = f_random,
+    .status_changed = f_notify,
 };
 
 static espos_wifi_sm_t SM;
@@ -51,8 +94,16 @@ static espos_wifi_cfg_t cfg_with(const char *s0, const char *s1)
 {
     espos_wifi_cfg_t c = { 0 };
     c.sta_enabled = true;
-    if (s0) { strcpy(c.nets[c.net_count].ssid, s0); strcpy(c.nets[c.net_count].psk, "pw"); c.net_count++; }
-    if (s1) { strcpy(c.nets[c.net_count].ssid, s1); strcpy(c.nets[c.net_count].psk, "pw"); c.net_count++; }
+    if (s0) {
+        strcpy(c.nets[c.net_count].ssid, s0);
+        strcpy(c.nets[c.net_count].psk, "pw");
+        c.net_count++;
+    }
+    if (s1) {
+        strcpy(c.nets[c.net_count].ssid, s1);
+        strcpy(c.nets[c.net_count].psk, "pw");
+        c.net_count++;
+    }
     c.backoff_max_ms = 60000;
     c.dhcp_timeout_ms = 15000;
     c.connect_timeout_ms = 20000;

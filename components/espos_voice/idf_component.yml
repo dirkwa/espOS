@@ -1,6 +1,52 @@
-## espos_voice component manifest
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_voice component manifest: registry metadata for signalk-espos/espos_voice.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "Wyoming voice satellite with esp-sr wake word"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_voice"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/voice.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - voice
+  - wyoming
+  - wake-word
+  - esp-sr
+  - home-assistant
+# No `targets`, although esp-sr -- and with it the satellite -- exists for
+# esp32s3 and esp32p4 only: CMakeLists.txt registers an empty stub everywhere
+# else, so the component does build on every target. A list here would also
+# gate the whole project, not just this component: the component manager
+# refuses to configure any target missing from the `targets` of ANY component
+# in the tree ("not compatible with target esp32c6"), which is every espOS
+# build except the two panels. The esp-sr rule below carries the restriction.
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
 dependencies:
-  idf: ">=6.0.0"
+  idf: ">=6.0.0,<6.1.0"
+  # Sibling espOS components. override_path makes an in-tree build (and a
+  # firmware that vendors espOS as a submodule) use the checkout next to this
+  # file instead of downloading espos/<name> from the registry; a copy fetched
+  # from the registry has no such directory and the field is ignored there.
+  signalk-espos/espos_audio:
+    version: "^0.7.0"
+    override_path: "../espos_audio"
+  signalk-espos/espos_health:
+    version: "^0.7.0"
+    override_path: "../espos_health"
   # cJSON, exact-pinned like every other registry dependency here: the
   # Wyoming protocol code used ArduinoJson, which meant a firmware with a
   # voice satellite linked two JSON libraries -- cJSON for everything espOS

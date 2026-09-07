@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Host stand-in: downloads really happen (esp_http_client works on linux)
  * but nothing is written; the "flash" state is a few variables driven by
@@ -42,7 +43,8 @@ void espos_ota_port_info(espos_ota_port_info_t *out)
     snprintf(out->idf, sizeof(out->idf), "sim");
     snprintf(out->slot, sizeof(out->slot), "ota_0");
     snprintf(out->other_slot, sizeof(out->other_slot), "ota_1");
-    snprintf(out->state, sizeof(out->state), "%s", s_invalidated ? "invalid" : s_pending ? "pending_verify" : "valid");
+    snprintf(out->state, sizeof(out->state), "%s", s_invalidated ? "invalid" : s_pending ? "pending_verify"
+                                                                                         : "valid");
     out->pending_verify = s_pending && !s_invalidated;
     out->rolled_back = s_rolled_back;
 }

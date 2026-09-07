@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Style for the C code: components/espos_*/, main/, test/host/. Derived from
+# the code as it stands, not the other way round -- these are the settings
+# under which clang-format 23 touches the fewest existing lines (23 of the 43
+# .c files, 409 lines, measured on successor/t0-t1). CI checks only the files
+# a PR changes; do not reformat untouched files, a whitespace-only diff hides
+# the change that matters.
+#
+# The C++ components (espos_n2k, espos_voice, espos_audio) are Google style
+# and carry their own .clang-format; clang-format uses the nearest one.
+#
+# Needs clang-format >= 16 (AlignTrailingComments as a map). CI pins 23.
+---
+# C has always been formatted under clang-format's Cpp language; a
+# `Language: C` section is only understood by clang-format 20 and newer and
+# measured identically.
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+# No limit: the code breaks lines where they read best and some log lines run
+# past 150 columns; with a limit the tool re-wraps every long ESP_LOG* call.
+# At 0 it respects the input's line breaks instead. Keep new code readable
+# by hand, around 110 columns.
+ColumnLimit: 0
+# Brace on its own line for functions, attached for everything else.
+BreakBeforeBraces: Linux
+PointerAlignment: Right
+# Initializers are written `{ .a = 1 }`, `{ 0 }`, `(type_t) { ... }`.
+Cpp11BracedListStyle: false
+SpaceBeforeCpp11BracedList: true
+# Include order is deliberate (sdkconfig.h before the headers it conditions,
+# a component's own header first, the IDF block separate from the espOS
+# block); never let the tool reorder it.
+SortIncludes: Never
+# `static void lock(void) { xSemaphoreTake(...); }`, `if (!v) return;`,
+# `case X: return "x";` and `if (!s) { unlock(); return; }` are all written
+# on one line; the tool keeps them there without joining lines that were not.
+AllowShortFunctionsOnASingleLine: All
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+IndentCaseLabels: false
+# Trailing comments are hand-aligned into tables (wifi_reason.c) or not
+# aligned at all; leave them where they are rather than pick one.
+AlignTrailingComments:
+  Kind: Leave
+  OverEmptyLines: 0
+AlignConsecutiveMacros: true

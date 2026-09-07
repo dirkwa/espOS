@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Host (linux target) unit tests for espos_config. Build & run:
 #

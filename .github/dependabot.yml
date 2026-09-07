@@ -1,0 +1,25 @@
+# Weekly dependency PRs. Subjects follow the Conventional Commit types the
+# repo uses (CONTRIBUTING.md), so they sort into the release notes
+# (.github/release.yml, category "Dependencies" via Dependabot's default
+# `dependencies` label) without anyone touching them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+
+  # One grouped PR for the UI toolchain instead of one per package: the
+  # vite/preact/typescript trio moves together and is tested together
+  # (`npm ci && npm run build` in the ui job).
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    groups:
+      ui:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build(deps)"

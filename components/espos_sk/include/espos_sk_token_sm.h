@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * SignalK access-token state machine — pure C. Drives the access-request
  * flow of the SignalK security API:
@@ -29,11 +30,11 @@
 extern "C" {
 #endif
 
-#define ESPOS_SK_HOST_MAX 64
-#define ESPOS_SK_SELF_MAX 128
-#define ESPOS_SK_HREF_MAX 128
+#define ESPOS_SK_HOST_MAX  64
+#define ESPOS_SK_SELF_MAX  128
+#define ESPOS_SK_HREF_MAX  128
 #define ESPOS_SK_TOKEN_MAX 1024
-#define ESPOS_SK_MSG_MAX 96
+#define ESPOS_SK_MSG_MAX   96
 
 typedef enum {
     ESPOS_SK_TOK_NO_SERVER = 0, /* nothing to talk to yet */

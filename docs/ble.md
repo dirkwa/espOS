@@ -24,11 +24,12 @@ Both authenticate with the token `espos_sk` already holds — the gateway never
 runs an access request of its own.
 
 ```text
-POST http://<server>/signalk/v2/api/ble/gateway/advertisements
+POST http(s)://<server>/signalk/v2/api/ble/gateway/advertisements
      Authorization: Bearer <jwt>
      {"gateway_id","mac","uptime","free_heap","devices":[{"mac","rssi","name?","adv_data?"}]}
 
-WS   ws://<server>/signalk/v2/api/ble/gateway/ws?token=<jwt>
+WS   ws(s)://<server>/signalk/v2/api/ble/gateway/ws
+     Authorization: Bearer <jwt>          (header on the upgrade request)
      out: hello, status, gatt_connected, gatt_disconnected, gatt_data, gatt_error
      in:  hello_ack, gatt_subscribe, gatt_write, gatt_close
 ```
@@ -39,10 +40,25 @@ Wire-format details that are contract, not taste (see signalk-server's
 * keys are snake_case;
 * advertisement `adv_data` is **UPPERCASE** hex while GATT `data` is
   **lowercase** — two different encoders, deliberately;
-* the JWT rides in the WebSocket **query string**, because a raw upgrade
-  request carries no `Authorization` header;
+* the JWT is an `Authorization: Bearer` **header on both channels**, the
+  WebSocket upgrade included. signalk-server's gateway upgrade handler
+  authorizes from the header, the query string or a cookie; the header is
+  the one that keeps the token out of URL and proxy logs;
 * an empty token means the `Authorization` header is **omitted entirely**,
   which is correct against a server running without security.
+
+### Authentication and TLS
+
+The POSTs go through `espos_sk_http_post()` and the control socket's URI
+comes from `espos_sk_ws_url()` ([signalk.md](signalk.md), "HTTP requests to
+the server"), so the gateway has no HTTP code of its own and follows the
+selected server exactly: the token is a per-call snapshot of what `espos_sk`
+holds, a 401/403 on a POST is reported to the token machine rather than
+answered with an access request, and the scheme is `http`/`ws` or, when the
+firmware is built with `CONFIG_ESPOS_SK_TLS` and `sk.tls` is on,
+`https`/`wss` — verified against the bundled Mozilla roots like the delta
+stream, so a self-signed server certificate is refused. The control socket is
+torn down and re-dialled when the server's host, port **or scheme** changes.
 
 ## GATT writes: `with_response`
 
@@ -115,7 +131,7 @@ GHz one on its IPEX connector.
 ## Status and troubleshooting
 
 `GET /api/v1/ble/status` (and the `ble` SSE event) report the counters
-described in [api.md](api.md). Reading them:
+described in [rest-api.md](rest-api.md). Reading them:
 
 * `scan_hits` == `adv_received` — intake is keeping up.
 * `adv_dropped` rising — the radio is outrunning the POST loop. Shorten

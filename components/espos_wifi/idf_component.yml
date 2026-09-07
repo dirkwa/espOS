@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_wifi component manifest: registry metadata for signalk-espos/espos_wifi.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "Station + provisioning portal, a pure-C state machine, mDNS responder, co-processor watchdog"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_wifi"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/wifi.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - wifi
+  - provisioning
+  - captive-portal
+  - mdns
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
+  # Sibling espOS components. override_path makes an in-tree build (and a
+  # firmware that vendors espOS as a submodule) use the checkout next to this
+  # file instead of downloading espos/<name> from the registry; a copy fetched
+  # from the registry has no such directory and the field is ignored there.
+  signalk-espos/espos_config:
+    version: "^0.7.0"
+    override_path: "../espos_config"
+  signalk-espos/espos_httpd:
+    version: "^0.7.0"
+    override_path: "../espos_httpd"
+  # cJSON, exact-pinned like every other registry dependency here.
+  espressif/cjson: "==1.7.19~2"
+  # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.
+  # The responder lives here (src/mdns.c, include/espos_mdns.h); espos_sk
+  # browses through it and gets the headers via this component's REQUIRES.
+  # Not on the linux target, where the component does not exist.
+  espressif/mdns:
+    version: "==1.11.3"
+    rules:
+      - if: "target != linux"
+  # The ESP32-P4 has no radio: WiFi comes from the C6 co-processor through
+  # esp_hosted, and the co-processor watchdog includes its headers on that
+  # target. Same pin as espos_ble.
+  espressif/esp_hosted:
+    version: "^2.12.0"
+    rules:
+      - if: "target == esp32p4"

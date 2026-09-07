@@ -4,16 +4,28 @@ M3: find the server, get and keep a token. M4: stream published values as
 deltas over a WebSocket, buffer them while offline, reconcile metadata,
 publish device health. M7: subscribe to paths and families, receive values
 and meta, send PUT requests and raw frames — what a display or controller
-needs on top of a sensor.
+needs on top of a sensor. Plus one HTTP client for everything else an
+application asks the server over REST (`espos_sk_http.h`).
 
 ## Discovery
 
 `espos_sk` browses `_signalk-http._tcp` via mDNS every `sk.discover_s`
-(default 60 s, immediately when WiFi comes up) and keeps up to 6 servers
-with their TXT records (`self`, `roles`, `swname`, `swvers`). Entries that
-drop out of one query survive two intervals (mDNS is lossy). The device
-also advertises itself under its hostname. `GET /api/v1/sk/servers` lists
-them; `sk_servers` SSE events fire after every pass.
+(default 60 s, immediately when WiFi comes up) and keeps up to
+`ESPOS_SK_MAX_SERVERS` (12) servers with their TXT records (`self`, `roles`,
+`swname`, `swvers`). Entries that
+drop out of one query survive two intervals (mDNS is lossy).
+`GET /api/v1/sk/servers` lists them; `sk_servers` SSE events fire after
+every pass.
+
+The responder the queries go through — and the device's own
+`<hostname>.local`, `_http._tcp` and `_espos._tcp` records — is
+`espos_wifi`'s ([wifi.md](wifi.md), "mDNS"); `espos_sk` only browses. A pass
+waits for `espos_mdns_is_ready()` (the station reports connected a few
+milliseconds before the responder's `ESPOS_EVENT_MDNS_READY` reaches it,
+and an empty first pass would only be retried a whole interval later) and
+returns nothing without a link. Built with `CONFIG_ESPOS_WIFI_MDNS=n` there
+is no responder to browse with: discovery is off and `sk.server_host` must
+be set.
 
 Which server is used:
 
@@ -116,7 +128,7 @@ wins. `period_ms > 0` adds `timeout` (2.5× the period, in seconds), the one
 field the device really owns. `ws.meta.declared/reconciled` show progress.
 
 **Device health.** Every `sk.health_s` (default 10 s, 0 = off) the task
-publishes `espos.<hostname>.{uptime,freeHeap,minFreeHeap,rssi,
+publishes `espos.<hostname>.{uptime,freeHeap,minFreeHeap,internalFree,largestBlock,rssi,
 wifiReconnects,skReconnects,resetReason}` with declared meta, so a
 dashboard sees the device without any app code.
 
@@ -173,13 +185,106 @@ updates in ~40 s of `navigation.*` from N2K sources, satellitesInView
 objects of several KiB reassembled, PUT round trip (405 from a server
 without handlers).
 
+## HTTP requests to the server
+
+`espos_sk_http.h` is the one way an application talks HTTP to the selected
+server. Four hand-rolled copies of "GET a SignalK REST node" in one firmware
+had two of them rebooting the device; this is the version that does not.
+
+```c
+#include "espos_sk_http.h"
+
+espos_sk_http_resp_t r;
+if (espos_sk_http_get("/signalk/v1/applicationData/global/my-app/1/layout.json", NULL, &r) == ESP_OK
+    && r.status == 200 && !r.truncated) {
+    apply_layout(r.body, r.len);              /* NUL-terminated, malloc'ed */
+}
+espos_sk_http_resp_free(&r);
+
+char *value = NULL;                          /* GET …/vessels/self/navigation/position → "value" member */
+if (espos_sk_get_value("navigation.position", &value) == ESP_OK) { /* {"latitude":…,"longitude":…} */ }
+free(value);
+char *meta = NULL;                           /* GET …/navigation/speedOverGround/meta */
+if (espos_sk_get_meta("navigation.speedOverGround", &meta) == ESP_OK) { /* {"units":"m/s",…} */ }
+free(meta);
+
+espos_sk_http_opts_t o = { .timeout_ms = 3000, .max_body = 512 };
+espos_sk_http_post("/plugins/my-plugin/api/thing", "{\"on\":true}", &o, &r);   /* PUT, DELETE likewise */
+espos_sk_http_resp_free(&r);
+
+char url[ESPOS_SK_URL_MAX];
+espos_sk_url("/signalk/v1/api", url, sizeof(url));       /* http(s)://host:port/signalk/v1/api */
+espos_sk_ws_url("/signalk/v1/stream", url, sizeof(url)); /* ws(s)://… */
+```
+
+* **Reply**: `status` (0 when nothing arrived), `body` (malloc'ed,
+  NUL-terminated, `""` for an empty reply), `len`, `truncated`. The call
+  returns `ESP_OK` whenever a reply arrived — a 404 or 500 is a successful
+  call; check `status`. `ESP_ERR_INVALID_STATE` means no server is selected,
+  `ESP_ERR_TIMEOUT` that no connection slot came free, anything else is the
+  transport error `esp_http_client` reported. Always
+  `espos_sk_http_resp_free()`.
+* **Options** (`NULL` or zeroed = defaults): 6 s timeout, 16 KiB body cap,
+  `Authorization: Bearer` from the current token, 401/403 reported,
+  `Accept: application/json`. `no_auth` drops the header, `no_report_unauthorized`
+  keeps a 401 from touching the token machine, `accept` overrides the header
+  (`""` = none).
+* **Body cap**: the body is collected in `HTTP_EVENT_ON_DATA` and stops at
+  `max_body`; beyond it `truncated` is set and the rest is drained and
+  discarded. Never parse a truncated body — treat it as "the reply was too
+  big" (`espos_sk_get_value/meta` return `ESP_ERR_INVALID_SIZE`). The buffer
+  grows with the reply, so the cap costs nothing for small documents.
+* **Token**: snapshotted per call from `espos_sk_get_token()`, sent as a
+  header — never in a query string, where it would end up in every proxy and
+  server log. No token, no header, which is what a server running without
+  security expects. A 401/403 while a token was sent calls
+  `espos_sk_report_unauthorized()`: the token machine re-verifies and, if the
+  server really has dropped the device, requests access again.
+* **Scheme**: from the selected server's `tls` flag, `http`/`ws` or
+  `https`/`wss`, with the same certificate rules as the delta stream (below).
+  `espos_sk_url()` / `espos_sk_ws_url()` build the URL for code that opens its
+  own connection (the BLE gateway's control socket does).
+* **Concurrency**: `CONFIG_ESPOS_SK_HTTP_MAX_CONCURRENT` (default 2, range
+  1–8) bounds requests in flight — the token machine's and the meta
+  reconciliation's own calls included. Each open request is a socket plus,
+  over TLS, ~20 KB of RAM; a display fetching one value per widget on a layout
+  change would otherwise open dozens at once. A caller over the limit waits
+  up to its own `timeout_ms` for a slot.
+* **Threading**: blocking, on the caller's task, for up to `timeout_ms`
+  waiting for a slot plus `timeout_ms` on the wire, with ~2 KiB of its stack.
+  Call from an application task. Never from the SK stream task (the
+  `espos_sk_subscribe`/`espos_sk_put` callbacks), an `ESPOS_EVENT` handler, a
+  Bluetooth stack callback or an HTTP URI handler.
+
+### The two crash patterns it avoids
+
+Both were reproduced on the ESP32-P4 against signalk-server, both are inside
+`esp_http_client`, and both are why the helper insists on one particular
+shape — a **fresh client per call** and **`esp_http_client_perform()` only**:
+
+1. `esp_http_client_open()` → `fetch_headers()` → `read()` leaves the client's
+   `cache_data_in_fetch_hdr` flag set. When the body arrives in the same TCP
+   segment as the headers — which is every small SignalK reply — the next
+   step hits `assert(orig_raw_data == raw_data)` in `http_on_body` and the
+   device reboots. Only `perform()` clears the flag.
+2. Reusing one handle across `perform()` calls (`set_url()` per path, one
+   connection for a batch) desyncs the same two pointers and trips the same
+   assert mid-batch (seen on `navigation.anchor.*` paths).
+
+`perform()` with a new handle per request enters neither path; the body is
+delivered through the event handler, which is also where the size cap lives.
+`sk_http.c` has used this shape for the token legs since M3; the meta
+reconciliation and the public API now share that single implementation.
+
 ## TLS (https / wss)
 
 Off by default and inert unless the firmware was built with
 `CONFIG_ESPOS_SK_TLS`, which compiles the TLS transports. With it, the
 `sk.tls` setting switches the device to `https://` for the access-request
-calls and `wss://` for the delta stream; `sk.tls` is `restart_required`,
-because the transport is built once when the stream task connects.
+calls, every `espos_sk_http_*` request and the BLE gateway's POSTs, and to
+`wss://` for the delta stream and the gateway's control socket; `sk.tls` is
+`restart_required`, because the stream transport is built once when the
+stream task connects.
 
 What it is for: keeping the SignalK access token off the wire. The OTA path
 — the one an attacker would actually want — is protected by image signatures
@@ -208,7 +313,7 @@ the open connection.
 ## API
 
 * `GET /api/v1/sk/status` — token/server/discovery status plus the `ws`
-  stream object (see api.md).
+  stream object (see rest-api.md).
 * `POST /api/v1/sk/put {"path","value"}` / `GET /api/v1/sk/put` — PUT over
   the stream and the last answer.
 * `POST /api/v1/sk/publish {"path","value"[,"meta","period_ms"]}` — publish
@@ -231,7 +336,10 @@ the open connection.
   WebSocket against a Python mock of the signalk-server security API and
   stream endpoint (approve, deny, revoke, forget, security off, manual
   token, manual host, deltas + meta reconciliation, offline buffering with
-  ordered drain); `SkInboundTests`: subscribe frames, value/meta delivery,
+  ordered drain; the HTTP helper through a harness probe: 200 with body and
+  Bearer header, 404 as a reply, oversize body → `truncated`, value/meta/URL
+  lookups, PUT through the same core, 401 → token machine re-requests);
+  `SkInboundTests`: subscribe frames, value/meta delivery,
   exact vs family dispatch, PUT round trip / failure / timeout, raw frames,
   unsubscribe + resubscribe after reconnect, 9 KiB frame reassembly.
 * Against a real signalk-server on the host: `node bin/signalk-server -c
@@ -266,14 +374,16 @@ problem to diagnose.
   `message` is the human half and may change freely.
 * `method` is `["visual"]` for warn/alarm and `[]` on clear. What to do about
   it is the server's decision, not the device's.
-* Up to `CONFIG_ESPOS_SK_MAX_NOTIFY` distinct keys (default 8, range
-  1-32); buffered like any other delta while offline. Oversized keys or
-  messages are rejected with `ESP_ERR_INVALID_SIZE` rather than truncated --
-  a clipped key would never match on the next call and would leak a slot.
+* Up to `CONFIG_ESPOS_HEALTH_MAX_CONDITIONS` distinct keys (default 8, range
+  1-32): the notification is a sink on `espos_health`, so its condition table
+  is the cap and one key too many gets `ESP_ERR_NO_MEM`. Deltas are buffered
+  like any other while offline. Oversized keys or messages are rejected with
+  `ESP_ERR_INVALID_SIZE` rather than truncated -- a clipped key would never
+  match on the next call and would leak a slot.
 
-espOS raises one itself: **`lowMemory`**, from the health tick, when internal
-RAM drops below 20 KB or the heap below 40 KB. Internal RAM is checked
-separately because it is the scarce pool on targets with PSRAM -- tens of
-megabytes free overall can hide an internal-RAM exhaustion that will take the
-radio down.
+espOS raises `lowMemory` itself, from `espos_health`'s watchdog policy rather
+than the SignalK tick, so it exists without SignalK; thresholds and the
+restart rule are in [health.md](health.md). Internal RAM is checked separately
+because it is the scarce pool on targets with PSRAM -- tens of megabytes free
+overall can hide an internal-RAM exhaustion that will take the radio down.
 

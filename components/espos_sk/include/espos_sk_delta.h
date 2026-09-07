@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Delta batcher + offline ring buffer — pure C, no OS calls, host-testable.
  *
@@ -23,8 +24,8 @@
 extern "C" {
 #endif
 
-#define ESPOS_SK_PATH_MAX 96
-#define ESPOS_SK_VALUE_MAX 256
+#define ESPOS_SK_PATH_MAX    96
+#define ESPOS_SK_VALUE_MAX   256
 #define ESPOS_SK_PENDING_MAX 32
 
 typedef struct {

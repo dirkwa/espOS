@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Static UI. Files come from the LittleFS "storage" partition (mounted at
  * CONFIG_ESPOS_HTTPD_WWW_DIR); the build gzips the Vite bundle into it, so
@@ -35,7 +36,10 @@ extern const char index_html_end[] asm("_binary_index_html_end");
 static char s_www[64] = CONFIG_ESPOS_HTTPD_WWW_DIR;
 static bool s_mounted;
 
-static const struct { const char *ext; const char *type; } TYPES[] = {
+static const struct {
+    const char *ext;
+    const char *type;
+} TYPES[] = {
     { ".html", "text/html; charset=utf-8" },
     { ".js", "application/javascript; charset=utf-8" },
     { ".mjs", "application/javascript; charset=utf-8" },
@@ -200,7 +204,8 @@ esp_err_t espos_httpd_register_static(httpd_handle_t h)
             s_mounted = true;
         } else {
             ESP_LOGW(TAG, "ui storage at %s has no index.html: serving the embedded page "
-                          "(build the UI: cd ui && npm ci && npm run build)", s_www);
+                          "(build the UI: cd ui && npm ci && npm run build)",
+                     s_www);
         }
     } else {
         ESP_LOGW(TAG, "ui storage not mounted (%s): serving the embedded page", esp_err_to_name(err));

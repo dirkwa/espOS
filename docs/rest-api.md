@@ -113,8 +113,15 @@ application/schema+json`. Sent with an `ETag`; a request with a matching
   "app": "espos", "version": "0.1.0-3-gabc1234", "idf_version": "v6.0.2",
   "chip": "esp32c6", "chip_revision": 1, "cores": 1,
   "uptime_s": 42, "free_heap": 210000, "min_free_heap": 190000,
-  "reset_reason": "poweron", "config_storage_reset": false,
-  "schema_etag": "6acfba355e183b19", "ui_storage": true
+  "reset_reason": "software", "config_storage_reset": false,
+  "schema_etag": "6acfba355e183b19", "ui_storage": true,
+  "last_reset": {
+    "reason": "software", "health_key": "skLinkStalled",
+    "message": "stream down for over 300 s while WiFi reports connected",
+    "min_free_heap_before": 148216, "min_internal_before": 31720,
+    "largest_block_before": 25600, "uptime_before_s": 86742,
+    "at": "2026-09-07T04:12:31Z"
+  }
 }
 ```
 `ui_storage` (M5) is true when the LittleFS UI partition is mounted.
@@ -122,6 +129,17 @@ application/schema+json`. Sent with an `ETag`; a request with a matching
 boot (corrupt/incompatible) and every value is a default.
 `reset_reason` ∈ `poweron external software panic int_wdt task_wdt wdt
 deepsleep brownout sdio usb jtag efuse power_glitch cpu_lockup unknown`.
+
+`last_reset` is the record the health watchdog ([health.md](health.md)) left
+when it restarted the device: `reason` (the reset reason, `software` for a
+watchdog restart), `health_key` and `message` of the condition that struck
+out, the low-water marks of total heap (`min_free_heap_before`) and internal
+RAM (`min_internal_before`), the largest free internal block at the time
+(`largest_block_before`), how long that boot had run (`uptime_before_s`) and
+the wall-clock time (`at`, ISO 8601 UTC; `null` when the clock was never set).
+`null` when the last reset was not the watchdog's — power-on, a panic (see
+`/system/coredump`), an OTA reboot, `POST /system/reboot`. It stays for the
+whole boot and is gone after the next reset, whatever its cause.
 
 ### `POST /system/reboot` — M1
 

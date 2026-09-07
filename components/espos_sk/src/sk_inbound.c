@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Inbound side of the stream: subscription table, dispatch of parsed
  * updates, PUT request tracking, raw outbound frames. Everything the
@@ -21,9 +22,9 @@
 
 static const char *TAG = "espos_skin";
 
-#define MAX_PUTS      8
+#define MAX_PUTS       8
 #define PUT_TIMEOUT_MS 10000
-#define MAX_RAW       16
+#define MAX_RAW        16
 
 typedef struct {
     int handle;
@@ -321,7 +322,10 @@ static bool dispatch(const espos_sk_update_t *u, void *arg)
 {
     (void)arg;
     /* Copy matching subscribers out under the lock, call them without it. */
-    struct { espos_sk_sub_cb_t cb; void *arg; } hit[8];
+    struct {
+        espos_sk_sub_cb_t cb;
+        void *arg;
+    } hit[8];
     size_t n = 0;
     lock();
     for (size_t i = 0; i < s.n_subs && n < 8; i++) {

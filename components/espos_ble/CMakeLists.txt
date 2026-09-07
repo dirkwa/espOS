@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 idf_build_get_property(target IDF_TARGET)
 
 # ble_proto.c is pure logic and builds anywhere (it is what test/host exercises);

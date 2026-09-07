@@ -1,10 +1,12 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 set(ESPOS_CONFIG_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
 set(ESPOS_CONFIG_GEN_C "${ESPOS_CONFIG_GEN_DIR}/espos_config_gen.c")
 set(ESPOS_CONFIG_GEN_H "${ESPOS_CONFIG_GEN_DIR}/include/espos_cfg_keys.h")
 set(ESPOS_CONFIG_GEN_SCHEMA "${ESPOS_CONFIG_GEN_DIR}/espos_config_schema.json")
-set(ESPOS_CONFIG_GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../../tools/espos_gen_config.py")
-get_filename_component(ESPOS_CONFIG_GEN_SCRIPT "${ESPOS_CONFIG_GEN_SCRIPT}" ABSOLUTE)
+# The generator ships inside the component so a registry-installed copy is
+# self-contained; nothing here may reach outside CMAKE_CURRENT_LIST_DIR.
+set(ESPOS_CONFIG_GEN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/tools/espos_gen_config.py")
 # The include dir must exist at configure time for idf_component_register.
 file(MAKE_DIRECTORY "${ESPOS_CONFIG_GEN_DIR}/include")
 

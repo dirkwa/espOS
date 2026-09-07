@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Wire-format helpers for signalk-server's BLE provider API. Pure C with no
  * BLE, network or FreeRTOS dependency, so it runs under Unity on the linux
@@ -53,7 +54,7 @@ size_t espos_ble_advq_drain(espos_ble_advq_t *q, espos_ble_adv_t *out, size_t ma
 static inline size_t espos_ble_advq_count(const espos_ble_advq_t *q) { return q->count; }
 
 /* Parsed `gatt_subscribe` sub-descriptors. */
-#define ESPOS_BLE_UUID_MAX 40
+#define ESPOS_BLE_UUID_MAX       40
 #define ESPOS_BLE_WRITE_DATA_MAX 64
 
 typedef struct {

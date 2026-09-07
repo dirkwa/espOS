@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * /api/v1/logs — the log ring, paged by sequence number, streamed in
  * pages so a large ring never has to be materialised in RAM; the ring
@@ -19,7 +20,7 @@
 #include "espos_httpd_sse.h"
 #include "espos_log.h"
 
-#define PAGE_LINES   16
+#define PAGE_LINES    16
 #define LIMIT_DEFAULT 200
 #define LIMIT_MAX     1000
 
@@ -50,7 +51,8 @@ static char *json_quote(const char *in)
     size_t n = 2;
     for (const char *c = in; *c; c++) {
         unsigned char u = (unsigned char)*c;
-        n += (u == '"' || u == '\\') ? 2 : (u < 0x20) ? 6 : 1;
+        n += (u == '"' || u == '\\') ? 2 : (u < 0x20) ? 6
+                                                      : 1;
     }
     char *out = malloc(n + 1);
     if (!out) {
@@ -64,9 +66,11 @@ static char *json_quote(const char *in)
             *o++ = '\\';
             *o++ = (char)u;
         } else if (u == '\n') {
-            *o++ = '\\'; *o++ = 'n';
+            *o++ = '\\';
+            *o++ = 'n';
         } else if (u == '\t') {
-            *o++ = '\\'; *o++ = 't';
+            *o++ = '\\';
+            *o++ = 't';
         } else if (u < 0x20) {
             o += sprintf(o, "\\u%04x", u);
         } else {

@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include <stdlib.h>
 #include <string.h>
 #include "unity.h"
@@ -25,7 +26,8 @@ TEST_CASE("batching: values within the window become one delta, last value per p
     TEST_ASSERT_EQUAL_STRING(
         "{\"context\":\"vessels.self\",\"updates\":[{\"source\":{\"label\":\"espos-1a2b\"},\"values\":["
         "{\"path\":\"environment.wind.speedApparent\",\"value\":3.6},"
-        "{\"path\":\"environment.wind.angleApparent\",\"value\":0.7}]}]}", m);
+        "{\"path\":\"environment.wind.angleApparent\",\"value\":0.7}]}]}",
+        m);
     free(m);
     TEST_ASSERT_NULL(espos_sk_delta_take(d, 1200, true));
     espos_sk_delta_stats_t st;

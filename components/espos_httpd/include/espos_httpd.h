@@ -1,11 +1,12 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_httpd — the device's HTTP server (esp_http_server) and the versioned
  * REST API under /api/v1. Other espOS components register their endpoints
  * through espos_httpd_register(); the UI bundle is served from /.
  *
- * API contract: docs/api.md. Changing it is a cross-component decision.
+ * API contract: docs/rest-api.md. Changing it is a cross-component decision.
  */
 #pragma once
 

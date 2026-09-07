@@ -1,6 +1,39 @@
-## espos_n2k component manifest
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_n2k component manifest: registry metadata for signalk-espos/espos_n2k.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "NMEA 2000 over TWAI + a candump TCP server"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_n2k"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/n2k.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - nmea2000
+  - twai
+  - can
+  - candump
+# No `targets`, although the TWAI controller exists on esp32/s2/s3/c3/c5/c6/
+# h2/h21/h4/p4 only and twai_node.cpp does not compile for the linux host:
+# the component manager refuses to configure any target missing from the
+# `targets` of ANY component in the tree, so a list without linux here would
+# fail every host-test project that puts components/ on EXTRA_COMPONENT_DIRS.
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
 dependencies:
-  idf: ">=6.0.0"
+  idf: ">=6.0.0,<6.1.0"
   # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.
   espressif/mdns:
     version: "==1.11.3"

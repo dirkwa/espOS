@@ -1,8 +1,50 @@
-## espos_sk component manifest
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_sk component manifest: registry metadata for signalk-espos/espos_sk.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "SignalK: mDNS discovery, access token, delta stream in and out"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_sk"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/signalk.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - websocket
+  - mdns
+  - delta
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
 dependencies:
-  idf: ">=6.0.0"
-  # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.
-  espressif/mdns:
-    version: "==1.11.3"
-    rules:
-      - if: "target != linux"
+  idf: ">=6.0.0,<6.1.0"
+  # Sibling espOS components. override_path makes an in-tree build (and a
+  # firmware that vendors espOS as a submodule) use the checkout next to this
+  # file instead of downloading espos/<name> from the registry; a copy fetched
+  # from the registry has no such directory and the field is ignored there.
+  signalk-espos/espos_config:
+    version: "^0.7.0"
+    override_path: "../espos_config"
+  signalk-espos/espos_httpd:
+    version: "^0.7.0"
+    override_path: "../espos_httpd"
+  signalk-espos/espos_wifi:
+    version: "^0.7.0"
+    override_path: "../espos_wifi"
+  signalk-espos/espos_health:
+    version: "^0.7.0"
+    override_path: "../espos_health"
+  # cJSON, exact-pinned like every other registry dependency here.
+  espressif/cjson: "==1.7.19~2"
+  # espressif/mdns is espos_wifi's dependency (it owns the responder);
+  # discovery browses through it and gets mdns.h via espos_wifi's REQUIRES.

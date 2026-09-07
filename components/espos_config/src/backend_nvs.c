@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * NVS backend for espos_config. Type mapping:
  *   bool   → u8        int → i32        float → u32 (IEEE-754 bits)
@@ -56,7 +57,7 @@ static esp_err_t be_init(void *ctx, bool *storage_reset)
 #ifdef ESP_ERR_NVS_CORRUPT_KEY_PART
         || err == ESP_ERR_NVS_CORRUPT_KEY_PART
 #endif
-       ) {
+    ) {
         ESP_LOGW(TAG, "NVS partition '%s' unusable (%s); erasing", label, esp_err_to_name(err));
         esp_err_t e2 = nvs_flash_erase_partition(label);
         if (e2 != ESP_OK) {

@@ -2,7 +2,7 @@
 
 A Preact + TypeScript single-page app built with Vite, served by
 `espos_httpd` from the LittleFS `storage` partition. It talks only to the
-versioned REST API in [api.md](api.md) and gets live state over the SSE
+versioned REST API in [rest-api.md](rest-api.md) and gets live state over the SSE
 stream — no polling, no coupling to firmware internals.
 
 Pages: **Status** (WiFi, SignalK, device, last crash), **WiFi** (join /
@@ -28,7 +28,7 @@ ESPOS_API=http://127.0.0.1:<port> npm run dev  # …or to the host harness (test
 `mock/server.mjs` (node, zero deps) implements the API contract with a
 simulated WiFi state machine, discovery + token flow, a log ring and SSE,
 and regenerates the config schema from the real descriptors via
-`tools/espos_gen_config.py` when python3 is present. It is the reference
+`components/espos_config/tools/espos_gen_config.py` when python3 is present. It is the reference
 "device" for UI development; when the API changes, change the mock and the
 docs together.
 

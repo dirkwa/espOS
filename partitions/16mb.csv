@@ -1,0 +1,17 @@
+# espOS partition table, 16 MB flash (the Waveshare ESP32-P4 panels). Two
+# 6.5 MB app slots -- LVGL plus esp-sr plus hosted WiFi/BLE make a big image
+# -- and a 1.75 MB storage partition. That leaves the last 1 MB free for the
+# esp-sr model partition below: uncomment it for on-device wake words, it
+# slots in after storage. A project needing more (its own NVS namespace as a
+# partition, a model at a historical offset) brings its own table and passes
+# it as PARTITIONS.
+# Name,     Type, SubType,  Offset,  Size,   Flags
+nvs,        data, nvs,      ,        24K,
+otadata,    data, ota,      ,        8K,
+phy_init,   data, phy,      ,        4K,
+nvs_keys,   data, nvs_keys, ,        4K,    encrypted
+coredump,   data, coredump, ,        64K,
+ota_0,      app,  ota_0,    ,        6656K,
+ota_1,      app,  ota_1,    ,        6656K,
+storage,    data, littlefs, ,        1792K,
+# model,    data, fat,      ,        1M,

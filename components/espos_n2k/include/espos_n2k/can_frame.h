@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ESPOS_N2K_CAN_FRAME_H_
 #define ESPOS_N2K_CAN_FRAME_H_
 
@@ -19,10 +20,10 @@ namespace espos_n2k {
 inline constexpr size_t kCanMaxData = 8;
 
 struct CanFrame {
-  uint32_t id = 0;         ///< 11- or 29-bit arbitration ID, no flag bits
-  bool extended = true;    ///< 29-bit ID; NMEA 2000 is always extended
-  bool remote = false;     ///< remote-transmission request (no data)
-  uint8_t dlc = 0;         ///< data bytes present, 0..kCanMaxData
+  uint32_t id = 0;       ///< 11- or 29-bit arbitration ID, no flag bits
+  bool extended = true;  ///< 29-bit ID; NMEA 2000 is always extended
+  bool remote = false;   ///< remote-transmission request (no data)
+  uint8_t dlc = 0;       ///< data bytes present, 0..kCanMaxData
   uint8_t data[kCanMaxData] = {};
 };
 

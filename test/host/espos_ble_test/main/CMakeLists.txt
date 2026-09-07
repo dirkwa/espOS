@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Compile the component's pure-logic sources directly rather than depending on
 # espos_ble: the component pulls in Bluetooth and networking, neither of which

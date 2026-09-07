@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_health: the condition table and the sink registry.
  *
@@ -41,7 +42,10 @@ static void recorder(const char *key, espos_health_state_t state, const char *me
 static size_t s_other_n;
 static void other_sink(const char *key, espos_health_state_t state, const char *message, void *arg)
 {
-    (void)key; (void)state; (void)message; (void)arg;
+    (void)key;
+    (void)state;
+    (void)message;
+    (void)arg;
     s_other_n++;
 }
 

@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Log ring: a byte ring of [u16 len][text] records behind esp_log's
  * vprintf hook. The hook formats once into a stack buffer, strips ANSI
@@ -21,9 +22,9 @@
 
 #include "espos_log.h"
 
-#define RING_SIZE   CONFIG_ESPOS_LOG_RING_SIZE
-#define LOG_LINE_MAX    CONFIG_ESPOS_LOG_LINE_MAX
-#define NOTIFY_MS   500
+#define RING_SIZE    CONFIG_ESPOS_LOG_RING_SIZE
+#define LOG_LINE_MAX CONFIG_ESPOS_LOG_LINE_MAX
+#define NOTIFY_MS    500
 
 static struct {
     SemaphoreHandle_t lock;
@@ -273,9 +274,16 @@ void espos_log_set_notify(espos_log_notify_cb_t cb, void *arg)
     xSemaphoreGive(s.lock);
 }
 
-static const struct { const char *name; esp_log_level_t level; } LEVELS[] = {
-    { "none", ESP_LOG_NONE }, { "error", ESP_LOG_ERROR }, { "warn", ESP_LOG_WARN },
-    { "info", ESP_LOG_INFO }, { "debug", ESP_LOG_DEBUG }, { "verbose", ESP_LOG_VERBOSE },
+static const struct {
+    const char *name;
+    esp_log_level_t level;
+} LEVELS[] = {
+    { "none", ESP_LOG_NONE },
+    { "error", ESP_LOG_ERROR },
+    { "warn", ESP_LOG_WARN },
+    { "info", ESP_LOG_INFO },
+    { "debug", ESP_LOG_DEBUG },
+    { "verbose", ESP_LOG_VERBOSE },
 };
 
 const char *espos_log_level_name(int level)

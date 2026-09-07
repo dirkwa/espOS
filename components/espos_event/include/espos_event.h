@@ -1,0 +1,92 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * espos_event — the espOS event bus: one esp_event base, ESPOS_EVENT, on
+ * the default event loop. Components post the milestones of a device's
+ * life here (config up, network up, server found, token approved, update
+ * available) so an application — or another component — can react to them
+ * without polling status snapshots and without depending on the component
+ * that produced them.
+ *
+ * Threading contract: handlers run on the default event loop task, the one
+ * esp_event_loop_create_default() made and WIFI_EVENT / IP_EVENT share.
+ * Copy `event_data` out and return; it is valid for the duration of the
+ * call only. Never block in a handler and never wait for another task from
+ * one — the WiFi driver's own events queue behind it.
+ *
+ * This header includes esp_event.h, the one exception to the rule that a
+ * public espOS header pulls in no IDF header but esp_err.h: the type on
+ * offer here IS the IDF event loop. The base, the handler signature and the
+ * subscribe call are esp_event's, and wrapping them in look-alike copies
+ * would only make the same loop harder to reach from an application that
+ * already handles WIFI_EVENT on it.
+ */
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+#include "esp_err.h"
+#include "esp_event.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+ESP_EVENT_DECLARE_BASE(ESPOS_EVENT);
+
+/* Event ids. Values are part of the ABI: append, never renumber. */
+typedef enum {
+    ESPOS_EVENT_CONFIG_READY = 1,           /* espos_config is up (espos_init); data: none */
+    ESPOS_EVENT_HTTPD_STARTED = 2,          /* REST server listening; data: none */
+    ESPOS_EVENT_NETWORK_UP = 3,             /* station got an IP; data: espos_event_network_t */
+    ESPOS_EVENT_NETWORK_DOWN = 4,           /* station link lost; one per NETWORK_UP; data: none */
+    ESPOS_EVENT_MDNS_READY = 5,             /* mDNS responder up; data: none */
+    ESPOS_EVENT_SK_SERVER_SELECTED = 6,     /* a SignalK server was chosen; data: espos_event_sk_server_t */
+    ESPOS_EVENT_SK_TOKEN_APPROVED = 7,      /* access token verified; data: none */
+    ESPOS_EVENT_SK_STREAM_CONNECTED = 8,    /* delta stream open; data: none */
+    ESPOS_EVENT_SK_STREAM_DISCONNECTED = 9, /* delta stream closed; data: none */
+    ESPOS_EVENT_OTA_AVAILABLE = 10,         /* manifest names a newer build; data: espos_event_ota_t */
+    ESPOS_EVENT_MAX = 11,
+} espos_event_id_t;
+
+/* ESPOS_EVENT_NETWORK_UP */
+typedef struct {
+    char ip[16];       /* dotted IPv4 */
+    char hostname[33]; /* what the device answers to as <hostname>.local */
+} espos_event_network_t;
+
+/* ESPOS_EVENT_SK_SERVER_SELECTED */
+typedef struct {
+    char host[64]; /* IPv4 dotted or hostname, as espos_sk uses it */
+    uint16_t port;
+} espos_event_sk_server_t;
+
+/* ESPOS_EVENT_OTA_AVAILABLE */
+typedef struct {
+    char version[32]; /* the manifest's version string */
+} espos_event_ota_t;
+
+/**
+ * Post an ESPOS_EVENT to the default loop, creating the loop if nobody has
+ * yet (espos_wifi or an application may already have; that is fine). `data`
+ * is copied, `size` bytes of it; NULL/0 for events without data.
+ *
+ * Thread-safe. Never blocks for long: waits at most a few ticks for queue
+ * space, none at all when called from the loop's own task (from inside a
+ * handler). ESP_ERR_TIMEOUT when the queue is full — the event is dropped,
+ * which callers treat as acceptable for a notification.
+ */
+esp_err_t espos_event_post(int32_t id, const void *data, size_t size);
+
+/**
+ * Run `handler` on the default loop task for ESPOS_EVENT `id`
+ * (ESP_EVENT_ANY_ID for all of them). `arg` is handed back untouched. The
+ * same (handler, arg) pair registered twice is called once.
+ */
+esp_err_t espos_event_subscribe(int32_t id, esp_event_handler_t handler, void *arg);
+esp_err_t espos_event_unsubscribe(int32_t id, esp_event_handler_t handler);
+
+#ifdef __cplusplus
+}
+#endif
