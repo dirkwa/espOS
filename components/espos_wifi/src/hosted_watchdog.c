@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
 /*
  * Liveness watchdog for the esp_hosted co-processor link (e.g. ESP32-P4
  * host + ESP32-C6 radio over SDIO).
@@ -49,9 +50,9 @@ static const char *TAG = "espos_hostedwd";
  * can delay one, and re-initing the transport under a healthy link would
  * be its own outage. Three intervals is late enough to be certain and
  * still well inside the ~180 s an application-level watchdog would take. */
-#define HEARTBEAT_SEC       20
-#define MISSED_BEATS_LIMIT  3
-#define TIMEOUT_US          ((int64_t)HEARTBEAT_SEC * MISSED_BEATS_LIMIT * 1000000)
+#define HEARTBEAT_SEC      20
+#define MISSED_BEATS_LIMIT 3
+#define TIMEOUT_US         ((int64_t)HEARTBEAT_SEC * MISSED_BEATS_LIMIT * 1000000)
 
 static esp_timer_handle_t s_timer;
 static uint32_t s_last_beat;
@@ -181,7 +182,8 @@ esp_err_t espos_wifi_hosted_watchdog_start(void)
          * would make the next call return ESP_OK with detection off,
          * which is worse than failing. */
         ESP_LOGW(TAG, "co-processor heartbeat unavailable (%s) — "
-                      "wedge detection is OFF", esp_err_to_name(err));
+                      "wedge detection is OFF",
+                 esp_err_to_name(err));
         /* Unregister BEFORE touching the timer: the handler is already
          * live, and a heartbeat arriving mid-teardown would call
          * arm_timer() on a handle we are about to delete.

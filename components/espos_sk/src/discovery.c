@@ -1,21 +1,31 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
- * mDNS discovery of SignalK servers (_signalk-http._tcp) and advertisement
- * of this device. Device build; the host uses discovery_sim.c.
+ * mDNS discovery of SignalK servers (_signalk-http._tcp). The responder the
+ * queries go through — and the device's own advertisement — is espos_wifi's
+ * (espos_mdns.h); this file only browses. Device build; the host uses
+ * discovery_sim.c.
  */
 #include <string.h>
 #include <stdio.h>
 
 #include "esp_log.h"
+#include "sdkconfig.h"
+
+#include "espos_mdns.h"
+#include "espos_sk_priv.h"
+
+static const char *TAG = "espos_sk";
+
+#if CONFIG_ESPOS_WIFI_MDNS
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lwip/inet.h"
 #include "mdns.h"
 
-#include "espos_sk_priv.h"
 #include "espos_wifi.h"
-
-static const char *TAG = "espos_sk";
-static bool s_inited;
 
 /* Our own IPv4 + netmask (0 if not connected). */
 static void local_net(uint32_t *ip, uint32_t *mask)
@@ -31,17 +41,32 @@ static void local_net(uint32_t *ip, uint32_t *mask)
 
 esp_err_t espos_sk_discovery_init(const char *hostname)
 {
-    if (!s_inited) {
-        esp_err_t err = mdns_init();
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "mdns_init: %s", esp_err_to_name(err));
-            return err;
+    (void)hostname; /* the responder names itself after wifi.hostname */
+    /* The responder is espos_wifi's and espos_wifi_start() brings it up;
+     * asking again here costs nothing (idempotent) and keeps a SignalK build
+     * findable when a firmware drives the start sequence by hand. */
+    return espos_mdns_start();
+}
+
+/* The station reports CONNECTED from inside the GOT_IP handler while the
+ * responder's MDNS_READY is still queued behind it on the event loop, so the
+ * browse the sk task fires on that edge can arrive a few milliseconds early.
+ * An empty pass is only retried after a whole sk.discover_s; wait for the
+ * responder instead — bounded, and only while there is a link to wait for. */
+static bool wait_ready(void)
+{
+    for (int i = 0; i < 60; i++) {
+        if (espos_mdns_is_ready()) {
+            return true;
         }
-        s_inited = true;
+        uint32_t ip, mask;
+        local_net(&ip, &mask);
+        if (!ip) {
+            return false; /* no link: nothing to browse on */
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
-    mdns_hostname_set(hostname);
-    mdns_instance_name_set(hostname);
-    return ESP_OK;
+    return espos_mdns_is_ready();
 }
 
 static const char *txt_get(const mdns_result_t *r, const char *key)
@@ -56,7 +81,7 @@ static const char *txt_get(const mdns_result_t *r, const char *key)
 
 size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
 {
-    if (!s_inited) {
+    if (!wait_ready()) {
         return 0;
     }
     mdns_result_t *results = NULL;
@@ -106,3 +131,23 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
     mdns_query_results_free(results);
     return n;
 }
+
+#else /* !CONFIG_ESPOS_WIFI_MDNS */
+
+/* No responder in this build: there is nothing to browse with. The periodic
+ * pass stays (it also ages out stale entries) and finds nothing. */
+esp_err_t espos_sk_discovery_init(const char *hostname)
+{
+    (void)hostname;
+    ESP_LOGW(TAG, "built without mDNS (CONFIG_ESPOS_WIFI_MDNS=n): discovery is off, set sk.server_host");
+    return ESP_OK;
+}
+
+size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
+{
+    (void)out;
+    (void)max;
+    return 0;
+}
+
+#endif /* CONFIG_ESPOS_WIFI_MDNS */

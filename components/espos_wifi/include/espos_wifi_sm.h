@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_wifi state machine — pure C, no esp_wifi calls. The driver side is
  * injected through espos_wifi_port_t so the machine runs unchanged on the
@@ -33,12 +34,12 @@ typedef enum {
 } espos_wifi_state_t;
 
 /* Our own reason codes live above the 802.11 / esp_wifi range. */
-#define ESPOS_WIFI_REASON_NONE          0
-#define ESPOS_WIFI_REASON_DHCP_TIMEOUT  1001
+#define ESPOS_WIFI_REASON_NONE            0
+#define ESPOS_WIFI_REASON_DHCP_TIMEOUT    1001
 #define ESPOS_WIFI_REASON_CONNECT_TIMEOUT 1002
-#define ESPOS_WIFI_REASON_LOST_IP       1003
-#define ESPOS_WIFI_REASON_CONFIG_CHANGE 1004
-#define ESPOS_WIFI_REASON_DISABLED      1005
+#define ESPOS_WIFI_REASON_LOST_IP         1003
+#define ESPOS_WIFI_REASON_CONFIG_CHANGE   1004
+#define ESPOS_WIFI_REASON_DISABLED        1005
 
 typedef struct {
     char ssid[33];
