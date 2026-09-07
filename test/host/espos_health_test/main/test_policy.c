@@ -424,6 +424,23 @@ TEST_CASE("a task that keeps kicking is never stalled", "[health][policy]")
     }
 }
 
+TEST_CASE("a kick stamped after the tick sampled its clock is alive, not a 49-day stall", "[health][policy]")
+{
+    /* The device tick reads the clock once, then scans the registry; a kick
+     * from a frame-rate UI task lands in between with a newer stamp. Seen on
+     * the P4 panel as "ui silent for 4294967 s" and strike 2/3. */
+    fresh(true);
+    TEST_ASSERT_EQUAL(ESP_OK, espos_health_policy_watch(&P, &task_a, "ui", 15000));
+    F.now_ms += 5005;
+    espos_health_policy_kick(&P, &task_a); /* stamp = t + 5005 */
+    F.now_ms -= 5;                         /* the tick's sample: t + 5000 */
+    TEST_ASSERT_EQUAL_UINT32(0, espos_health_policy_tick(&P));
+    const report_t *r = last_report("taskStalled");
+    TEST_ASSERT_NOT_NULL(r);
+    TEST_ASSERT_EQUAL(ESPOS_HEALTH_NORMAL, r->state);
+    TEST_ASSERT_EQUAL_INT(0, F.restarts);
+}
+
 TEST_CASE("a task that stops kicking is a fatal ALARM naming it", "[health][policy]")
 {
     fresh(true);

@@ -78,7 +78,13 @@ static void check_tasks(espos_health_policy_t *p, uint32_t now)
         if (!w->task) {
             continue;
         }
-        uint32_t age = now - w->last_kick_ms;
+        /* `now` was sampled once at the top of the tick; a kick from the
+         * watched task can land between that sample and this read, stamping
+         * a time a few ms in the future. Unsigned subtraction would turn
+         * that into ~2^32 ms of silence and a spurious strike (seen on the
+         * P4 panel at display frame rate). A newer stamp means alive. */
+        int32_t delta = (int32_t)(now - w->last_kick_ms);
+        uint32_t age = delta < 0 ? 0 : (uint32_t)delta;
         if (age > w->timeout_ms && age >= worst_age) {
             stalled = w;
             worst_age = age;
