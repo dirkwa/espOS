@@ -1,0 +1,81 @@
+name: Bug report
+description: A device or a host test does not behave the way the docs say.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The fields below are what it takes to reproduce a problem without your board on the desk.
+        Everything the device knows about itself is one `curl` away; please paste rather than paraphrase.
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target chip
+      options:
+        - esp32
+        - esp32s3
+        - esp32c3
+        - esp32c6
+        - esp32p4
+        - linux (host test)
+    validations:
+      required: true
+  - type: input
+    id: board
+    attributes:
+      label: Board
+      description: Exact model, including revision where it matters (the ESP32-P4 panels differ by silicon revision).
+      placeholder: e.g. Waveshare ESP32-P4-WIFI6-Touch-LCD-7B, ESP32-C6-DevKitC-1
+    validations:
+      required: true
+  - type: input
+    id: idf
+    attributes:
+      label: ESP-IDF version
+      description: "`idf.py --version`. espOS pins the version in `.idf-version`; say so if you built with another one (`-DESPOS_ALLOW_IDF_MISMATCH=1`)."
+      placeholder: v6.0.2
+    validations:
+      required: true
+  - type: input
+    id: espos_version
+    attributes:
+      label: espOS version
+      description: "`version` from `GET /api/v1/system/info` (looks like `0.7.0-3-gabc1234`, `-dirty` if built from a modified tree). If the device does not boot: the espOS submodule commit."
+      placeholder: 0.7.0-3-gabc1234
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From power-on or from a known state. Include the exact requests (`curl ...`) or UI clicks.
+      placeholder: |
+        1. Fresh flash, join the portal, configure WiFi
+        2. PUT /api/v1/config {"sk": {...}}
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log ring excerpt
+      description: "`curl http://<device-ip>/api/v1/logs` -- the lines around the problem (raise the level first with `PUT /api/v1/logs/level {\"level\":\"debug\"}` if they are not enough). Serial monitor output if the device never reaches the network."
+      render: text
+  - type: textarea
+    id: coredump
+    attributes:
+      label: Core dump, if the device panicked
+      description: "`curl http://<device-ip>/api/v1/system/coredump` (the JSON summary). If you can, attach the `/api/v1/system/coredump/raw` image and keep the ELF of exactly that build -- `espcoredump.py` needs both."
+      render: json
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: sdkconfig deltas from the defaults, relevant config values, network setup (SignalK server version, AP), whether it is reproducible every time.

@@ -1,0 +1,60 @@
+name: Feature request
+description: Something espOS should do, or do differently.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        espOS is the plumbing a SignalK ESP32 device needs: WiFi, config, web UI, SignalK, OTA and the
+        optional gateways. Board-specific code (displays, codecs, pin maps) lives in the firmware that
+        uses espOS, not here -- README.md explains the split. Not sure where something belongs?
+        Start a Discussion instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do on a device and what stands in the way today. A concrete scenario beats a generic wish.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change -- API, config key, REST endpoint, behaviour. For anything touching `/api/v1` remember `docs/rest-api.md` is a contract; sketch the shape.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - espos_config
+        - espos_httpd
+        - espos_wifi
+        - espos_log
+        - espos_health
+        - espos_sk
+        - espos_ota
+        - espos_ble
+        - espos_n2k
+        - espos_voice
+        - espos_audio
+        - ui
+        - build / cmake / scripts
+        - docs
+        - new component
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including doing it in the application on top of espOS, and why that is not enough.
+  - type: dropdown
+    id: implement
+    attributes:
+      label: Would you implement it?
+      options:
+        - "Yes, with a nod on the approach"
+        - "Yes, but I need help with the hardware side"
+        - "No"

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions, ideas, "is this the right way to ..."
+    url: https://github.com/dirkwa/espOS/discussions
+    about: Discussions is the place for anything that is not a reproducible bug or a concrete proposal.
+  - name: Security issue
+    url: https://github.com/dirkwa/espOS/security/advisories/new
+    about: Report privately. SECURITY.md says what is in scope.

@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Conservative check set for the espOS components. Nothing is an error:
+# WarningsAsErrors stays empty until the existing findings have been read one
+# by one, so a check added here never blocks a PR that did not cause it.
+#
+# Run against a real build's compile_commands.json, for example
+#   run-clang-tidy -p build-esp32c6 components/espos_sk/src
+# Cross-compiled targets need the esp-clang toolchain that `idf.py
+# clang-check` installs; the linux host-test builds work with stock clang.
+---
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  misc-*,
+  performance-*,
+  readability-braces-around-statements,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -cert-err33-c,
+  -misc-const-correctness,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes
+# Why those are off:
+#   easily-swappable-parameters   every (ns, key) and (buf, len) pair in the
+#                                 config and wire-format APIs trips it.
+#   narrowing-conversions         packet and NVS code stores size_t into
+#                                 uint16_t by design; revisit once quiet.
+#   cert-err33-c                  flags every unchecked snprintf/printf.
+#   misc-const-correctness        wants `const` on most locals; churn only.
+#   misc-include-cleaner          IDF umbrella headers make it wrong.
+#   misc-no-recursion             the JSON/path walkers recurse on purpose.
+#   non-private-member-variables  the C++ config structs are plain data.
+WarningsAsErrors: ''
+HeaderFilterRegex: '(components|main|test)/.*'
+FormatStyle: file
+CheckOptions:
+  # `if (!v) return;` on one line is the house style (.clang-format
+  # AllowShortIfStatementsOnASingleLine); only multi-line bodies need braces.
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '1'

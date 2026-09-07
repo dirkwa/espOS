@@ -1,0 +1,45 @@
+# Categories for GitHub's generated release notes:
+#   gh release create v0.8.0 --title "espOS 0.8.0" --generate-notes
+# (docs/releasing.md; scripts/release.sh cuts the tag and prints the commit
+# subjects the notes should match).
+#
+# GitHub sorts pull requests by *label*, never by commit subject, so the
+# labels are named after the Conventional Commit types the subjects already
+# carry (feat, fix, ...) and the category titles match the CHANGELOG.md
+# sections, so both read the same. Label a PR with its type when opening it
+# -- the PR template asks for it. Dependabot labels its own PRs
+# `dependencies`.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking
+    - title: Added
+      labels:
+        - feat
+    - title: Fixed
+      labels:
+        - fix
+    - title: Performance
+      labels:
+        - perf
+    - title: Documentation
+      labels:
+        - docs
+    - title: Dependencies
+      labels:
+        - dependencies
+        - deps
+    - title: Build, CI and maintenance
+      labels:
+        - build
+        - ci
+        - chore
+        - refactor
+        - test
+    - title: Other changes
+      labels:
+        - "*"
