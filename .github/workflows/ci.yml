@@ -53,6 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tools/check_kconfig_docs.py
+      - run: scripts/check_doxyfile_inputs.sh
       # Tutorials that grow past a screenful stop being tutorials.
       - name: tutorial and guide size caps
         run: |

@@ -143,6 +143,26 @@ esp_err_t espos_sk_tls_san_normalise(const char *const *in, size_t n, char *out,
  */
 bool espos_sk_tls_san_equal(const char *a, const char *b);
 
+/**
+ * The esp-tls attach hook, in the shape esp_http_client's `crt_bundle_attach`
+ * and esp_transport_ssl_crt_bundle_attach() both want. In bundle mode it is
+ * esp_crt_bundle_attach(); otherwise it installs the pinning verify callback,
+ * so a socket that uses it trusts exactly what the SignalK stream trusts.
+ *
+ * Any component that opens its own TLS connection to the same server should
+ * attach this rather than the certificate bundle directly -- otherwise that
+ * one socket refuses the self-signed certificate the rest of the device has
+ * already accepted. Pair it with skipping the common-name check whenever
+ * espos_sk_tls_trust_mode() is not ESPOS_SK_TLS_TRUST_BUNDLE: a pinned
+ * anchor identifies the server, and the CN rarely matches an IP address.
+ *
+ * Returns ESP_ERR_INVALID_STATE in a build without CONFIG_ESPOS_SK_TLS.
+ */
+esp_err_t espos_sk_tls_attach(void *ssl_conf);
+
+/** The trust mode in force, for call sites deciding about the CN check. */
+espos_sk_tls_trust_t espos_sk_tls_trust_mode(void);
+
 #ifdef __cplusplus
 }
 #endif

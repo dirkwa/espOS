@@ -18,44 +18,23 @@
 # rest of build/) and prints the warnings CI would see.
 #
 # mkdoxy parses this file itself, not Doxygen: one `KEY = value` per line,
-# comments starting in column 0, backslash continuations allowed, no
+# comments starting in column 0, NO backslash continuations (mkdoxy's own
+# parser rejects them, however standard Doxygen finds them), no
 # `@INCLUDE`. Keep that shape.
 
 PROJECT_NAME           = "espOS C API"
 PROJECT_BRIEF          = "The public headers under components/*/include"
+# INPUT and STRIP_FROM_INC_PATH are literal lists -- no globs, one line each.
+# scripts/check_doxyfile_inputs.sh keeps them level with the tree.
 OUTPUT_DIRECTORY       = build/doxygen
 
-INPUT                  = components/espos_audio/include \
-                         components/espos_ble/include \
-                         components/espos_config/include \
-                         components/espos_core/include \
-                         components/espos_event/include \
-                         components/espos_health/include \
-                         components/espos_httpd/include \
-                         components/espos_log/include \
-                         components/espos_n2k/include \
-                         components/espos_ota/include \
-                         components/espos_sk/include \
-                         components/espos_voice/include \
-                         components/espos_wifi/include
+INPUT                  = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sk/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 # Paths read `espos_core/include/espos.h`; include lines read the way a
 # consumer writes them (`espos.h`, `espos_n2k/can_frame.h`).
 STRIP_FROM_PATH        = components
-STRIP_FROM_INC_PATH    = components/espos_audio/include \
-                         components/espos_ble/include \
-                         components/espos_config/include \
-                         components/espos_core/include \
-                         components/espos_event/include \
-                         components/espos_health/include \
-                         components/espos_httpd/include \
-                         components/espos_log/include \
-                         components/espos_n2k/include \
-                         components/espos_ota/include \
-                         components/espos_sk/include \
-                         components/espos_voice/include \
-                         components/espos_wifi/include
+STRIP_FROM_INC_PATH    = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sk/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
 
 # C first: the switch shapes names and the index (no "class" wording for a
 # struct). The C++ headers are still parsed as C++.

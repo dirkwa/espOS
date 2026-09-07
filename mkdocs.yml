@@ -88,8 +88,9 @@ plugins:
             components/espos_config/include components/espos_core/include
             components/espos_event/include components/espos_health/include
             components/espos_httpd/include components/espos_log/include
-            components/espos_n2k/include components/espos_ota/include
-            components/espos_sk/include components/espos_voice/include
+            components/espos_n2k/include components/espos_net/include
+            components/espos_ota/include components/espos_sk/include
+            components/espos_time/include components/espos_voice/include
             components/espos_wifi/include
           full-doc: true
           api-path: api-c

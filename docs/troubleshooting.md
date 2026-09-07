@@ -241,6 +241,6 @@ curl -s -X DELETE "$H/api/v1/system/coredump"
 `espcoredump.py` is `$IDF_PATH/components/espcoredump/espcoredump.py`, on
 `PATH` in an exported IDF shell. The web UI's Status page shows the
 summary and offers the download and the erase. [REST API →
-`/system/coredump`](rest-api.md#get-systemcoredump-m5); the tutorial
+`/system/coredump`](rest-api.md#get-systemcoredump-m5-protected); the tutorial
 [Logs and core dumps](tutorials/logs-and-core-dumps.md) walks through a
 deliberate crash end to end.

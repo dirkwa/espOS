@@ -34,6 +34,10 @@
 
 #include "sdkconfig.h"
 
+/* Needed on both sides of the switch: the hooks other components may hold
+ * are declared here and exist in every build. */
+#include "espos_sk_tls_policy.h"
+
 #if CONFIG_ESPOS_SK_TLS
 
 #include "freertos/FreeRTOS.h"
@@ -700,6 +704,23 @@ void espos_sk_tls_publish(void)
         espos_httpd_sse_publish("sk_tls", json);
         free(json);
     }
+}
+
+#else /* !CONFIG_ESPOS_SK_TLS */
+
+/* The two hooks a component outside espos_sk may hold (espos_sk_tls_policy.h)
+ * exist in every build, so a caller guarded by its own `srv.tls` check still
+ * links when TLS is compiled out -- and gets an answer that cannot be mistaken
+ * for "verified". */
+esp_err_t espos_sk_tls_attach(void *ssl_conf)
+{
+    (void)ssl_conf;
+    return ESP_ERR_INVALID_STATE;
+}
+
+espos_sk_tls_trust_t espos_sk_tls_trust_mode(void)
+{
+    return ESPOS_SK_TLS_TRUST_BUNDLE;
 }
 
 #endif /* CONFIG_ESPOS_SK_TLS */

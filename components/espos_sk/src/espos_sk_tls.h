@@ -27,12 +27,9 @@
 extern "C" {
 #endif
 
-/**
- * The esp-tls attach hook, in the shape esp_http_client's `crt_bundle_attach`
- * and esp_transport_ssl_crt_bundle_attach() both want. In bundle mode it is
- * esp_crt_bundle_attach(); otherwise it installs the pinning verify callback.
- */
-esp_err_t espos_sk_tls_attach(void *ssl_conf);
+/* espos_sk_tls_attach() and espos_sk_tls_trust_mode() are public: any
+ * component opening a TLS socket to the same server needs them
+ * (espos_sk_tls_policy.h). */
 
 /**
  * Take the device-wide handshake slot and check there is enough contiguous
@@ -63,8 +60,6 @@ esp_err_t espos_sk_tls_reset(void);
 
 /** Configuration, applied by espos_sk.c's load_cfg(). `ca_pem` may be NULL (unchanged). */
 void espos_sk_tls_set_trust(espos_sk_tls_trust_t trust, const char *ca_pem);
-/** The mode in force, for the call sites that must not skip the CN check in bundle mode. */
-espos_sk_tls_trust_t espos_sk_tls_trust_mode(void);
 
 /** Validate an operator-supplied CA, for PUT /api/v1/sk/tls/ca and the config key. */
 esp_err_t espos_sk_tls_parse_ca(const char *pem, mbedtls_x509_crt *out);

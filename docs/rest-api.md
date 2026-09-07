@@ -453,7 +453,7 @@ trusts. The token is kept (it is the transport that is wrong, not the
 credential), the retry is a flat 60 s rather than the exponential backoff an
 unreachable server gets, and the stream stays down. `GET /sk/tls` says what
 differed; `DELETE /sk/tls` accepts the new certificate. See
-[SignalK → TLS](signalk.md#tls-https--wss).
+[SignalK → TLS](signalk.md#tls-https-wss).
 
 `ws` (M4) is the delta stream: `pending` = values in the open batching
 window, `buffered`/`buffered_bytes` = messages held in the offline ring,
