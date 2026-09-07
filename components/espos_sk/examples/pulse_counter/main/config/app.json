@@ -1,0 +1,14 @@
+{
+  "namespace": "app",
+  "version": 1,
+  "title": "Pulse counter",
+  "description": "Pulses on one GPIO become revolutions per second; the running total is saved here.",
+  "keys": [
+    {"name": "pulses_per_rev", "type": "int", "default": 1, "min": 1, "max": 10000, "title": "Pulses per revolution",
+     "description": "Pulses the sensor gives per revolution: teeth on the wheel, magnets on the shaft, poles of the alternator. Hz = pulses per second / this."},
+    {"name": "period_ms", "type": "int", "default": 1000, "min": 200, "max": 60000, "unit": "ms", "title": "Publish period",
+     "description": "How often the rate is computed and published. Longer is steadier at low pulse rates."},
+    {"name": "total_pulses", "type": "int", "default": 0, "min": 0, "max": 2147483647, "title": "Pulse total",
+     "description": "Running total, written by the device at most once a minute. Set it to 0 to reset the counter."}
+  ]
+}

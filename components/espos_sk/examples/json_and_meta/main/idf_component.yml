@@ -1,0 +1,11 @@
+## json_and_meta example manifest. The espOS components come from the tree
+## through EXTRA_COMPONENT_DIRS (the prologue), so there is nothing of espOS
+## to declare. The ESP32-P4 has no radio: WiFi is the ESP32-C6 co-processor
+## over SDIO, reached through the esp_wifi_remote shim (same esp_wifi_* API);
+## esp_hosted itself is espos_wifi's dependency.
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
+  espressif/esp_wifi_remote:
+    version: "*"
+    rules:
+      - if: "target == esp32p4"
