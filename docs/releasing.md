@@ -22,7 +22,7 @@ Then publish the tag on GitHub, so the Releases tab answers "what is the
 current version, and what changed" for anyone who is not already a consumer:
 
 ```sh
-gh release create v0.7.0 --title "espOS 0.7.0" --notes "..."
+gh release create v0.7.0 --title "espOS 0.7.0" --generate-notes
 ```
 
 There are no binaries to attach — espOS is source consumed as a submodule,
@@ -83,3 +83,73 @@ Semantic-ish, judged against what a *consumer firmware* sees:
 espOS is pre-1.0, so minor is doing the work major will do later. Say plainly
 in the release notes when a bump requires consumer changes — that is the
 number people actually need.
+
+## Registry publishing
+
+Every `components/espos_*` directory is also a component on the [Espressif
+Component Registry](https://components.espressif.com), under the `espos`
+namespace: `espos/espos_config`, `espos/espos_sk`, and so on. A firmware
+that does not want the submodule adds what it needs and the component
+manager pulls the rest:
+
+```sh
+idf.py add-dependency "espos/espos_sk^0.7"
+```
+
+`espos_sk`'s manifest names `espos_config`, `espos_httpd`, `espos_wifi` and
+`espos_health` as dependencies, so that one line installs the core. The
+registry names each download `espos__<name>` in the build; a component's
+own `REQUIRES espos_config` still resolves, because the component manager
+maps a short name onto the namespaced component when only that one exists.
+
+### One version for everything
+
+All eleven manifests carry `version:` equal to `version.txt`, and every
+dependency between espOS components is `^<that version>` with an
+`override_path` to the sibling directory. The `override_path` is what an
+in-tree build — and a firmware that vendors espOS as a submodule — uses: the
+manager takes the checkout next to the manifest and never asks the registry
+for an espOS component. The version range is what a registry consumer sees,
+and lockstep versions keep it from ever mixing two espOS releases in one
+firmware.
+
+Lockstep has to be maintained by the release, not by hand. `scripts/release.sh`
+must, for every `components/*/idf_component.yml`:
+
+* set the top-level `version:` to the release version;
+* set each `espos/espos_*` dependency's `version:` to `^<release version>`
+  (pre-1.0, `^0.7.0` excludes `0.8.0`, so a minor bump that leaves the
+  ranges behind publishes components that cannot be installed together);
+* `git add` the manifests with `version.txt`, so the release commit carries
+  all twelve files.
+
+The manifests are the registry's contract; a manifest that fails to pack
+fails the release. CI runs `compote component pack` for every component on
+each pull request, and the tag check that compares the tag to `version.txt`
+covers the manifests as well.
+
+### Publishing a release
+
+Publishing is a workflow on the `v*` tag, after the version check has
+passed, using `espressif/upload-components-ci-action` with the registry
+token in the `IDF_COMPONENT_API_TOKEN` repository secret (`api_token:`) and
+`namespace: espos`. Upload the components leaves first — the registry
+resolves a component's dependencies when it accepts the upload, so a
+component must not arrive before the ones it names:
+
+```
+espos_log espos_health espos_audio espos_config espos_httpd espos_wifi
+espos_sk espos_ota espos_ble espos_n2k espos_voice
+```
+
+A registry version is immutable; `compote component upload --dry-run` (needs
+the token) validates without creating one, and is the right rehearsal for a
+first publish or a manifest change. A published version that turns out wrong
+is yanked with a message, never deleted, and fixed by the next patch release.
+
+What the registry ships is the packed archive: the component directory
+minus `build/`, `sdkconfig*`, `managed_components/`, `dependencies.lock`
+and the manager's own defaults (`.git`, `__pycache__`, ...). Anything a
+component needs at build time — `espos_config`'s generator under `tools/`,
+`espos_httpd`'s `www/index.html`, the `config/*.json` descriptors — lives
+inside the component directory for exactly this reason.

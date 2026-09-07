@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
-## espos_sk component manifest: registry metadata for espos/espos_sk.
+## espos_core component manifest: registry metadata for espos/espos_core.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
-description: "SignalK: mDNS discovery, access token, delta stream in and out"
-url: "https://github.com/espos/espos/tree/main/components/espos_sk"
+description: "One-call boot: espos_start() brings log, config, HTTP, WiFi and the optional stacks up in order"
+url: "https://github.com/espos/espos/tree/main/components/espos_core"
 repository: "https://github.com/espos/espos.git"
-documentation: "https://github.com/espos/espos/blob/main/docs/signalk.md"
+documentation: "https://github.com/espos/espos/blob/main/docs/concepts.md"
 issues: "https://github.com/espos/espos/issues"
 license: "Apache-2.0"
 maintainers:
@@ -16,9 +16,8 @@ tags:
   - marine
   - esp-idf
   - espos
-  - websocket
-  - mdns
-  - delta
+  - runtime
+  - boot
 files:
   exclude:
     - "build/**/*"
@@ -32,19 +31,23 @@ dependencies:
   # firmware that vendors espOS as a submodule) use the checkout next to this
   # file instead of downloading espos/<name> from the registry; a copy fetched
   # from the registry has no such directory and the field is ignored there.
+  # espos_sk, espos_ota and espos_ble are optional and deliberately absent:
+  # a firmware that wants them lists them, and espos_start() picks them up.
+  espos/espos_log:
+    version: "^0.7.0"
+    override_path: "../espos_log"
   espos/espos_config:
     version: "^0.7.0"
     override_path: "../espos_config"
+  espos/espos_health:
+    version: "^0.7.0"
+    override_path: "../espos_health"
   espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
   espos/espos_wifi:
     version: "^0.7.0"
     override_path: "../espos_wifi"
-  espos/espos_health:
+  espos/espos_event:
     version: "^0.7.0"
-    override_path: "../espos_health"
-  # cJSON, exact-pinned like every other registry dependency here.
-  espressif/cjson: "==1.7.19~2"
-  # espressif/mdns is espos_wifi's dependency (it owns the responder);
-  # discovery browses through it and gets mdns.h via espos_wifi's REQUIRES.
+    override_path: "../espos_event"
