@@ -131,15 +131,9 @@ jobs:
         with:
           esp_idf_version: ${{ steps.idf.outputs.version }}
           target: esp32c6
-          command: >-
-            bash -c '
-            set -euo pipefail;
-            v=$(cat version.txt);
-            for c in components/espos_*/; do
-              n=$(basename "$c");
-              grep -qxF "version: \"$v\"" "$c/idf_component.yml" || { echo "$n: manifest version differs from version.txt ($v)"; exit 1; };
-              compote component pack --project-dir "$c" --name "$n" --dest-dir "$PWD/dist";
-            done'
+          # The action wraps the command in single quotes itself; anything
+          # non-trivial lives in a script so the quoting stays out of YAML.
+          command: scripts/check_manifests.sh
       # The responder lives in espos_wifi; a second declaration elsewhere is how
       # the dependency crept into espos_sk in the first place.
       - name: espressif/mdns is declared only where the responder lives
