@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  */
 #include <stdlib.h>
 #include <string.h>
@@ -99,7 +100,8 @@ size_t espos_sk_frame_parse(const char *json, size_t len, espos_sk_frame_t *info
         const char *ctx = str_of(root, "context");
         const cJSON *upd;
         bool go = true;
-        cJSON_ArrayForEach(upd, cJSON_GetObjectItem(root, "updates")) {
+        cJSON_ArrayForEach(upd, cJSON_GetObjectItem(root, "updates"))
+        {
             if (!go) {
                 break;
             }
@@ -110,7 +112,8 @@ size_t espos_sk_frame_parse(const char *json, size_t len, espos_sk_frame_t *info
                 src = str_of(so, "label");
             }
             const cJSON *item;
-            cJSON_ArrayForEach(item, cJSON_GetObjectItem(upd, "values")) {
+            cJSON_ArrayForEach(item, cJSON_GetObjectItem(upd, "values"))
+            {
                 const char *path = str_of(item, "path");
                 const cJSON *val = cJSON_GetObjectItem(item, "value");
                 if (!path || !val) {
@@ -130,7 +133,8 @@ size_t espos_sk_frame_parse(const char *json, size_t len, espos_sk_frame_t *info
             if (!go) {
                 break;
             }
-            cJSON_ArrayForEach(item, cJSON_GetObjectItem(upd, "meta")) {
+            cJSON_ArrayForEach(item, cJSON_GetObjectItem(upd, "meta"))
+            {
                 const char *path = str_of(item, "path");
                 const cJSON *val = cJSON_GetObjectItem(item, "value");
                 if (!path || !cJSON_IsObject(val)) {

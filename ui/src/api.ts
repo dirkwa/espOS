@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
-// The one place that knows the REST contract (docs/api.md): typed fetch
+// SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+// SPDX-License-Identifier: Apache-2.0
+// The one place that knows the REST contract (docs/rest-api.md): typed fetch
 // helpers, the SSE connection and a tiny subscribable store per event.
 import { useEffect, useState } from "preact/hooks";
 
@@ -33,7 +34,7 @@ export const put = <T,>(path: string, body: unknown) => call<T>("PUT", path, bod
 export const post = <T,>(path: string, body?: unknown) => call<T>("POST", path, body);
 export const del = <T,>(path: string) => call<T>("DELETE", path);
 
-// ---- documents (shapes per docs/api.md; only the fields the UI reads)
+// ---- documents (shapes per docs/rest-api.md; only the fields the UI reads)
 export interface WifiStatus {
   state: "disabled" | "unconfigured" | "connecting" | "obtaining_ip" | "connected" | "backoff";
   sta_enabled: boolean; hostname: string; reason: { code: number; text: string };

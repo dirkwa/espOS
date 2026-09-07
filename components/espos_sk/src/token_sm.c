@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * SignalK access-token state machine (see espos_sk_token_sm.h). Runs on one
  * task; the port performs HTTP asynchronously and reports back with events.
@@ -8,12 +9,12 @@
 #include <stdio.h>
 #include "espos_sk_token_sm.h"
 
-#define POLL_MIN_MS      5000u
-#define POLL_MAX_MS      60000u
-#define ERR_MIN_MS       10000u
-#define ERR_MAX_MS       300000u
-#define DUP_RETRY_MS     60000u
-#define OPEN_CHECK_MS    60000u
+#define POLL_MIN_MS   5000u
+#define POLL_MAX_MS   60000u
+#define ERR_MIN_MS    10000u
+#define ERR_MAX_MS    300000u
+#define DUP_RETRY_MS  60000u
+#define OPEN_CHECK_MS 60000u
 
 static void notify(espos_sk_tok_sm_t *sm)
 {
@@ -375,8 +376,7 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
                 save(sm);
                 sm->st.state = ESPOS_SK_TOK_DENIED;
                 sm->st.deny_count++;
-                set_error(sm, r->message[0] ? r->message :
-                          (strcmp(r->permission, "DENIED") == 0 ? "access denied by the server admin" : "request rejected"));
+                set_error(sm, r->message[0] ? r->message : (strcmp(r->permission, "DENIED") == 0 ? "access denied by the server admin" : "request rejected"));
                 cancel(sm);
                 notify(sm);
                 return;

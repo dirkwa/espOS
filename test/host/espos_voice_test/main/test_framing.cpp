@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Wyoming wire framing.
  *
@@ -18,7 +19,8 @@
 using espos_voice::DecodedEvent;
 using espos_voice::EventDecoder;
 
-namespace {
+namespace
+{
 
 /* Collect decoded events. The payload view dies with the callback, so copy. */
 struct Collected {
@@ -104,7 +106,7 @@ TEST_CASE("empty data is omitted rather than sent as {}", "[framing]")
 
 TEST_CASE("payload follows the data block and is byte-counted", "[framing]")
 {
-    const uint8_t pcm[6] = {0x01, 0x02, 0x03, 0xfe, 0xff, 0x00};
+    const uint8_t pcm[6] = { 0x01, 0x02, 0x03, 0xfe, 0xff, 0x00 };
     std::vector<uint8_t> wire;
     espos_voice::encode_event(wire, "audio-chunk", "{\"rate\":16000}", pcm, sizeof(pcm));
 
@@ -125,7 +127,7 @@ TEST_CASE("payload follows the data block and is byte-counted", "[framing]")
  * chunk boundaries fall. */
 TEST_CASE("event survives being fed one byte at a time", "[framing]")
 {
-    const uint8_t pcm[4] = {0xde, 0xad, 0xbe, 0xef};
+    const uint8_t pcm[4] = { 0xde, 0xad, 0xbe, 0xef };
     std::vector<uint8_t> wire;
     espos_voice::encode_event(wire, "audio-chunk", "{\"rate\":16000}", pcm, sizeof(pcm));
 
@@ -147,7 +149,7 @@ TEST_CASE("several events in one chunk are delivered in order", "[framing]")
 {
     std::vector<uint8_t> wire;
     espos_voice::encode_event(wire, "audio-start", "{\"rate\":16000}", nullptr, 0);
-    const uint8_t pcm[2] = {0x11, 0x22};
+    const uint8_t pcm[2] = { 0x11, 0x22 };
     espos_voice::encode_event(wire, "audio-chunk", "{\"rate\":16000}", pcm, sizeof(pcm));
     espos_voice::encode_event(wire, "audio-stop");
 

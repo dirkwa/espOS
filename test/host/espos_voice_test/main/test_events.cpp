@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Wyoming event builders and parsers.
  *
@@ -20,7 +21,8 @@ using espos_voice::DecodedEvent;
 using espos_voice::EventDecoder;
 using espos_voice::SatelliteInfo;
 
-namespace {
+namespace
+{
 
 struct Decoded {
     std::string type;
@@ -79,7 +81,7 @@ TEST_CASE("info advertises one mic and one snd program with our formats", "[even
     TEST_ASSERT_TRUE(doc.valid());
 
     /* All seven program lists present, five of them empty. */
-    for (const char *empty : {"asr", "tts", "handle", "intent", "wake"}) {
+    for (const char *empty : { "asr", "tts", "handle", "intent", "wake" }) {
         TEST_ASSERT_TRUE_MESSAGE(jsonx::is_array(doc.get(), empty), empty);
         TEST_ASSERT_EQUAL_INT(0, jsonx::array_size(doc.get(), empty));
     }
@@ -144,7 +146,7 @@ TEST_CASE("detect with no names listens for any wake word", "[events]")
     TEST_ASSERT_EQUAL_STRING("{\"names\":null}", decode_one(wire).data_json.c_str());
 
     std::vector<uint8_t> named;
-    espos_voice::build_detect(named, {"hey_cockpit"});
+    espos_voice::build_detect(named, { "hey_cockpit" });
     TEST_ASSERT_EQUAL_STRING("{\"names\":[\"hey_cockpit\"]}",
                              decode_one(named).data_json.c_str());
 }
@@ -155,7 +157,7 @@ TEST_CASE("audio-chunk carries the PCM frames verbatim", "[events]")
 {
     AudioFormat fmt;
     fmt.rate = 16000;
-    const int16_t samples[3] = {0x0102, -2, 0x7fff};
+    const int16_t samples[3] = { 0x0102, -2, 0x7fff };
 
     std::vector<uint8_t> wire;
     espos_voice::build_audio_chunk(wire, fmt, samples, 3);
@@ -163,7 +165,7 @@ TEST_CASE("audio-chunk carries the PCM frames verbatim", "[events]")
 
     TEST_ASSERT_EQUAL_STRING("audio-chunk", d.type.c_str());
     TEST_ASSERT_EQUAL_UINT32(sizeof(samples), (uint32_t)d.payload.size());
-    const uint8_t want[6] = {0x02, 0x01, 0xfe, 0xff, 0xff, 0x7f};
+    const uint8_t want[6] = { 0x02, 0x01, 0xfe, 0xff, 0xff, 0x7f };
     TEST_ASSERT_EQUAL_HEX8_ARRAY(want, d.payload.data(), sizeof(want));
 }
 

@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * UUID text <-> bytes.
  *
@@ -18,8 +19,8 @@ TEST_CASE("16-bit UUID expands into the Bluetooth base range", "[uuid]")
     TEST_ASSERT_TRUE(espos_ble_uuid_parse("180f", u, &bits));
     TEST_ASSERT_EQUAL_UINT8(16, bits);
 
-    const uint8_t want[16] = {0x00, 0x00, 0x18, 0x0f, 0x00, 0x00, 0x10, 0x00,
-                              0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb};
+    const uint8_t want[16] = { 0x00, 0x00, 0x18, 0x0f, 0x00, 0x00, 0x10, 0x00,
+                               0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb };
     TEST_ASSERT_EQUAL_HEX8_ARRAY(want, u, 16);
 }
 

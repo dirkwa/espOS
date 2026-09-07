@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * SSE over esp_http_server: the request is detached with
  * httpd_req_async_handler_begin() so the server task is free again, and the
@@ -41,7 +42,10 @@ typedef struct {
 static struct {
     SemaphoreHandle_t lock;
     client_t clients[CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS];
-    struct { espos_httpd_sse_connect_cb_t cb; void *arg; } on_connect[MAX_CONNECT_CBS];
+    struct {
+        espos_httpd_sse_connect_cb_t cb;
+        void *arg;
+    } on_connect[MAX_CONNECT_CBS];
     TimerHandle_t ping;
     httpd_handle_t server;
     uint32_t admitted;
