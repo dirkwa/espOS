@@ -14,6 +14,16 @@
  *   APPROVED  ─ periodic GET /signalk/v1/api/self with the token
  *             ─ 401/403 ▶ token invalidated ▶ IDLE
  *   VERIFYING ─ 200 ▶ APPROVED (self URN learned)   ─ 401/403 ▶ IDLE
+ *   any leg   ─ the server's certificate is not the trusted one ▶ CERT_ERROR
+ *               (token kept, flat 60 s retry, stream held down)
+ *
+ * Two rules that are not obvious from the diagram:
+ *   - over plaintext a single 401 does NOT clear the token (anything on the
+ *     path can answer one); two consecutive unauthorised answers do. Over TLS
+ *     one is conclusive. See plain_unauth_streak below.
+ *   - a TLS server skips the VERIFYING leg after an approval: the WebSocket
+ *     upgrade carries the same token and rejects it just as clearly, so the
+ *     leg would only buy a second handshake per reconnect.
  *
  * The machine never touches storage or HTTP itself: it asks the port to
  * do things (start a request, poll, verify, save/clear) and is fed the
@@ -45,16 +55,26 @@ typedef enum {
     ESPOS_SK_TOK_DENIED,        /* admin denied (or device requests disabled); waits for user */
     ESPOS_SK_TOK_OPEN,          /* server security disabled: no token needed */
     ESPOS_SK_TOK_ERROR,         /* transient trouble (server unreachable); retrying with backoff */
+    /* The server's certificate is not the one this device trusts. Not an
+     * error to back off from: an exponential retry would have the device
+     * checking once an hour by the time somebody looks at it, and the fix
+     * (renew the certificate, or trust the new one) lands from outside and
+     * should be noticed within a minute. So a flat 60 s, and the token is
+     * kept — it is the transport that is wrong, not the credential. The
+     * stream stays down while this holds (espos_sk_stream_allowed() is false):
+     * falling back to plaintext would send the token to whoever answered. */
+    ESPOS_SK_TOK_CERT_ERROR,
 } espos_sk_tok_state_t;
 
 typedef struct {
     char host[ESPOS_SK_HOST_MAX];
     uint16_t port;
-    /* Scheme for this server: https/wss when true, http/ws when false. The
-     * transport is chosen from here rather than from a #ifdef at each call
-     * site, so a future per-server scheme (a discovered https advertisement,
-     * say) is a value change and not a rewrite. Effective only in builds with
-     * CONFIG_ESPOS_SK_TLS; see docs/signalk.md. */
+    /* Scheme for this server: https/wss when true, http/ws when false. Per
+     * server and not global, which is what makes sk.scheme = auto possible: a
+     * discovered server's scheme comes from the mDNS service type it answered
+     * on, a manual host's from one redirect probe, and the value is cached
+     * with the server rather than re-decided per call. Effective only in
+     * builds with CONFIG_ESPOS_SK_TLS; see docs/signalk.md. */
     bool tls;
     char self[ESPOS_SK_SELF_MAX];   /* vessel self URN if known (mDNS TXT / learned), else "" */
 } espos_sk_server_t;
@@ -88,6 +108,11 @@ typedef enum {
     ESPOS_SK_EV_RETRY,            /* user asks to request again (from DENIED/ERROR) */
     ESPOS_SK_EV_UNAUTHORIZED,     /* some other SK call got 401/403 with our token */
     ESPOS_SK_EV_CONFIG,           /* arg: const espos_sk_tok_cfg_t* */
+    /* The TLS layer refused the server. arg: const char* reason (may be NULL).
+     * Distinct from EV_UNAUTHORIZED because the token is fine and must be
+     * kept: throwing it away over a certificate change would mean a fresh
+     * approval in the server UI every time the certificate is renewed. */
+    ESPOS_SK_EV_CERT_ERROR,
 } espos_sk_tok_event_t;
 
 typedef struct {
@@ -100,6 +125,13 @@ typedef struct {
     char message[ESPOS_SK_MSG_MAX];
     /* verify */
     char self[ESPOS_SK_SELF_MAX];
+    /* The transport, not the reply: the connection never got far enough to
+     * have an HTTP status because the certificate was refused. http_status is
+     * 0 in that case, which on its own reads as "server unreachable" and would
+     * back off for five minutes over something an operator can fix in ten
+     * seconds. */
+    bool cert_error;
+    char cert_reason[64];
 } espos_sk_http_result_t;
 
 /* Port: everything the machine needs from the outside world. Actions are
@@ -129,7 +161,7 @@ typedef struct {
     uint32_t last_check_ms;
     int last_http_status;
     char last_error[ESPOS_SK_MSG_MAX];
-    uint32_t request_count, approve_count, deny_count, unauthorized_count;
+    uint32_t request_count, approve_count, deny_count, unauthorized_count, cert_error_count;
     bool busy;                    /* an HTTP action is in flight */
 } espos_sk_tok_status_t;
 
@@ -143,6 +175,14 @@ typedef struct espos_sk_tok_sm {
     bool reeval;                  /* server/token changed while an action was in flight */
     uint32_t error_backoff_ms;
     uint32_t timer_due_ms;
+    /* Consecutive unauthorised answers over a PLAINTEXT connection. On http a
+     * single 401 is not proof the token died: anything on the path can answer
+     * one — a captive portal, a proxy, a router's "you are not logged in"
+     * page — and throwing the token away over it costs a trip to the server's
+     * admin UI to approve the device again. Over TLS nothing can inject an
+     * answer, so one 401 is conclusive there and this counter is not used.
+     * Reset by any 200. (SensESP's should_clear_token_on_status.) */
+    uint32_t plain_unauth_streak;
 } espos_sk_tok_sm_t;
 
 void espos_sk_tok_init(espos_sk_tok_sm_t *sm, const espos_sk_tok_port_t *port, void *ctx,

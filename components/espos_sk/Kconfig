@@ -12,29 +12,84 @@ menu "espOS SignalK"
 
     config ESPOS_SK_TLS
         bool "Talk to the server over TLS (https/wss)"
-        default n
+        default y
         select MBEDTLS_CERTIFICATE_BUNDLE
         help
-            Compile the https/wss transports, switchable per install with
-            the sk.tls setting (off by default, so enabling this changes
-            nothing until somebody asks for it).
+            Compile the https/wss transports. Which scheme is actually used is
+            the sk.scheme setting (auto/http/https, default auto), so a build
+            with this on still talks plain http to a plain server.
 
-            Off by default because espOS is a boat-LAN device and the OTA
-            path -- the one that actually matters -- is protected by image
-            signatures rather than by transport security. What TLS buys
-            here is keeping the SignalK access token off the wire, which
-            starts to matter on a shared marina network or as soon as a
-            server is reachable from outside the boat.
+            On by default since the trust store landed. Before it the only
+            thing espOS could do with a certificate was check it against the
+            bundled Mozilla roots, which refuses every boat server -- they are
+            self-signed, or signed by a CA the owner made. That made the option
+            close to useless and off was the honest default. Now the first
+            connection pins what the server presents (sk.tls_trust, default
+            "tofu") and holds it to that afterwards, the way ssh does, so
+            turning it on is a decision about the network rather than about
+            whether the server has a certificate a browser would like.
 
-            Flash cost depends on what else is in the build: when espos_ota
-            (an https image source) already links mbedTLS and the certificate
-            bundle, the image size is unchanged; a minimal consumer without it
-            pays about 64 KB for the bundle. What it does cost is
-            roughly 20 KB of RAM while the stream connection is open.
+            Flash cost, measured on esp32c6, y minus n on the same tree:
 
-            The server certificate is verified against the bundled
-            Mozilla roots; there is no way yet to pin a private CA, so a
-            self-signed server certificate will be refused.
+              with espos_ota   about 10 KB (the reference app: 1485308 vs
+                               1475280 bytes). mbedTLS and the certificate
+                               bundle are already linked for the https image
+                               source, so what is added here is the trust
+                               store, the transports and the verify path.
+              without espos_ota  about 78 KB (the tls_server example: 1437772
+                               vs 1358004). Most of that is the Mozilla root
+                               bundle, which the trust store still needs as a
+                               fallback in bundle mode.
+
+            RAM: roughly 20 KB while a connection is open, and
+            ESPOS_SK_TLS_MIN_FREE_BLOCK_KB below refuses a handshake when that
+            much contiguous internal RAM is not free.
+
+            Turning it off drops the transports and mbedTLS with them; sk.scheme
+            then reads as http whatever it is set to, and the device says so
+            once at startup.
+
+    config ESPOS_SK_TLS_CA_MAX
+        int "Largest CA certificate accepted (bytes)"
+        depends on ESPOS_SK_TLS
+        default 2048
+        range 512 8192
+        help
+            Cap on the PEM in sk.ca_pem and on PUT /api/v1/sk/tls/ca, and the
+            size of the buffer holding it. A single RSA-4096 CA certificate in
+            PEM is about 2 KB; raise this only for a chain, and remember it is
+            RAM that stays allocated for the life of the device.
+
+    config ESPOS_SK_TLS_MIN_FREE_BLOCK_KB
+        int "Internal RAM needed before a TLS handshake (KB)"
+        depends on ESPOS_SK_TLS
+        default 24
+        range 8 64
+        help
+            A handshake is refused, and retried after the usual backoff, unless
+            this much *contiguous* internal RAM is free. Checked with
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL): total free
+            heap is the wrong number on a PSRAM board, where tens of megabytes
+            can hide the few kilobytes of internal RAM that actually matter.
+
+            What it prevents is not a clean out-of-memory error. mbedTLS
+            failing to allocate mid-handshake leaves a half-built session and a
+            socket behind, and repeated on a reconnect loop it starves the WiFi
+            stack of the same pool. Deferring is cheap, and the device raises a
+            tlsMemory health condition so the reason is visible.
+
+    config ESPOS_SK_TLS_HANDSHAKE_TIMEOUT_MS
+        int "Wait for the one handshake slot (ms)"
+        depends on ESPOS_SK_TLS
+        default 10000
+        range 1000 60000
+        help
+            Only one TLS handshake runs at a time on the device -- two at once
+            is where the internal-RAM pool runs out, and the esp-tls attach
+            hook carries no user pointer, so one at a time is also what makes
+            the certificate-capture slot well defined. A caller that waits
+            longer than this for the slot gives up and retries with its own
+            backoff.
 
     config ESPOS_SK_HTTP_MAX_CONCURRENT
         int "Concurrent HTTP requests to the server"

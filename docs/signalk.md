@@ -23,7 +23,7 @@ The responder the queries go through — and the device's own
 waits for `espos_mdns_is_ready()` (the station reports connected a few
 milliseconds before the responder's `ESPOS_EVENT_MDNS_READY` reaches it,
 and an empty first pass would only be retried a whole interval later) and
-returns nothing without a link. Built with `CONFIG_ESPOS_WIFI_MDNS=n` there
+returns nothing without a link. Built with `CONFIG_ESPOS_NET_MDNS=n` there
 is no responder to browse with: discovery is off and `sk.server_host` must
 be set.
 
@@ -241,7 +241,9 @@ espos_sk_ws_url("/signalk/v1/stream", url, sizeof(url)); /* ws(s)://… */
   `espos_sk_report_unauthorized()`: the token machine re-verifies and, if the
   server really has dropped the device, requests access again.
 * **Scheme**: from the selected server's `tls` flag, `http`/`ws` or
-  `https`/`wss`, with the same certificate rules as the delta stream (below).
+  `https`/`wss` — decided per server by `sk.scheme` and, under `auto`, by what
+  the server advertised or a probe found (below). Certificates go through the
+  same trust store as the delta stream.
   `espos_sk_url()` / `espos_sk_ws_url()` build the URL for code that opens its
   own connection (the BLE gateway's control socket does).
 * **Concurrency**: `CONFIG_ESPOS_SK_HTTP_MAX_CONCURRENT` (default 2, range
@@ -278,39 +280,184 @@ reconciliation and the public API now share that single implementation.
 
 ## TLS (https / wss)
 
-Off by default and inert unless the firmware was built with
-`CONFIG_ESPOS_SK_TLS`, which compiles the TLS transports. With it, the
-`sk.tls` setting switches the device to `https://` for the access-request
-calls, every `espos_sk_http_*` request and the BLE gateway's POSTs, and to
-`wss://` for the delta stream and the gateway's control socket; `sk.tls` is
-`restart_required`, because the stream transport is built once when the
-stream task connects.
+**On by default** (`CONFIG_ESPOS_SK_TLS=y`) and, with `sk.scheme` at its
+default `auto`, used whenever the server says it speaks it. What changed: the
+device now has somewhere to put a certificate no public root signed, which is
+what every boat server has.
 
-What it is for: keeping the SignalK access token off the wire. The OTA path
-— the one an attacker would actually want — is protected by image signatures
-rather than by transport security (docs/ota.md), which is why plain `http`
-remains a reasonable default on a boat LAN. On a shared marina network, or
-anywhere the server is reachable from outside the boat, that reasoning stops
-applying.
+### Which scheme (`sk.scheme`)
 
-The scheme is a field on the chosen server (`espos_sk_server_t::tls`), not a
-compile-time branch at each call site, so the day discovery learns to
-advertise a scheme it becomes a value rather than a rewrite. Today nothing
-sets it but the configuration: SignalK's mDNS advertisement does not say
-whether the server speaks TLS.
+`auto` | `http` | `https`, default `auto`. `http` and `https` force one. What
+`auto` does depends on how the server was found:
 
-**Limits, on purpose.** The server certificate is verified against the
-bundled Mozilla roots. There is nowhere to pin a private CA yet, so a
-self-signed certificate — what a boat server most often has — is refused
-rather than accepted quietly; an "accept anything" switch would make the
-setting a decoration.
+* **discovered** — signalk-server advertises `_signalk-https._tcp` instead of
+  `_signalk-http._tcp` when its `ssl` setting is on
+  (`src/interfaces/rest.js`), so the server has already told us. The device
+  browses both types; no probe, no round trip.
+* **manual host** — nothing has been advertised, so one probe: `GET
+  http://host:port/signalk` with redirects switched off. A `30x` to an
+  `https://` Location means TLS, and the port is taken from the Location if it
+  names one (an SSL-enabled server often listens elsewhere). Nothing answering
+  on the plain port is tried once over https before concluding the host is
+  down. **The probe carries no token** — it is aimed at an address that has not
+  been established as our server yet, and handing the credential to whatever
+  answers is exactly what must not happen.
 
-The flash cost depends on the rest of the build: with `espos_ota` in it (an
-https image source already links mbedTLS and the certificate bundle) the
-image measured the same size
-with and without `CONFIG_ESPOS_SK_TLS` on esp32c6; a minimal consumer without
-`espos_ota` pays about 64 KB for the bundle (`tls_server` example). Budget
-~20 KB of RAM for the open connection.
+The answer is a field on the chosen server (`espos_sk_server_t::tls`), cached
+per `(host, port)` and re-decided only when the selection changes. It is *not*
+`restart_required` any more: `sk_ws.c` destroys and rebuilds its transport pair
+when the scheme changes, so a server that gains or loses TLS is followed live.
+
+`GET /sk/status` reports what is actually in use as `server.scheme`, which
+under `auto` is the only place to read it.
+
+### Which certificates are trusted (`sk.tls_trust`)
+
+`tofu` | `ca` | `bundle`, default `tofu`. **There is no accept-anything mode.**
+
+* **`tofu`** — trust on first use, the way ssh does it. The first connection
+  that works pins what the server presented; every later one must match.
+
+  Two shapes of anchor, because certificates get renewed:
+
+  * **CA anchor** — the highest `CA:TRUE` certificate in the chain, *plus* the
+    normalised set of the leaf's dNSName/IP SANs. A renewal signed by the same
+    CA for the same names is accepted with nobody pressing anything, which is
+    what makes a 90-day certificate survivable on a device in a locker.
+    Binding the SAN set as well as the CA matters: a private CA that signs one
+    host would otherwise vouch for every other name it ever signs.
+  * **Leaf anchor** — the SHA-256 of the leaf itself, used when the chain has
+    no CA or the leaf carries no SAN. signalk-server's own generated
+    self-signed certificate lands here, and a renewal then needs one
+    deliberate "trust the new certificate".
+
+* **`ca`** — the same machinery with the anchor supplied instead of captured:
+  put the issuing CA in `sk.ca_pem` (a blob; base64 over the REST API) or
+  `PUT /api/v1/sk/tls/ca {"pem": "-----BEGIN CERTIFICATE-----…"}`. Setting it
+  anchors the device immediately, so a fleet that pre-seeds the key connects on
+  the first try with nothing to capture. Invalid PEM is a `400`, not a device
+  that quietly stops connecting.
+
+* **`bundle`** — the public Mozilla roots and nothing pinned: the pre-S1
+  behaviour, for a server with a real certificate from a real CA.
+
+The common-name check is switched off outside `bundle` mode. It would add
+nothing — the certificate has already been matched by fingerprint and SAN set —
+and it fails on a boat server reached by IP, which is most of them.
+
+### Stash, then commit
+
+A verify callback runs *during* a handshake that has not finished. Pinning
+there would let a machine-in-the-middle answering a first connect plant its own
+certificate as the anchor and be trusted from then on. So the callback only
+fills a capture slot in RAM, and `espos_sk_tls_commit()` writes it to NVS after
+the connection has proved itself — an HTTP status from the far end, or a
+WebSocket `101`. Every handshake starts by discarding whatever the last one
+left.
+
+The anchor lives in the `skstate` NVS namespace next to the token
+(`tls_kind`, `tls_fp`, `tls_ca`, `tls_san`, `tls_cn`, `tls_self`, `tls_at`):
+device state, so it does not travel with a configuration export. `sk.ca_pem`
+is configuration and does.
+
+### When it does not match: `cert_error`
+
+The token machine gains a state. `token.state == "cert_error"` means the
+transport was refused, not the credential:
+
+* **the token is kept.** Dropping it would mean a fresh approval in the
+  server's admin UI after every renewal.
+* **retry is a flat 60 s**, not the exponential ladder an unreachable server
+  gets. The fix arrives from outside — the server renews, or somebody presses
+  the button — and should be noticed within a minute rather than an hour.
+* **the stream stays down** (`espos_sk_stream_allowed()` is false). Falling
+  back to plaintext would send the token to whoever answered.
+* `espos_health` carries it as `skCertificate` (ALARM, non-fatal — a reboot
+  would not fetch a new certificate), which also publishes it as a SignalK
+  notification.
+
+`GET /api/v1/sk/tls` shows the pinned identity next to the presented one, which
+is what makes it actionable: an operator who can compare the two fingerprints
+knows whether this is their own renewal. `DELETE /api/v1/sk/tls` forgets the
+anchor and retries at once — the SignalK page's "Trust the new certificate"
+button.
+
+### The plaintext 401 rule
+
+Over TLS nothing on the path can inject an answer, so a `401` on a request that
+carried our token is the server's and clears it, as before.
+
+Over **plaintext** it is not. A captive portal, a proxy, a router's own login
+page — all of them answer `401`, and throwing the token away over one costs a
+trip to the server's admin UI to approve the device again. So the first
+unauthorised answer on a plaintext connection buys a second opinion instead:
+keep the token, ask again in 5 s, and only clear if that is refused too. Any
+`200` resets the count. (SensESP's `should_clear_token_on_status`, same
+reasoning.)
+
+### Heap
+
+A TLS handshake wants around 20 KB of *contiguous internal* RAM, and that is
+the pool an ESP32 with a WiFi stack is short of — total free heap is the wrong
+number on a PSRAM board, where tens of megabytes hide the few kilobytes that
+matter.
+
+* **One handshake at a time, device-wide.** Two at once is where the pool runs
+  out; it also gives the esp-tls attach hook, which takes no user pointer, a
+  well-defined capture slot. A caller waits
+  `CONFIG_ESPOS_SK_TLS_HANDSHAKE_TIMEOUT_MS` (10 s) for it, then retries on its
+  own backoff.
+* **Pre-flight.** Below `CONFIG_ESPOS_SK_TLS_MIN_FREE_BLOCK_KB` (24 KB) of
+  largest free internal block the handshake is deferred and `tlsMemory` is
+  raised as a WARN. What that avoids is not a clean out-of-memory error:
+  mbedTLS failing mid-handshake leaves a half-built session and a socket
+  behind, and on a reconnect loop it starves the WiFi stack of the same pool.
+* **The verify leg is skipped on TLS servers.** The WebSocket upgrade carries
+  the same token and rejects it just as plainly, so the leg would only buy a
+  second handshake per reconnect.
+* `sdkconfig.d/espos.defaults` turns on mbedTLS's dynamic buffers
+  (`MBEDTLS_DYNAMIC_BUFFER`, `DYNAMIC_FREE_PEER_CERT`,
+  `DYNAMIC_FREE_CONFIG_DATA`) and drops the server side
+  (`MBEDTLS_TLS_CLIENT_ONLY`); `SSL_IN_CONTENT_LEN` stays at 16384, which a
+  SignalK subscription burst needs.
+
+### Cost
+
+Flash, measured on esp32c6 as `CONFIG_ESPOS_SK_TLS=y` minus `=n` on the same
+tree:
+
+| build shape | y | n | cost |
+|---|---|---|---|
+| with `espos_ota` (the reference app) | 1 485 308 | 1 475 280 | **~10 KB** |
+| without it (the `tls_server` example) | 1 437 772 | 1 358 004 | **~78 KB** |
+
+A firmware that already has `espos_ota` links mbedTLS and the certificate
+bundle for the https image source, so all it pays here is the trust store, the
+transports and the verify path. Without it, most of the 78 KB is the Mozilla
+bundle — which the trust store still needs, as the fallback for `bundle` mode.
+
+RAM: ~20 KB while a connection is open. Note that the mbedTLS dynamic-buffer
+settings above cost about 17 KB of flash in *both* columns, because they are in
+`sdkconfig.d/espos.defaults` and apply to the OTA client too; they are what
+gives the RAM back between handshakes.
+
+### Testing it against a real server
+
+Turn SSL on in signalk-server (Server → Settings → SSL, or `"ssl": true` in
+`settings.json`) and restart it. It generates a self-signed certificate and
+advertises `_signalk-https._tcp`.
+
+1. The device's SignalK page should show the server with scheme `https` and,
+   after the first connect, a pinned **certificate** (leaf anchor — a
+   generated self-signed certificate has no CA and often no SAN).
+2. Delete signalk-server's certificate and restart it so it generates a new
+   one. The device goes to `cert_error` within a minute, keeps its token, and
+   the page shows the pinned fingerprint next to the presented one.
+3. Press **Trust the new certificate**. It reconnects within a few seconds.
+4. For the CA path, issue the server's certificate from a CA of your own and
+   put that CA in `sk.ca_pem`; re-issuing the leaf for the same names should
+   not interrupt anything, and re-issuing it for a different name should give
+   `cert_error` with "names different hosts".
 
 ## API
 
@@ -328,6 +475,13 @@ with and without `CONFIG_ESPOS_SK_TLS` on esp32c6; a minimal consumer without
 * `POST /api/v1/sk/forget` — drop the token and start over. A request that
   is still pending is kept and polled on (the server holds it anyway and
   refuses duplicates).
+* `GET /api/v1/sk/tls` — the pinned certificate identity next to the one the
+  server last presented, and why they did not match if they did not.
+* `DELETE /api/v1/sk/tls` — forget the pinned certificate and retry now.
+* `PUT /api/v1/sk/tls/ca {"pem"}` — supply the issuing CA (switches
+  `sk.tls_trust` to `ca`).
+* SSE `sk_tls` — the `/sk/tls` document, on connect and whenever the anchor
+  changes.
 * SSE `sk`, `sk_servers`.
 
 ## Testing

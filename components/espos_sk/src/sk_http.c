@@ -25,19 +25,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp: HTTP header names are case-insensitive */
 
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "cJSON.h"
 #include "esp_http_client.h"
-#if CONFIG_ESPOS_SK_TLS
-#include "esp_crt_bundle.h"
-#endif
 #include "esp_log.h"
 
 #include "espos_sk_http.h"
 #include "espos_sk_priv.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "espos_sk_tls.h"
+#endif
 
 static const char *TAG = "espos_sk";
 
@@ -54,12 +55,22 @@ typedef struct {
     size_t len, cap, max;
     bool truncated;
     bool oom;
+    char *location;      /* where a Location header is copied, or NULL */
+    size_t location_size;
 } body_t;
 
 static esp_err_t on_event(esp_http_client_event_t *evt)
 {
     body_t *b = evt->user_data;
-    if (evt->event_id != HTTP_EVENT_ON_DATA || !b || evt->data_len <= 0 || b->truncated || b->oom) {
+    if (!b) {
+        return ESP_OK;
+    }
+    if (evt->event_id == HTTP_EVENT_ON_HEADER && b->location && evt->header_key && evt->header_value &&
+        strcasecmp(evt->header_key, "Location") == 0) {
+        snprintf(b->location, b->location_size, "%s", evt->header_value);
+        return ESP_OK;
+    }
+    if (evt->event_id != HTTP_EVENT_ON_DATA || evt->data_len <= 0 || b->truncated || b->oom) {
         return ESP_OK;
     }
     size_t n = (size_t)evt->data_len;
@@ -191,7 +202,7 @@ esp_err_t espos_sk_http_perform(const espos_sk_http_req_t *rq, espos_sk_http_res
         r->err = ESP_ERR_TIMEOUT;
         return r->err;
     }
-    body_t b = { .max = rq->max_body };
+    body_t b = { .max = rq->max_body, .location = rq->capture_location, .location_size = rq->capture_location_size };
     esp_http_client_config_t cfg = {
         .url = url,
         .method = idf_method(rq->method),
@@ -202,14 +213,31 @@ esp_err_t espos_sk_http_perform(const espos_sk_http_req_t *rq, espos_sk_http_res
         .keep_alive_enable = false,
         .buffer_size_tx = 1536, /* room for "Authorization: Bearer <jwt up to 1 KiB>" */
 #if CONFIG_ESPOS_SK_TLS
-        /* Server certificates are checked against the bundled Mozilla roots.
-         * A boat server with a self-signed certificate will be refused, which
-         * is the honest outcome: espOS has nowhere to pin a private CA yet,
-         * and quietly accepting any certificate would make the setting a
-         * decoration. See docs/signalk.md. */
-        .crt_bundle_attach = rq->srv->tls ? esp_crt_bundle_attach : NULL,
+        /* Not esp_crt_bundle_attach: espos_sk_tls_attach() is the trust store
+         * (sk_tls.c) and falls back to the bundle only in bundle mode. The
+         * common-name check is mbedTLS's, against a certificate we have
+         * already decided about by fingerprint and SAN set — and a boat server
+         * is reached by IP as often as by name, which that check fails. So it
+         * is off wherever the trust store is doing the deciding. */
+        .crt_bundle_attach = rq->srv->tls ? espos_sk_tls_attach : NULL,
+        .skip_cert_common_name_check = rq->srv->tls && espos_sk_tls_trust_mode() != ESPOS_SK_TLS_TRUST_BUNDLE,
 #endif
     };
+#if CONFIG_ESPOS_SK_TLS
+    /* One handshake at a time, device-wide, with a pre-flight memory check.
+     * Held across perform() because that is where the handshake happens; the
+     * body read after it is short and this is not a hot path. */
+    if (rq->srv->tls) {
+        esp_err_t hs = espos_sk_tls_handshake_begin(CONFIG_ESPOS_SK_TLS_HANDSHAKE_TIMEOUT_MS);
+        if (hs != ESP_OK) {
+            xSemaphoreGive(sem);
+            free(b.buf);
+            ESP_LOGW(TAG, "%s %s: deferred (%s)", method_name(rq->method), url, esp_err_to_name(hs));
+            r->err = hs;
+            return hs;
+        }
+    }
+#endif
     int status = 0;
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) {
@@ -241,6 +269,33 @@ esp_err_t espos_sk_http_perform(const espos_sk_http_req_t *rq, espos_sk_http_res
             err = ESP_ERR_NO_MEM;
         }
     }
+#if CONFIG_ESPOS_SK_TLS
+    if (rq->srv->tls) {
+        /* Commit only on an answer the server itself must have produced. A
+         * completed handshake is not enough: anything can complete one with a
+         * certificate of its own, and it is exactly that certificate we must
+         * not adopt. A status from the far end means we are talking to
+         * something that speaks HTTP over this connection, which is as much
+         * as one request can establish; the token machine's "is this a
+         * SignalK server" probe does the rest.
+         *
+         * Outside the `if (c)` above deliberately: a handle that failed to
+         * allocate still holds the slot this took. */
+        if (status > 0) {
+            espos_sk_tls_commit(rq->srv->self[0] ? rq->srv->self : NULL);
+        } else {
+            espos_sk_tls_discard();
+        }
+        espos_sk_tls_handshake_end();
+        /* A handshake that produced no status at all, with the trust store
+         * saying why: hand the caller a cert_error rather than the
+         * indistinguishable "unreachable". */
+        if (status == 0 && espos_sk_tls_last_error()[0]) {
+            snprintf(r->cert_reason, sizeof(r->cert_reason), "%s", espos_sk_tls_last_error());
+            r->cert_error = true;
+        }
+    }
+#endif
     xSemaphoreGive(sem);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "%s %s: %s", method_name(rq->method), url, esp_err_to_name(err));
@@ -266,7 +321,7 @@ esp_err_t espos_sk_http_perform(const espos_sk_http_req_t *rq, espos_sk_http_res
 /* The legs' view of a request: an HTTP status (0 = transport failure) and
  * the body text in *body_out (malloc'ed, NUL-terminated; NULL on failure). */
 static int leg(const espos_sk_server_t *srv, espos_sk_http_method_t method, const char *path, const char *json_body,
-               const char *bearer, char **body_out)
+               const char *bearer, char **body_out, espos_sk_http_result_t *out)
 {
     espos_sk_http_req_t rq = {
         .srv = srv,
@@ -279,7 +334,15 @@ static int leg(const espos_sk_server_t *srv, espos_sk_http_method_t method, cons
     };
     espos_sk_http_resp_t r;
     *body_out = NULL;
-    if (espos_sk_http_perform(&rq, &r) != ESP_OK) {
+    esp_err_t err = espos_sk_http_perform(&rq, &r);
+    /* A certificate refusal travels even when the call failed: it is the one
+     * transport failure the machine must not treat as "server unreachable".
+     * `out` is NULL for the legs that have nowhere to put it (the meta calls). */
+    if (out && r.cert_error) {
+        out->cert_error = true;
+        snprintf(out->cert_reason, sizeof(out->cert_reason), "%s", r.cert_reason);
+    }
+    if (err != ESP_OK) {
         return 0;
     }
     *body_out = r.body; /* ownership moves to the caller */
@@ -335,7 +398,7 @@ void espos_sk_http_request(const espos_sk_server_t *srv, const espos_sk_tok_cfg_
         return;
     }
     char *resp = NULL;
-    out->http_status = leg(srv, ESPOS_SK_HTTP_POST, "/signalk/v1/access/requests", body, NULL, &resp);
+    out->http_status = leg(srv, ESPOS_SK_HTTP_POST, "/signalk/v1/access/requests", body, NULL, &resp, out);
     free(body);
     if (resp) {
         parse_reply(resp, out);
@@ -345,7 +408,7 @@ void espos_sk_http_request(const espos_sk_server_t *srv, const espos_sk_tok_cfg_
         /* 404 means "security disabled" only on a SignalK server; a random
          * HTTP host says 404 too. GET /signalk tells them apart. */
         char *probe = NULL;
-        int st = leg(srv, ESPOS_SK_HTTP_GET, "/signalk", NULL, NULL, &probe);
+        int st = leg(srv, ESPOS_SK_HTTP_GET, "/signalk", NULL, NULL, &probe, out);
         bool is_sk = st == 200 && probe && strstr(probe, "endpoints");
         free(probe);
         if (!is_sk) {
@@ -359,7 +422,7 @@ void espos_sk_http_poll(const espos_sk_server_t *srv, const char *href, espos_sk
 {
     memset(out, 0, sizeof(*out));
     char *resp = NULL;
-    out->http_status = leg(srv, ESPOS_SK_HTTP_GET, href, NULL, NULL, &resp);
+    out->http_status = leg(srv, ESPOS_SK_HTTP_GET, href, NULL, NULL, &resp, out);
     if (resp) {
         parse_reply(resp, out);
         free(resp);
@@ -371,7 +434,7 @@ void espos_sk_http_verify(const espos_sk_server_t *srv, const char *token, espos
 {
     memset(out, 0, sizeof(*out));
     char *resp = NULL;
-    out->http_status = leg(srv, ESPOS_SK_HTTP_GET, "/signalk/v1/api/self", NULL, token, &resp);
+    out->http_status = leg(srv, ESPOS_SK_HTTP_GET, "/signalk/v1/api/self", NULL, token, &resp, out);
     if (resp && out->http_status == 200) {
         /* body is a JSON string: "vessels.urn:mrn:..." */
         cJSON *j = cJSON_Parse(resp);
@@ -388,6 +451,89 @@ void espos_sk_http_verify(const espos_sk_server_t *srv, const char *token, espos
     ESP_LOGD(TAG, "verify → %d %s", out->http_status, out->self);
 }
 
+/* ------------------------------------------------------ scheme probe */
+
+/* Does this host want https? One unauthenticated GET of http://host:port/signalk
+ * with redirects off. Three outcomes matter:
+ *
+ *   30x + Location: https://…   the server redirects plaintext away, which is
+ *                               what signalk-server with ssl:true does; the
+ *                               Location may also name a different port.
+ *   connection refused          nothing listens on the plain port -- try https
+ *                               on the same port once before giving up, since a
+ *                               server that only speaks TLS is the other common
+ *                               shape.
+ *   anything else               plain http works; use it.
+ *
+ * Without a token, deliberately (SensESP #1057): a probe is aimed at a host
+ * that has not been established as our server yet, and the token must not be
+ * handed to whatever answered — the whole point of the exercise is that we do
+ * not know what that is.
+ *
+ * Runs once per server selection, not per request; the answer is cached in the
+ * server entry.
+ */
+bool espos_sk_http_probe_https(const char *host, uint16_t port, uint16_t *out_port)
+{
+    espos_sk_server_t plain = { .port = port, .tls = false };
+    snprintf(plain.host, sizeof(plain.host), "%s", host);
+    if (out_port) {
+        *out_port = port;
+    }
+    char loc[ESPOS_SK_URL_MAX] = { 0 };
+    espos_sk_http_req_t rq = {
+        .srv = &plain,
+        .method = ESPOS_SK_HTTP_GET,
+        .path = "/signalk",
+        .accept = "",
+        .timeout_ms = LEG_TIMEOUT_MS,
+        .max_body = 512,
+        .capture_location = loc,
+        .capture_location_size = sizeof(loc),
+    };
+    espos_sk_http_resp_t r;
+    esp_err_t err = espos_sk_http_perform(&rq, &r);
+    int status = r.status;
+    espos_sk_http_resp_free(&r);
+    if (err == ESP_OK && status >= 300 && status < 400 && strncmp(loc, "https://", 8) == 0) {
+        /* Take the port out of the Location when it names one: signalk-server
+         * with ssl:true commonly listens for TLS somewhere other than the
+         * plain port, and following the redirect's host:port is the only way
+         * to land on it. */
+        const char *p = strchr(loc + 8, ':');
+        const char *slash = strchr(loc + 8, '/');
+        if (p && (!slash || p < slash) && out_port) {
+            int v = atoi(p + 1);
+            if (v > 0 && v <= 65535) {
+                *out_port = (uint16_t)v;
+            }
+        }
+        ESP_LOGI(TAG, "%s:%u redirects to https (%s)", host, (unsigned)port, loc);
+        return true;
+    }
+    if (err != ESP_OK && status == 0) {
+        /* Nothing answered on the plain port. A TLS-only server is the other
+         * thing that looks like this, so ask once before concluding the host
+         * is simply down -- and let the trust store judge the certificate,
+         * which is what tells the two apart. */
+        espos_sk_server_t secure = plain;
+        secure.tls = true;
+        espos_sk_http_req_t rq2 = rq;
+        rq2.srv = &secure;
+        rq2.capture_location = NULL;
+        rq2.capture_location_size = 0;
+        espos_sk_http_resp_t r2;
+        esp_err_t e2 = espos_sk_http_perform(&rq2, &r2);
+        int st2 = r2.status;
+        espos_sk_http_resp_free(&r2);
+        if (e2 == ESP_OK && st2 > 0) {
+            ESP_LOGI(TAG, "%s:%u answers only over https", host, (unsigned)port);
+            return true;
+        }
+    }
+    return false;
+}
+
 /* -------------------------------------------------------------- meta */
 
 int espos_sk_http_get_meta(const espos_sk_server_t *srv, const char *token, const char *path, char **out_meta)
@@ -398,7 +544,7 @@ int espos_sk_http_get_meta(const espos_sk_server_t *srv, const char *token, cons
         return 0;
     }
     char *resp = NULL;
-    int status = leg(srv, ESPOS_SK_HTTP_GET, url, NULL, token, &resp);
+    int status = leg(srv, ESPOS_SK_HTTP_GET, url, NULL, token, &resp, NULL);
     if (status == 200 && resp) {
         cJSON *j = cJSON_Parse(resp);
         if (cJSON_IsObject(j) && j->child) {
@@ -424,7 +570,7 @@ int espos_sk_http_put_meta(const espos_sk_server_t *srv, const char *token, cons
     }
     snprintf(body, n, "{\"value\":%s}", meta_json);
     char *resp = NULL;
-    int status = leg(srv, ESPOS_SK_HTTP_PUT, url, body, token, &resp);
+    int status = leg(srv, ESPOS_SK_HTTP_PUT, url, body, token, &resp, NULL);
     free(body);
     free(resp);
     return status;

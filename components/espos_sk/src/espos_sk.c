@@ -23,10 +23,14 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_event.h"
+#include "espos_health.h"
 #include "espos_httpd_sse.h"
+#include "espos_net.h"
 #include "espos_sk.h"
 #include "espos_sk_priv.h"
-#include "espos_wifi.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "espos_sk_tls.h"
+#endif
 
 static const char *TAG = "espos_sk";
 
@@ -36,10 +40,12 @@ typedef enum { CMD_CONFIG,
                CMD_TOKEN,
                CMD_FORGET,
                CMD_UNAUTHORIZED,
+               CMD_CERT_ERROR,
+               CMD_TLS_RESET,
                CMD_STOP } cmd_type_t;
 typedef struct {
     cmd_type_t type;
-    char *str; /* CMD_TOKEN: malloc'ed token */
+    char *str; /* CMD_TOKEN: malloc'ed token; CMD_CERT_ERROR: malloc'ed reason */
 } cmd_t;
 
 typedef enum { ACT_NONE,
@@ -68,7 +74,18 @@ static struct {
     bool cfg_pin;
     char cfg_host[ESPOS_SK_HOST_MAX];
     uint16_t cfg_port;
-    bool cfg_tls;
+    /* sk.scheme: 0 = auto, 1 = http, 2 = https. `auto` is not a value the
+     * transports can use, so it is resolved per server in select_server()
+     * and the answer lives in the chosen espos_sk_server_t::tls. */
+    uint8_t cfg_scheme;
+    /* One probe per (host, port) selection, cached: the answer is a property
+     * of the server, and asking again on every re-election would put an
+     * unauthenticated round trip in front of every reconnect. */
+    char probed_host[ESPOS_SK_HOST_MAX];
+    uint16_t probed_port;
+    bool probed_tls;
+    uint16_t probed_use_port; /* a redirect may name a different port */
+    bool probed_valid;
     bool have_server;
     espos_sk_server_t server;
     char server_source[12];          /* "manual" | "discovered" | "pinned" | "" */
@@ -82,7 +99,7 @@ static struct {
     uint32_t avoid_until_ms[ESPOS_SK_MAX_SERVERS]; /* unreachable discovered servers are skipped for a while */
     size_t server_count;
     uint32_t last_discovery_ms;
-    bool wifi_was_connected;
+    bool net_was_up;
     char snap_source[12];
     char hostname[33];
 } s;
@@ -181,9 +198,21 @@ static void narrate_token_state(void)
     case ESPOS_SK_TOK_DENIED:
         ESP_LOGW(TAG, "access denied by the server — request again from the device's web UI when it is allowed");
         break;
+    case ESPOS_SK_TOK_CERT_ERROR:
+        ESP_LOGW(TAG, "%s — trust it from the device's web UI (SignalK page) if the server's certificate "
+                      "was legitimately replaced",
+                 s.sm.st.last_error);
+        break;
     default:
         break;
     }
+    /* Not fatal: a device that cannot reach its server is still a device
+     * doing its job locally, and rebooting would not fetch a new certificate.
+     * WARN so it surfaces as a notification and on the health page, and
+     * clears by itself the moment a connection succeeds. */
+    (void)espos_health_report("skCertificate",
+                              s.sm.st.state == ESPOS_SK_TOK_CERT_ERROR ? ESPOS_HEALTH_ALARM : ESPOS_HEALTH_NORMAL,
+                              s.sm.st.state == ESPOS_SK_TOK_CERT_ERROR ? s.sm.st.last_error : "");
 }
 
 static void p_status_changed(void *ctx)
@@ -225,18 +254,42 @@ static void load_cfg(void)
     int32_t v = 80;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SERVER_PORT, &v);
     s.cfg_port = (uint16_t)v;
-    bool tls = false;
-    espos_config_get_bool(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_TLS, &tls);
+    char scheme[8] = "auto";
+    espos_config_get_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_SCHEME, scheme, sizeof(scheme), NULL);
+    uint8_t sc = strcmp(scheme, "https") == 0 ? 2 : strcmp(scheme, "http") == 0 ? 1
+                                                                                : 0;
 #if !CONFIG_ESPOS_SK_TLS
     /* Say it once, loudly, rather than quietly talking plaintext to a server
-     * the operator believes is protected. */
-    if (tls && !s.cfg_tls) {
-        ESP_LOGW(TAG, "sk.tls is on but this firmware was built without "
+     * the operator believes is protected. `auto` is not a complaint: without
+     * the transports it simply resolves to http, which is the honest answer. */
+    if (sc == 2 && s.cfg_scheme != 2) {
+        ESP_LOGW(TAG, "sk.scheme is https but this firmware was built without "
                       "CONFIG_ESPOS_SK_TLS — continuing over http/ws");
     }
-    tls = false;
+    sc = 1;
 #endif
-    s.cfg_tls = tls;
+    if (sc != s.cfg_scheme) {
+        s.probed_valid = false; /* the cached probe answered a different question */
+    }
+    s.cfg_scheme = sc;
+#if CONFIG_ESPOS_SK_TLS
+    {
+        char trust[8] = "tofu";
+        espos_config_get_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_TLS_TRUST, trust, sizeof(trust), NULL);
+        /* The PEM is a blob and may be absent; a NUL-terminated copy is what
+         * mbedtls_x509_crt_parse wants for PEM input. */
+        static char pem[CONFIG_ESPOS_SK_TLS_CA_MAX + 1];
+        size_t len = CONFIG_ESPOS_SK_TLS_CA_MAX;
+        if (espos_config_get_blob(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_CA_PEM, pem, &len) != ESP_OK) {
+            len = 0;
+        }
+        pem[len] = '\0';
+        espos_sk_tls_set_trust(strcmp(trust, "bundle") == 0 ? ESPOS_SK_TLS_TRUST_BUNDLE
+                               : strcmp(trust, "ca") == 0   ? ESPOS_SK_TLS_TRUST_CA
+                                                            : ESPOS_SK_TLS_TRUST_TOFU,
+                               pem);
+    }
+#endif
     v = 60;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_DISCOVER_S, &v);
     s.discover_interval_ms = (uint32_t)v * 1000;
@@ -272,6 +325,52 @@ static inline bool discovery_wanted(void)
     return s.discovery_enabled && !s.cfg_host[0];
 }
 
+/* http or https for this server? sk.scheme forces one when it is not "auto".
+ *
+ * "auto" asks the network. A discovered server already answered: signalk-server
+ * publishes _signalk-https._tcp instead of _signalk-http._tcp when its `ssl`
+ * setting is on, so `advertised` is the server's own statement and needs no
+ * round trip. A manual host has said nothing, so it gets one probe — GET
+ * http://host:port/signalk with redirects off, no token — and the answer is
+ * cached against (host, port) so a reconnect does not repeat it.
+ *
+ * `advertised` is a tri-state: <0 = nothing advertised (manual host), 0 = the
+ * plaintext service, 1 = the https one.
+ *
+ * Task-private; may block for seconds on the probe.
+ */
+static bool resolve_scheme(espos_sk_server_t *srv, int advertised)
+{
+#if !CONFIG_ESPOS_SK_TLS
+    (void)advertised;
+    (void)srv;
+    return false;
+#else
+    if (s.cfg_scheme == 1) {
+        return false;
+    }
+    if (s.cfg_scheme == 2) {
+        return true;
+    }
+    if (advertised >= 0) {
+        return advertised != 0;
+    }
+    if (s.probed_valid && strcmp(s.probed_host, srv->host) == 0 && s.probed_port == srv->port) {
+        srv->port = s.probed_use_port;
+        return s.probed_tls;
+    }
+    uint16_t use = srv->port;
+    bool tls = espos_sk_http_probe_https(srv->host, srv->port, &use);
+    snprintf(s.probed_host, sizeof(s.probed_host), "%s", srv->host);
+    s.probed_port = srv->port;
+    s.probed_use_port = use;
+    s.probed_tls = tls;
+    s.probed_valid = true;
+    srv->port = use;
+    return tls;
+#endif
+}
+
 /* Pick the server per config: manual host wins; else the discovered server
  * with the preferred self; else the first discovered "master"; else the
  * first discovered. Task-private. */
@@ -280,6 +379,8 @@ static void select_server(void)
     espos_sk_server_t chosen = { 0 };
     const char *source = "";
     bool have = false;
+    /* <0 = the server did not advertise a scheme (a manual host); 0/1 = it did. */
+    int discovered_tls = -1;
     if (s.cfg_host[0]) {
         snprintf(chosen.host, sizeof(chosen.host), "%s", s.cfg_host);
         chosen.port = s.cfg_port;
@@ -288,6 +389,10 @@ static void select_server(void)
         for (size_t i = 0; i < s.server_count; i++) {
             if (strcmp(s.servers[i].host, chosen.host) == 0 && s.servers[i].port == chosen.port) {
                 snprintf(chosen.self, sizeof(chosen.self), "%s", s.servers[i].self);
+                /* A manual host discovery happens to have seen has already
+                 * told us its scheme; that beats a probe, which is only the
+                 * fallback for an address nothing advertised. */
+                discovered_tls = s.servers[i].tls ? 1 : 0;
                 break;
             }
         }
@@ -338,19 +443,19 @@ static void select_server(void)
             chosen = s.server;
             source = "pinned";
             have = true;
+            discovered_tls = s.server.tls ? 1 : 0; /* keep what it was elected with */
         }
         if (idx >= 0) {
             snprintf(chosen.host, sizeof(chosen.host), "%s", s.servers[idx].host);
             chosen.port = s.servers[idx].port;
             snprintf(chosen.self, sizeof(chosen.self), "%s", s.servers[idx].self);
+            discovered_tls = s.servers[idx].tls ? 1 : 0;
             source = "discovered";
             have = true;
         }
         unlock();
     }
-    /* One place, whichever way the server was chosen: discovery does not
-     * advertise a scheme, so it is the configuration that decides. */
-    chosen.tls = have && s.cfg_tls;
+    chosen.tls = have && resolve_scheme(&chosen, discovered_tls);
     bool changed = have != s.have_server || (have && (strcmp(chosen.host, s.server.host) != 0 ||
                                                       chosen.port != s.server.port || chosen.tls != s.server.tls ||
                                                       strcmp(chosen.self, s.server.self) != 0));
@@ -545,6 +650,19 @@ static void handle_cmd(const cmd_t *c)
     case CMD_UNAUTHORIZED:
         espos_sk_tok_event(&s.sm, ESPOS_SK_EV_UNAUTHORIZED, NULL);
         break;
+    case CMD_CERT_ERROR:
+        espos_sk_tok_event(&s.sm, ESPOS_SK_EV_CERT_ERROR, c->str);
+        break;
+    case CMD_TLS_RESET:
+#if CONFIG_ESPOS_SK_TLS
+        espos_sk_tls_reset();
+        /* Nothing to poll: the only way to find out whether the new
+         * certificate is acceptable is to try. Retry now rather than waiting
+         * out the CERT_ERROR minute -- the operator just pressed the button
+         * and is watching. */
+        espos_sk_tok_event(&s.sm, ESPOS_SK_EV_RETRY, NULL);
+#endif
+        break;
     case CMD_STOP:
         break;
     }
@@ -626,19 +744,18 @@ static void sk_task(void *arg)
     espos_sk_tok_init(&s.sm, &k_port, NULL, &s.cfg, store);
     free(store);
     espos_sk_tok_event(&s.sm, ESPOS_SK_EV_START, NULL);
-    s.discover_due_ms = at(2000); /* first pass shortly; re-triggered when WiFi connects */
+    s.discover_due_ms = at(2000); /* first pass shortly; re-triggered when the network comes up */
     select_server();
     p_status_changed(NULL);
 
     for (;;) {
         /* 0. network came up: discover right away (mDNS is useless before) */
-        espos_wifi_status_t ws;
-        if (espos_wifi_get_status(&ws) == ESP_OK) {
-            bool up = ws.sm.state == ESPOS_WIFI_ST_CONNECTED;
-            if (up && !s.wifi_was_connected && discovery_wanted()) {
+        {
+            bool up = espos_net_is_up();
+            if (up && !s.net_was_up && discovery_wanted()) {
                 s.discover_due_ms = at(0);
             }
-            s.wifi_was_connected = up;
+            s.net_was_up = up;
         }
         /* 1. run whatever the machine asked for (blocking HTTP) */
         while (s.action != ACT_NONE) {
@@ -714,12 +831,16 @@ static char *status_json_from(const espos_sk_tok_status_t *st, const char *sourc
     cJSON_AddNumberToObject(cnt, "approved", st->approve_count);
     cJSON_AddNumberToObject(cnt, "denied", st->deny_count);
     cJSON_AddNumberToObject(cnt, "unauthorized", st->unauthorized_count);
+    cJSON_AddNumberToObject(cnt, "cert_errors", st->cert_error_count);
     cJSON *srv = cJSON_AddObjectToObject(root, "server");
     if (st->has_server) {
         cJSON_AddStringToObject(srv, "host", st->server.host);
         cJSON_AddNumberToObject(srv, "port", st->server.port);
         cJSON_AddStringToObject(srv, "self", st->server.self);
         cJSON_AddStringToObject(srv, "source", source);
+        /* The scheme actually in use, which under sk.scheme = auto is not
+         * something the configuration can be read off. */
+        cJSON_AddStringToObject(srv, "scheme", st->server.tls ? "https" : "http");
         lock();
         for (size_t i = 0; i < s.server_count; i++) {
             if (strcmp(s.servers[i].host, st->server.host) == 0 && s.servers[i].port == st->server.port) {
@@ -808,6 +929,7 @@ esp_err_t espos_sk_servers_json(char **out_json)
         cJSON_AddStringToObject(e, "roles", d->roles);
         cJSON_AddStringToObject(e, "swname", d->swname);
         cJSON_AddStringToObject(e, "swvers", d->swvers);
+        cJSON_AddStringToObject(e, "scheme", d->tls ? "https" : "http");
         cJSON_AddNumberToObject(e, "seen_s", (t - d->seen_ms) / 1000);
         cJSON_AddBoolToObject(e, "selected", s.snap.has_server && strcmp(s.snap.server.host, d->host) == 0 && s.snap.server.port == d->port);
         cJSON_AddItemToArray(arr, e);
@@ -843,6 +965,13 @@ esp_err_t espos_sk_discover_now(void) { return post_cmd(CMD_DISCOVER, NULL); }
 esp_err_t espos_sk_request_now(void) { return post_cmd(CMD_REQUEST, NULL); }
 esp_err_t espos_sk_forget_token(void) { return post_cmd(CMD_FORGET, NULL); }
 void espos_sk_report_unauthorized(void) { (void)post_cmd(CMD_UNAUTHORIZED, NULL); }
+
+void espos_sk_report_cert_error(const char *reason)
+{
+    (void)post_cmd(CMD_CERT_ERROR, reason && reason[0] ? strdup(reason) : NULL);
+}
+
+esp_err_t espos_sk_tls_reset_now(void) { return post_cmd(CMD_TLS_RESET, NULL); }
 
 esp_err_t espos_sk_set_token(const char *token)
 {
@@ -917,9 +1046,9 @@ static void on_config_change(const char *ns, const char *key, void *arg)
     if (strcmp(ns, ESPOS_CFG_NS_SK) == 0) {
         post_cmd(CMD_CONFIG, NULL);
         espos_sk_ws_config_changed();
-    } else if (strcmp(ns, ESPOS_CFG_NS_WIFI) == 0) {
-        espos_sk_ws_config_changed(); /* hostname → source label */
     }
+    /* net.hostname (the source label) is restart_required and espos_net
+     * applies it at boot, so there is nothing to follow live here. */
 }
 
 esp_err_t espos_sk_start(void)
@@ -927,12 +1056,13 @@ esp_err_t espos_sk_start(void)
     if (s.started) {
         return ESP_OK;
     }
-    /* Discovery is mDNS and the stream opens when the station is up; both
-     * poll the WiFi status, which does not exist before espos_wifi_start()
-     * (and that in turn needs the HTTP server, so the whole chain holds). */
-    espos_wifi_status_t wifi;
-    if (espos_wifi_get_status(&wifi) != ESP_OK) {
-        ESP_LOGE(TAG, "espos_sk_start: call espos_wifi_start() first (or espos_start())");
+    /* Discovery is mDNS and the stream opens when the network is up; both
+     * ask espos_net, which does not answer before espos_net_start() (and
+     * that in turn needs the HTTP server, so the whole chain holds). Which
+     * transport carries the link is not this component's business. */
+    espos_net_status_t net;
+    if (espos_net_get_status(&net) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_sk_start: call espos_net_start() first (or espos_start())");
         return ESP_ERR_INVALID_STATE;
     }
     if (!s.lock) {
@@ -942,16 +1072,9 @@ esp_err_t espos_sk_start(void)
             return ESP_ERR_NO_MEM;
         }
     }
-    /* hostname for the request description (the mDNS name is espos_wifi's) */
-    char h[33] = { 0 };
-    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
-    if (h[0]) {
-        snprintf(s.hostname, sizeof(s.hostname), "%s", h);
-    } else {
-        /* espos_wifi derives "espos-<mac4>"; keep in step by asking it */
-        extern const char *espos_wifi_short_id(void);
-        snprintf(s.hostname, sizeof(s.hostname), "espos-%s", espos_wifi_short_id());
-    }
+    /* hostname for the request description: espos_net's, the same name the
+     * mDNS responder answers to (net.hostname, default espos-<id>) */
+    snprintf(s.hostname, sizeof(s.hostname), "%s", net.hostname[0] ? net.hostname : "espos");
     espos_sk_discovery_init(s.hostname);
     if (!s.api_registered) {
         ESP_ERROR_CHECK(espos_sk_register_api());
@@ -963,6 +1086,7 @@ esp_err_t espos_sk_start(void)
         s.started = false;
         return ESP_ERR_NO_MEM;
     }
+    espos_sk_time_start();
     return espos_sk_ws_start();
 }
 
@@ -972,6 +1096,7 @@ esp_err_t espos_sk_stop(void)
         return ESP_OK;
     }
     espos_config_unsubscribe(on_config_change, NULL);
+    espos_sk_time_stop();
     espos_sk_ws_stop();
     post_cmd(CMD_STOP, NULL);
     for (int i = 0; i < 100 && s.task; i++) {

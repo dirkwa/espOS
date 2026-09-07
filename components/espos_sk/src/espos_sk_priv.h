@@ -43,9 +43,24 @@ typedef struct {
     const char *accept;      /* NULL = application/json, "" = none */
     uint32_t timeout_ms;
     size_t max_body;
+    /* Optional: copy the Location response header here. Redirects are never
+     * followed (disable_auto_redirect), so this is the only way to see where
+     * a 30x wanted to send us -- which is exactly what the scheme probe is
+     * asking. NULL = do not capture. */
+    char *capture_location;
+    size_t capture_location_size;
 } espos_sk_http_req_t;
 
 esp_err_t espos_sk_http_perform(const espos_sk_http_req_t *rq, espos_sk_http_resp_t *r);
+/**
+ * sk.scheme = auto, for a manually configured host: does this server want
+ * https? One unauthenticated probe (SensESP #1057 -- never hand the token to
+ * a host that has not been established as ours), redirects off, once per
+ * server selection. *out_port receives the port to use, which a redirect may
+ * change. Blocking, several seconds; SK task only.
+ */
+bool espos_sk_http_probe_https(const char *host, uint16_t port, uint16_t *out_port);
+
 /* "<scheme>://host:port/path"; ESP_ERR_INVALID_SIZE when it does not fit. */
 esp_err_t espos_sk_http_build_url(const espos_sk_server_t *srv, const char *scheme, const char *path, char *out, size_t n);
 /* "/signalk/v1/api/vessels/self/<a/b/c><suffix>" from a dotted path. */
@@ -58,6 +73,10 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max);
 /* HTTP endpoints: api_sk.c */
 esp_err_t espos_sk_register_api(void);
 
+/* Forget the pinned certificate and retry now (DELETE /api/v1/sk/tls).
+ * Queued to the SK task, which owns both the anchor and the machine. */
+esp_err_t espos_sk_tls_reset_now(void);
+
 /* WebSocket delta stream + meta reconciliation + health (sk_ws.c). */
 esp_err_t espos_sk_ws_start(void);
 void espos_sk_ws_stop(void);
@@ -68,6 +87,11 @@ int espos_sk_http_put_meta(const espos_sk_server_t *srv, const char *token, cons
 /* JSON snippet for the status document. */
 char *espos_sk_ws_status_json(void);
 bool espos_sk_stream_allowed(void);
+
+/* SignalK clock fallback: follows navigation.datetime while espos_time is
+ * unset, and stands down once a better source syncs (sk_time.c). */
+void espos_sk_time_start(void);
+void espos_sk_time_stop(void);
 
 #ifdef __cplusplus
 }

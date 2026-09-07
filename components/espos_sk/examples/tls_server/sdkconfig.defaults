@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
 #
-# The TLS transports for the SignalK stack: https for the access-request and
-# REST calls, wss for the delta stream. Compiling them pulls the Mozilla root
-# bundle into flash (about 64 KB in this example; a firmware that links it
-# already pays nothing more); using them costs about 20 KB of RAM per open
-# connection. This only makes the sk.tls setting *work* -- the device talks
-# http/ws until it is set.
+# Nothing to set: CONFIG_ESPOS_SK_TLS is on in sdkconfig.d/espos.defaults, and
+# sk.scheme = auto / sk.tls_trust = tofu are the defaults too. The line that
+# used to be here (CONFIG_ESPOS_SK_TLS=y) is now what every espOS firmware
+# gets, which is the point of this example being uneventful.
+#
+# Restated here anyway, because it is the one setting this example is about
+# and a reader looking for it should find it saying yes rather than nothing.
 CONFIG_ESPOS_SK_TLS=y

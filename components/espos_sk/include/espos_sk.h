@@ -32,6 +32,11 @@ typedef struct {
     char roles[32];
     char swname[24];
     char swvers[16];
+    /* The server advertised itself as _signalk-https._tcp rather than
+     * _signalk-http._tcp. signalk-server publishes one or the other depending
+     * on its `ssl` setting (src/interfaces/rest.js), so this is the server
+     * telling us its scheme -- which is what sk.scheme = auto reads. */
+    bool tls;
     uint32_t seen_ms;
 } espos_sk_discovered_t;
 
@@ -53,6 +58,13 @@ esp_err_t espos_sk_set_token(const char *token); /* manual token paste */
 esp_err_t espos_sk_forget_token(void);           /* drop token + pending, request again */
 /** Report that some SK call was rejected with 401/403 (M4 uses this). */
 void espos_sk_report_unauthorized(void);
+/**
+ * Report that the server's TLS certificate was refused: the token machine
+ * enters `cert_error`, keeps the token (the credential is fine, the transport
+ * is not) and retries on a flat 60 s. `reason` is the sentence an operator
+ * reads; NULL for a generic one. Thread-safe, queued to the SK task.
+ */
+void espos_sk_report_cert_error(const char *reason);
 
 /* ------------------------------------------------------------ deltas */
 

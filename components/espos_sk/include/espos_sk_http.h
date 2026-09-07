@@ -64,6 +64,13 @@ typedef struct {
     char *body;      /* malloc'ed, NUL-terminated, "" for an empty reply; NULL when err != ESP_OK */
     size_t len;      /* bytes in body (excluding the NUL) */
     bool truncated;  /* body hit max_body: len == max_body, the rest was discarded */
+    /* The TLS handshake refused the server: its certificate is not the one
+     * this device trusts. status is 0 and err is a transport error, which on
+     * their own read as "unreachable" and would be retried with a five-minute
+     * backoff over something an operator fixes in ten seconds. cert_reason
+     * says which way it differed. */
+    bool cert_error;
+    char cert_reason[64];
 } espos_sk_http_resp_t;
 
 /** Zeroed (or NULL) = 6000 ms, 16 KiB, Bearer on, 401/403 reported, Accept: application/json. */
