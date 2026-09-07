@@ -1,11 +1,14 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
- * /api/v1/system/{info,reboot,factory-reset}
+ * /api/v1/system/{info,reboot,factory-reset}. info carries the health
+ * policy's reset record (last_reset) when the previous boot ended in one.
  */
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,13 +18,13 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "sdkconfig.h"
-#if CONFIG_IDF_TARGET_LINUX
-#include <time.h>
-#else
+#if !CONFIG_IDF_TARGET_LINUX
 #include "esp_timer.h"
 #endif
+#include "cJSON.h"
 
 #include "espos_config.h"
+#include "espos_health.h"
 #include "espos_httpd.h"
 #include "espos_httpd_priv.h"
 
@@ -80,24 +83,70 @@ static int64_t uptime_s(void)
 #endif
 }
 
+/* "last_reset": the record espos_health's policy left when it restarted the
+ * device, or null. Its message is a consumer's free text, so this goes through
+ * cJSON rather than snprintf: a quote in it must not break the document. */
+static void add_last_reset(cJSON *root)
+{
+    espos_health_reset_record_t rec;
+    if (!espos_health_last_reset(&rec)) {
+        cJSON_AddNullToObject(root, "last_reset");
+        return;
+    }
+    cJSON *lr = cJSON_AddObjectToObject(root, "last_reset");
+    if (!lr) {
+        return;
+    }
+    cJSON_AddStringToObject(lr, "reason", reset_reason_str(esp_reset_reason()));
+    cJSON_AddStringToObject(lr, "health_key", rec.key);
+    cJSON_AddStringToObject(lr, "message", rec.message);
+    cJSON_AddNumberToObject(lr, "min_free_heap_before", rec.min_free_heap);
+    cJSON_AddNumberToObject(lr, "min_internal_before", rec.min_internal);
+    cJSON_AddNumberToObject(lr, "largest_block_before", rec.largest_block);
+    cJSON_AddNumberToObject(lr, "uptime_before_s", rec.uptime_s);
+    if (rec.unix_ms > 0) {
+        time_t secs = (time_t)(rec.unix_ms / 1000);
+        struct tm tm;
+        char iso[32];
+        gmtime_r(&secs, &tm);
+        strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        cJSON_AddStringToObject(lr, "at", iso);
+    } else {
+        cJSON_AddNullToObject(lr, "at"); /* the clock was never set that boot */
+    }
+}
+
 static esp_err_t info_get(httpd_req_t *req)
 {
     const esp_app_desc_t *app = esp_app_get_description();
     esp_chip_info_t chip;
     esp_chip_info(&chip);
-    char body[512];
-    snprintf(body, sizeof(body),
-             "{\"app\":\"%s\",\"version\":\"%s\",\"idf_version\":\"%s\","
-             "\"chip\":\"%s\",\"chip_revision\":%u,\"cores\":%u,"
-             "\"uptime_s\":%" PRId64 ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32 ","
-             "\"reset_reason\":\"%s\",\"config_storage_reset\":%s,\"schema_etag\":\"%s\",\"ui_storage\":%s}",
-             app->project_name, app->version, esp_get_idf_version(),
-             chip_model_str(chip.model), (unsigned)chip.revision, (unsigned)chip.cores,
-             uptime_s(), esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
-             reset_reason_str(esp_reset_reason()),
-             espos_config_storage_was_reset() ? "true" : "false",
-             espos_cfg_schema_etag, espos_httpd_static_mounted() ? "true" : "false");
-    return espos_httpd_send_json(req, NULL, body);
+    cJSON *j = cJSON_CreateObject();
+    if (!j) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "out of memory");
+    }
+    cJSON_AddStringToObject(j, "app", app->project_name);
+    cJSON_AddStringToObject(j, "version", app->version);
+    cJSON_AddStringToObject(j, "idf_version", esp_get_idf_version());
+    cJSON_AddStringToObject(j, "chip", chip_model_str(chip.model));
+    cJSON_AddNumberToObject(j, "chip_revision", chip.revision);
+    cJSON_AddNumberToObject(j, "cores", chip.cores);
+    cJSON_AddNumberToObject(j, "uptime_s", (double)uptime_s());
+    cJSON_AddNumberToObject(j, "free_heap", esp_get_free_heap_size());
+    cJSON_AddNumberToObject(j, "min_free_heap", esp_get_minimum_free_heap_size());
+    cJSON_AddStringToObject(j, "reset_reason", reset_reason_str(esp_reset_reason()));
+    cJSON_AddBoolToObject(j, "config_storage_reset", espos_config_storage_was_reset());
+    cJSON_AddStringToObject(j, "schema_etag", espos_cfg_schema_etag);
+    cJSON_AddBoolToObject(j, "ui_storage", espos_httpd_static_mounted());
+    add_last_reset(j);
+    char *body = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j);
+    if (!body) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "out of memory");
+    }
+    esp_err_t err = espos_httpd_send_json(req, NULL, body);
+    cJSON_free(body);
+    return err;
 }
 
 static volatile bool s_restart_pending;

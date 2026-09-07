@@ -1,7 +1,9 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
- * espos_health — condition table + sink registry. See espos_health.h.
+ * espos_health — condition table + sink registry. See espos_health.h; the
+ * watchdog policy that reads this table is health_policy.c / health_watchdog.c.
  *
  * Everything is a fixed table: the set of conditions a firmware can raise and
  * the set of things that care are both decided at build time, so there is
@@ -61,8 +63,8 @@ const char *espos_health_state_str(espos_health_state_t state)
 {
     switch (state) {
     case ESPOS_HEALTH_ALARM: return "alarm";
-    case ESPOS_HEALTH_WARN:  return "warn";
-    default:                 return "normal";
+    case ESPOS_HEALTH_WARN: return "warn";
+    default: return "normal";
     }
 }
 
@@ -85,7 +87,13 @@ static void fan_out(const char *key, espos_health_state_t state, const char *mes
 
 esp_err_t espos_health_report(const char *key, espos_health_state_t state, const char *message)
 {
+    return espos_health_report_ex(key, state, message, 0);
+}
+
+esp_err_t espos_health_report_ex(const char *key, espos_health_state_t state, const char *message, uint32_t flags)
+{
     if (!key || !key[0]) return ESP_ERR_INVALID_ARG;
+    if (flags & ~ESPOS_HEALTH_F_REBOOT_ON_ALARM) return ESP_ERR_INVALID_ARG;
     if (!message) message = "";
     if (strlen(key) >= ESPOS_HEALTH_KEY_MAX) return ESP_ERR_INVALID_SIZE;
     if (strlen(message) >= ESPOS_HEALTH_MSG_MAX) return ESP_ERR_INVALID_SIZE;
@@ -98,7 +106,10 @@ esp_err_t espos_health_report(const char *key, espos_health_state_t state, const
 
     espos_health_condition_t *c = NULL;
     for (size_t i = 0; i < s.cond_n; i++) {
-        if (strcmp(s.cond[i].key, key) == 0) { c = &s.cond[i]; break; }
+        if (strcmp(s.cond[i].key, key) == 0) {
+            c = &s.cond[i];
+            break;
+        }
     }
     if (!c) {
         /* No early-out for a first NORMAL, even though recording "nothing is
@@ -114,12 +125,17 @@ esp_err_t espos_health_report(const char *key, espos_health_state_t state, const
         snprintf(c->key, sizeof(c->key), "%s", key);
         c->state = (espos_health_state_t)-1;  /* forces the first fan-out */
         c->message[0] = '\0';
+        c->flags = 0;
     } else if (c->state == state && strcmp(c->message, message) == 0) {
+        /* Unchanged for the sinks — stay quiet. The flags still follow the
+         * latest report: they are the policy's business, not a sink's. */
+        c->flags = flags;
         unlock();
-        return ESP_OK;   /* unchanged — stay quiet */
+        return ESP_OK;
     }
 
     c->state = state;
+    c->flags = flags;
     snprintf(c->message, sizeof(c->message), "%s", message);
     unlock();
 
@@ -163,7 +179,10 @@ esp_err_t espos_health_add_sink(espos_health_sink_t sink, void *arg)
     for (size_t i = 0;; i++) {
         espos_health_condition_t c;
         if (!lock()) break;
-        if (i >= s.cond_n) { unlock(); break; }
+        if (i >= s.cond_n) {
+            unlock();
+            break;
+        }
         c = s.cond[i];
         unlock();
         sink(c.key, c.state, c.message, arg);
@@ -206,6 +225,21 @@ espos_health_state_t espos_health_worst(void)
     }
     unlock();
     return worst;
+}
+
+bool espos_health_fatal_alarm(espos_health_condition_t *out)
+{
+    if (!lock()) return false;
+    for (size_t i = 0; i < s.cond_n; i++) {
+        const espos_health_condition_t *c = &s.cond[i];
+        if (c->state == ESPOS_HEALTH_ALARM && (c->flags & ESPOS_HEALTH_F_REBOOT_ON_ALARM)) {
+            if (out) *out = *c;
+            unlock();
+            return true;
+        }
+    }
+    unlock();
+    return false;
 }
 
 void espos_health_reset(void)
