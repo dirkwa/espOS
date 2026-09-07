@@ -32,6 +32,12 @@ files:
     - "sdkconfig*"
     - "managed_components/**/*"
     - "dependencies.lock"
+    - "examples/*/build/**/*"
+    - "examples/*/build-*/**/*"
+    - "examples/*/managed_components/**/*"
+    - "examples/*/dependencies.lock"
+    - "examples/*/sdkconfig*"
+    - "examples/*/*.pem"
 dependencies:
   idf: ">=6.0.0,<6.1.0"
   # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.

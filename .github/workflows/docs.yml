@@ -1,0 +1,66 @@
+name: Docs
+
+# The documentation site (mkdocs.yml). Pull requests get the strict build,
+# which fails on a dead link, a missing page named in the nav or a Doxygen
+# configuration mkdoxy cannot read; a push to main deploys the same build to
+# GitHub Pages (Settings → Pages → Source: GitHub Actions, once). Doxygen is
+# a system package here because mkdoxy runs the binary; everything else comes
+# from docs/requirements.txt, pinned.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel a running one: a half-finished
+# deploy is what leaves the site serving a mix of two builds.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: mkdocs build --strict
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - name: install doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+          doxygen --version
+      - run: pip install -r docs/requirements.txt
+      - run: mkdocs build --strict
+      # The two Pages steps run on main only: a pull request proves the build
+      # and stops there.
+      - uses: actions/configure-pages@v5
+        if: github.event_name == 'push'
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
+        with:
+          path: site
+
+  deploy:
+    name: deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

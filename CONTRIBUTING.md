@@ -6,6 +6,13 @@ firmware projects. This is what you need to know to change it. The build and
 test details live in [docs/development.md](docs/development.md); this file
 is about how a change gets in.
 
+## Where to start
+
+New here? Build an example under `components/*/examples/` ([docs/examples.md](docs/examples.md)
+lists them; each is a complete IDF project and `espos_core/examples/minimal` is the smallest),
+then follow the tutorials in [docs/tutorials/](docs/tutorials/first-sensor.md) — Essential, then
+Newbie, then Advanced — or the [SensESP migration guide](docs/migration-from-sensesp.md) if that is where you come from.
+
 ## Where code goes
 
 * **Framework fixes belong in espOS, not in consumer repos.** If a firmware

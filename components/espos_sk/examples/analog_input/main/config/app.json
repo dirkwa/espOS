@@ -1,0 +1,14 @@
+{
+  "namespace": "app",
+  "version": 1,
+  "title": "Analog input",
+  "description": "Calibration of the analog input: value = volts * multiplier + offset.",
+  "keys": [
+    {"name": "multiplier", "type": "float", "default": 1.0, "title": "Multiplier",
+     "description": "Scale from the measured volts to the unit of the published path. With the default the device publishes volts."},
+    {"name": "offset", "type": "float", "default": 0.0, "title": "Offset",
+     "description": "Added after the multiplier."},
+    {"name": "period_ms", "type": "int", "default": 1000, "min": 100, "max": 60000, "unit": "ms", "title": "Sample period",
+     "description": "Time between readings. Each reading averages 16 samples."}
+  ]
+}

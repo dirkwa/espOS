@@ -153,3 +153,13 @@ and the manager's own defaults (`.git`, `__pycache__`, ...). Anything a
 component needs at build time — `espos_config`'s generator under `tools/`,
 `espos_httpd`'s `www/index.html`, the `config/*.json` descriptors — lives
 inside the component directory for exactly this reason.
+
+## The template repository
+
+[signalk-espOS/espos-template](https://github.com/signalk-espOS/espos-template)
+is generated, never edited by hand: `scripts/sync_template.sh <checkout> <tag>`
+copies `components/espos_core/examples/minimal` into a checkout of the template
+with espOS as the `espos/` submodule, and the release then bumps that
+submodule to the tag and commits ("chore: sync to espOS vX.Y.Z"). Change the
+example, not the template; CI builds the example on every target, the
+template's own CI builds the copy once it is pushed.

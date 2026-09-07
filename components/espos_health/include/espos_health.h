@@ -122,6 +122,8 @@ typedef struct {
 
 /**
  * Copy the current conditions into `out` (at most `max`).
+ * @param out  receives the conditions, oldest first
+ * @param max  capacity of `out` in entries
  * @param out may be NULL to query the count only.
  * @return how many conditions exist, which may exceed `max`.
  */

@@ -26,10 +26,10 @@ menu "espOS SignalK"
             starts to matter on a shared marina network or as soon as a
             server is reachable from outside the boat.
 
-            Flash cost is close to nothing in a default espOS build:
-            mbedTLS and the certificate bundle are already linked because
-            signed OTA goes through esp_https_ota (measured on esp32c6,
-            same image size with and without). What it does cost is
+            Flash cost depends on what else is in the build: when espos_ota
+            (an https image source) already links mbedTLS and the certificate
+            bundle, the image size is unchanged; a minimal consumer without it
+            pays about 64 KB for the bundle. What it does cost is
             roughly 20 KB of RAM while the stream connection is open.
 
             The server certificate is verified against the bundled

@@ -66,7 +66,7 @@ esp_err_t espos_sk_publish_bool(const char *path, bool value);
 esp_err_t espos_sk_publish_json(const char *path, const char *value_json);
 
 /**
- * Raise or clear a SignalK notification under notifications.espos.<label>.<key>.
+ * Raise or clear a SignalK notification under notifications.espos.LABEL.KEY (the device label and the condition key).
  *
  * For conditions the device knows about and an operator would want to see:
  * memory pressure, an overheating chip, a service the firmware depends on

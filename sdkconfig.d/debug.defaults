@@ -22,3 +22,7 @@ CONFIG_COMPILER_STACK_CHECK_MODE_STRONG=y
 # POST /api/v1/system/crash: a deliberate panic to exercise core dumps end
 # to end (docs/rest-api.md). Off in every other profile.
 CONFIG_ESPOS_HTTPD_DEBUG_CRASH=y
+
+# Let PUT /api/v1/logs/level reach debug at runtime: the default maximum
+# compiles debug-level calls out, so the switch is inert without this.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y

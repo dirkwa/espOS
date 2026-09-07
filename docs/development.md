@@ -52,6 +52,33 @@ change. CI rebuilds the bundle and fails when the committed one differs, so a
 UI change without its `npm run build` does not merge. `npm run dev` runs the
 UI against an API mock; see [ui.md](ui.md).
 
+## Documentation site
+
+The docs are the Markdown in `docs/` — plus the root `CHANGELOG.md`, which a
+hook renders as the changelog page — built with mkdocs-material into
+[signalk-espos.github.io/espOS](https://signalk-espos.github.io/espOS/) by
+`.github/workflows/docs.yml`: every pull request runs `mkdocs build
+--strict`, which fails on a dead link, a missing heading a link names, or a
+page the nav lists that does not exist; a push to `main` deploys. The C API
+pages are generated from the public headers by Doxygen (`Doxyfile`) through
+the mkdoxy plugin, so Doxygen has to be installed for the site to build at
+all. Locally, from the repository root (mkdoxy resolves its source
+directories against the working directory):
+
+```sh
+sudo apt-get install doxygen                      # a system package, not a Python one
+python3 -m venv ~/.venvs/espos-docs && . ~/.venvs/espos-docs/bin/activate
+pip install -r docs/requirements.txt              # exact pins; bump them deliberately
+mkdocs serve                                      # http://127.0.0.1:8000, rebuilds on save
+mkdocs build --strict                             # what CI runs; output in site/ (git-ignored)
+```
+
+A new page goes into `docs/` and into the `nav:` of `mkdocs.yml`; a page
+that is not in the nav is still built and searchable, but unreachable from
+the menu. Doxygen warnings about a header (an unknown `<tag>` in prose, an
+undocumented parameter) are printed by the build and do not fail it; fix
+them in the header. `doxygen Doxyfile` alone reproduces them without mkdocs.
+
 ## Building a firmware on espOS
 
 A firmware project vendors espOS as a submodule (`espos/`) and includes the

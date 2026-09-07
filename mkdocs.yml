@@ -1,0 +1,162 @@
+# Documentation site: https://signalk-espos.github.io/espOS/
+#
+# The pages are the Markdown already in docs/ (nothing moved), plus a few
+# written for the site (index, getting started, hardware, troubleshooting,
+# examples, the C API overview) and two generated parts: the C API pages,
+# which mkdoxy builds from the public headers through Doxygen (Doxyfile), and
+# the changelog, which a hook substitutes from the root CHANGELOG.md
+# (docs/_hooks/root_files.py). CI runs `mkdocs build --strict` on every pull
+# request and deploys main to GitHub Pages (.github/workflows/docs.yml);
+# docs/development.md "Documentation site" has the local recipe. Run mkdocs
+# from the repository root: mkdoxy resolves its source directories from the
+# working directory.
+
+site_name: espOS
+site_description: >-
+  ESP-IDF-native runtime for Signal K devices on ESP32 — WiFi, config, web UI,
+  Signal K discovery and streaming, signed OTA. The successor to SensESP.
+site_url: https://signalk-espos.github.io/espOS/
+repo_url: https://github.com/signalk-espOS/espOS
+repo_name: signalk-espOS/espOS
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 Dirk Wahrheit · Apache-2.0
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  # C API reference from the public headers. `doxy-cfg-file` is the Doxyfile
+  # at the root; mkdoxy overrides INPUT with src-dirs (the same list) and the
+  # output directory with a folder under site_dir, so nothing is written into
+  # the tree. Pages land under /api-c/; docs/api-c.md is the hand-written
+  # entry page in front of them.
+  - mkdoxy:
+      projects:
+        espos:
+          src-dirs: >-
+            components/espos_audio/include components/espos_ble/include
+            components/espos_config/include components/espos_core/include
+            components/espos_event/include components/espos_health/include
+            components/espos_httpd/include components/espos_log/include
+            components/espos_n2k/include components/espos_ota/include
+            components/espos_sk/include components/espos_voice/include
+            components/espos_wifi/include
+          full-doc: true
+          api-path: api-c
+          doxy-cfg-file: Doxyfile
+      full-doc: true
+      ignore-errors: false
+
+hooks:
+  - docs/_hooks/root_files.py
+
+# Not pages: the hook and the pip requirements live in docs/ for locality.
+exclude_docs: |
+  _hooks/
+  requirements.txt
+
+# Everything a link check can find is a warning, and --strict makes warnings
+# fatal: a renamed page or a missing heading fails the pull request rather
+# than shipping a dead link.
+validation:
+  nav:
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
+    anchors: warn
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Getting started: getting-started.md
+      - Concepts: concepts.md
+      - Examples: examples.md
+      - Tutorials:
+          - Your first sensor: tutorials/first-sensor.md
+          - Add a setting: tutorials/add-a-setting.md
+          - Tank level: tutorials/tank-level.md
+          - An app endpoint and a UI tab: tutorials/app-endpoint-and-ui-tab.md
+          - OTA from a manifest: tutorials/ota-from-a-manifest.md
+          - Logs and core dumps: tutorials/logs-and-core-dumps.md
+      - Migrating from SensESP: migration-from-sensesp.md
+      - Troubleshooting: troubleshooting.md
+  - Components:
+      - Configuration store: config.md
+      - WiFi and mDNS: wifi.md
+      - Signal K: signalk.md
+      - OTA: ota.md
+      - Web UI: ui.md
+      - Device health: health.md
+      - BLE gateway: ble.md
+      - NMEA 2000 gateway: n2k.md
+      - Voice satellite: voice.md
+  - Reference:
+      - REST API: rest-api.md
+      - C API:
+          - Overview: api-c.md
+          - Headers: api-c/files.md
+          - Functions: api-c/functions.md
+          - Types and variables: api-c/variables.md
+          - Structures: api-c/annotated.md
+          - Macros: api-c/macros.md
+      - Hardware: hardware.md
+  - Project:
+      - Development: development.md
+      - Releasing: releasing.md
+      - Security: security.md
+      - Roadmap: roadmap.md
+      - Decisions: decisions.md
+      - Changelog: changelog.md

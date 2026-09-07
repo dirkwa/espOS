@@ -53,6 +53,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tools/check_kconfig_docs.py
+      # Tutorials that grow past a screenful stop being tutorials.
+      - name: tutorial and guide size caps
+        run: |
+          for f in docs/tutorials/*.md; do n=$(wc -l < "$f"); [ "$n" -le 120 ] || { echo "$f: $n lines > 120"; exit 1; }; done
+          n=$(wc -l < docs/migration-from-sensesp.md); [ "$n" -le 250 ] || { echo "migration guide: $n lines > 250"; exit 1; }
 
   # The public headers are the C ABI a binding is generated from. An IDF type
   # leaking into one, a CONFIG_ token deciding a struct's size, or a header a
@@ -218,6 +223,56 @@ jobs:
             build/storage.bin
             build/size-${{ matrix.target }}.json
           if-no-files-found: error
+
+  # Every example is a complete project on the framework; CI is what keeps
+  # them building as espOS moves. minimal builds on every target because it
+  # is also the template a newcomer clones.
+  examples:
+    name: example ${{ matrix.example }} on ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32c6]
+        example:
+          - components/espos_core/examples/minimal
+          - components/espos_core/examples/two_phase_boot
+          - components/espos_config/examples/custom_settings
+          - components/espos_httpd/examples/app_endpoint_and_page
+          - components/espos_health/examples/health_and_led
+          - components/espos_sk/examples/analog_input
+          - components/espos_sk/examples/pulse_counter
+          - components/espos_sk/examples/digital_switch
+          - components/espos_sk/examples/listener_relay
+          - components/espos_sk/examples/json_and_meta
+          - components/espos_sk/examples/tls_server
+        include:
+          - { example: components/espos_core/examples/minimal, target: esp32 }
+          - { example: components/espos_core/examples/minimal, target: esp32s3 }
+          - { example: components/espos_core/examples/minimal, target: esp32c3 }
+          - { example: components/espos_core/examples/minimal, target: esp32p4 }
+          - { example: components/espos_sk/examples/pulse_counter, target: esp32c3 }
+          - { example: components/espos_core/examples/two_phase_boot, target: esp32p4 }
+          - { example: components/espos_health/examples/health_and_led, target: esp32p4 }
+          - { example: components/espos_sk/examples/analog_input, target: esp32p4 }
+          - { example: components/espos_sk/examples/pulse_counter, target: esp32p4 }
+          - { example: components/espos_sk/examples/digital_switch, target: esp32p4 }
+          - { example: components/espos_sk/examples/listener_relay, target: esp32p4 }
+          - { example: components/espos_sk/examples/json_and_meta, target: esp32p4 }
+          - { example: components/espos_sk/examples/tls_server, target: esp32p4 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: read pinned IDF version
+        id: idf
+        run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: ${{ matrix.target }}
+          command: scripts/build_example.sh ${{ matrix.example }} ${{ matrix.target }}
 
   host-tests:
     name: host tests (linux target)

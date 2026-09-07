@@ -42,12 +42,13 @@ void app_main(void) { ESP_ERROR_CHECK(espos_start(NULL)); /* your application */
 |---|---|---|
 | 1 | `espos_log_init()` | The ring must exist before the first line worth keeping; `/api/v1/logs` shows the boot. |
 | 2 | `espos_config_init()` | Everything after this reads its settings from the store. Posts `ESPOS_EVENT_CONFIG_READY`. |
+| — | `espos_health_policy_start()` | Still inside `espos_init()`, when `espos_start_opts_t.health_watchdog` is set (the default) and `CONFIG_ESPOS_CORE_HEALTH_WATCHDOG` is on: the device watchdog is armed before anything can stall ([health.md](health.md)). `espos_core` also subscribes to `NETWORK_UP`/`NETWORK_DOWN` here to raise and clear the `netDown` warning. A failure logs and the boot goes on without the watchdog. |
 | — | `before_network` hook | Display up, so it can show the portal SSID; anything that must exist before a client can connect. |
 | 3 | `espos_httpd_start()` | Before WiFi: the provisioning portal's page has to be there the moment the access point is. Posts `HTTPD_STARTED`. |
 | 4 | `espos_wifi_start()` | Station, portal, `/wifi` endpoints. Posts `NETWORK_UP` / `NETWORK_DOWN` as the station link comes and goes. Brings up the mDNS responder (`<hostname>.local`, `_http._tcp`, `_espos._tcp`, [wifi.md](wifi.md)); `MDNS_READY` follows every `NETWORK_UP`. |
-| 5 | `espos_sk_start()` (if built) | Discovery is mDNS and the stream needs the station; polls the WiFi status, so WiFi must exist. |
+| 5 | `espos_sk_start()` (if built) | Discovery is mDNS and the stream needs the station; polls the WiFi status, so WiFi must exist. Just before it, `espos_sk_set_app_name(espos_app_name())`, so the access request reads `<app> <hostname>` in the server's list. |
 | 6 | `espos_ota_start()` (if built) | Its API sits on the HTTP server; its confirm/rollback policy watches WiFi. |
-| 7 | `espos_ble_start()` (if built) | Authenticates with the SignalK token. |
+| 7 | `espos_ble_start()` (if built) | Authenticates with the SignalK token. For BLE "built" means both the component in the list and `CONFIG_BT_BLUEDROID_ENABLED`; a firmware may link `espos_ble` without the stack and nothing is started. |
 
 `espos_init()` is steps 1–2, `espos_start_network()` steps 3–7; both are
 idempotent, as is every `espos_*_start()`. "If built" is decided at
@@ -90,6 +91,8 @@ differs, and it matters when you reach for a lock:
 | `espos_mdns_start/add_service/remove_service` | the caller | **May block** a few ms on the responder task; not from an event or URI handler. |
 | `espos_health` policy tick | the `esp_timer` task | Every 10 s: reports `lowMemory`/`taskStalled`, counts strikes, restarts; sinks run there on that tick. |
 | HTTP URI handlers (`espos_httpd_register`) | the `esp_http_server` task | One task for all requests; a slow handler stalls the UI. |
+| `espos_httpd_sse_on_connect` callback | the `esp_http_server` task | Send the client its snapshot with `espos_httpd_sse_send()` and return. |
+| `espos_log_set_notify` callback | a FreeRTOS timer task | At most every 500 ms, never from inside the logging call — so it may itself log. |
 | `ESPOS_EVENT` handlers | the default esp_event loop task | Shared with `WIFI_EVENT`/`IP_EVENT`; a blocked handler stalls the WiFi driver's own events. |
 | `espos_log_read` visitor | the caller, with the ring locked | Do not log from inside. |
 | `espos_wifi_refresh_rssi()` | the caller | **May block** on a co-processor RPC; not from a UI or event task. |
@@ -139,3 +142,29 @@ component's status API (`espos_wifi_get_status()`, `espos_sk_get_server()`,
 `espos_ota_status_json()`) for the current picture and uses events to learn
 about changes from then on. Handlers run on the event loop task (see above).
 Ids are part of the ABI and are only ever appended.
+
+## From SensESP's model to espOS's
+
+SensESP is a graph: sensors, transforms and outputs are objects created in
+`setup()`, wired with `connect_to()`, and ticked by one event loop; a
+setting is an object's `config_path` plus a `ConfigItem()`. espOS is a
+runtime with a C API: the components above come up in one call, and the
+application is a task that reads, computes and calls `espos_sk_publish_*()`;
+a setting is one entry in a descriptor. Both reach the same wire — deltas to
+`vessels.self`, an access request, metadata for non-standard paths — and
+that is why a SensESP author is at home here after one afternoon. A typed
+C++ facade over this API is planned for a later tranche; until it exists the
+C shape below is the shape. The full mapping, symbol by symbol, and a worked
+port of SensESP's `analog_input.cpp` are in
+[migration-from-sensesp.md](migration-from-sensesp.md).
+
+| SensESP | espOS |
+|---|---|
+| `SensESPAppBuilder` … `get_app()` | `espos_start(NULL)` |
+| `event_loop()->onRepeat()` + `RepeatSensor` | a task with `vTaskDelay()`, or an `esp_timer` |
+| `connect_to()` chain of transforms | arithmetic in C between the read and the publish |
+| `SKOutputFloat`, `SKMetadata` | `espos_sk_publish_number()`, `espos_sk_declare_meta()` |
+| `SKValueListener` / `SKPutRequest` | `espos_sk_subscribe()` / `espos_sk_put()` |
+| `config_path` + `ConfigItem()` | a key in `config/<ns>.json`; `espos_config_get_*()`, `espos_config_subscribe()` |
+| `SystemStatusLed`, `enable_wifi_watchdog()` | `espos_health` sinks and its policy |
+| `enable_ota()` | `espos_ota`: signed, rolled back, manifest-driven |

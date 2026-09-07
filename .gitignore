@@ -37,3 +37,12 @@ ui/dist/
 # App-signing key (development key is generated on first build; a real one is a secret)
 secure_boot_signing_key.pem
 *.pem
+
+# Documentation site output and example-project build state (each example is
+# its own IDF project; its lock is regenerated, the framework's root lock is tracked)
+site/
+components/*/examples/*/dependencies.lock
+components/*/examples/*/build/
+components/*/examples/*/managed_components/
+components/*/examples/*/sdkconfig
+components/*/examples/*/sdkconfig.old

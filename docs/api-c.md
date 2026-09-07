@@ -1,0 +1,94 @@
+# C API
+
+The headers under `components/*/include` are espOS's public API, and their C
+ABI is the stable contract every consumer gets — a firmware written in C, a
+C++ application, or a binding generated from the headers as they are
+([decisions](decisions.md), 2026-09-07). The pages in this section are
+generated from those headers by Doxygen on every build of the site, so they
+are as current as the branch they were built from; the prose that explains
+*why* an API is shaped the way it is stays in the header itself and in the
+component pages.
+
+`ESPOS_ABI_VERSION` (`espos.h`, currently 1) is bumped by any change to a
+header that is not purely additive; `espos_abi_version()` returns the value
+the linked `espos_core` was built with. The rules the headers follow — `esp_err.h`
+as the only IDF include (two frozen exceptions), opaque handles, fixed-width
+integers, callbacks with a trailing `void *arg`, no `CONFIG_` in new headers
+— are in [Development → Public API rules](development.md#public-api-rules),
+and `tools/check_public_headers.py` checks them in CI.
+
+## Reading the reference
+
+* [**Headers**](api-c/files.md) is the entry point: one page per header,
+  in the order of the include directories, each with the file-level comment
+  (what the component is, which task calls back), its functions, types and
+  macros, and a link to the source.
+* [**Functions**](api-c/functions.md), [**Types and
+  variables**](api-c/variables.md) and [**Macros**](api-c/macros.md) are
+  the flat indexes across every header.
+* [**Structures**](api-c/annotated.md) lists every `struct` (and the classes
+  of the C++ components).
+
+Every callback's threading contract is stated in its header and collected in
+[Concepts → Threading contracts](concepts.md#threading-contracts); read that
+table before calling anything from inside a callback.
+
+## Headers by component
+
+| Header | Component | What it is |
+|---|---|---|
+| [`espos.h`](api-c/espos_8h.md) | `espos_core` | `espos_start()`, `espos_init()`, `espos_start_network()`, versions, `ESPOS_ABI_VERSION` |
+| [`espos_event.h`](api-c/espos__event_8h.md) | `espos_event` | `ESPOS_EVENT` base on the default loop: ids, payload structs, post/subscribe |
+| [`espos_config.h`](api-c/espos__config_8h.md) | `espos_config` | the store: typed get/set, subscribe, export/import, migrations, factory reset |
+| [`espos_config_desc.h`](api-c/espos__config__desc_8h.md) | `espos_config` | the descriptor tables the build-time generator instantiates |
+| [`espos_config_backend.h`](api-c/espos__config__backend_8h.md) | `espos_config` | the storage backend interface (NVS on a device, memory on the host) |
+| [`espos_log.h`](api-c/espos__log_8h.md) | `espos_log` | the in-RAM log ring behind `/api/v1/logs` |
+| [`espos_health.h`](api-c/espos__health_8h.md) | `espos_health` | conditions, sinks, watched tasks, the reset record |
+| [`espos_health_policy.h`](api-c/espos__health__policy_8h.md) | `espos_health` | the watchdog policy as a pure C state machine over a port |
+| [`espos_httpd.h`](api-c/espos__httpd_8h.md) | `espos_httpd` | the HTTP server, `espos_httpd_register()` for application endpoints |
+| [`espos_httpd_sse.h`](api-c/espos__httpd__sse_8h.md) | `espos_httpd` | publishing named events on `GET /api/v1/events` |
+| [`espos_wifi.h`](api-c/espos__wifi_8h.md) | `espos_wifi` | station manager, status, portal, `espos_wifi_short_id()` |
+| [`espos_wifi_sm.h`](api-c/espos__wifi__sm_8h.md) | `espos_wifi` | the WiFi state machine and its port (host-testable) |
+| [`espos_mdns.h`](api-c/espos__mdns_8h.md) | `espos_wifi` | the mDNS responder: `espos_mdns_add_service()`, readiness |
+| [`espos_sk.h`](api-c/espos__sk_8h.md) | `espos_sk` | discovery, token, `espos_sk_publish_*`, subscribe, PUT, notify |
+| [`espos_sk_http.h`](api-c/espos__sk__http_8h.md) | `espos_sk` | HTTP to the selected server: GET/PUT/POST/DELETE, value and meta lookups, URLs |
+| [`espos_sk_delta.h`](api-c/espos__sk__delta_8h.md) | `espos_sk` | delta batcher and offline ring (pure C) |
+| [`espos_sk_parse.h`](api-c/espos__sk__parse_8h.md) | `espos_sk` | stream frame parser (pure C) |
+| [`espos_sk_token_sm.h`](api-c/espos__sk__token__sm_8h.md) | `espos_sk` | the access-token state machine over a port |
+| [`espos_ota.h`](api-c/espos__ota_8h.md) | `espos_ota` | signed OTA with rollback: start, status, check, install, confirm |
+| [`espos_ota_manifest.h`](api-c/espos__ota__manifest_8h.md) | `espos_ota` | manifest parsing and version comparison (pure C) |
+| [`espos_ble.h`](api-c/espos__ble_8h.md) | `espos_ble` | the BLE gateway: start, status |
+
+The following headers are **C++ interfaces**, by design
+([decisions](decisions.md)): public, but not part of the C ABI until they get
+C wrappers. `tools/check_public_headers.py` lists them as `CPP_ONLY`.
+
+| Header | Component | What it is |
+|---|---|---|
+| [`espos_audio/audio_driver.h`](api-c/audio__driver_8h.md) | `espos_audio` | `AudioDriver`, the contract a board's codec implements |
+| [`espos_audio/null_audio.h`](api-c/null__audio_8h.md) | `espos_audio` | `NullAudio`, the no-op driver for boards without audio |
+| [`espos_n2k/can_frame.h`](api-c/can__frame_8h.md) | `espos_n2k` | `CanMessage`, espOS's own CAN frame struct |
+| [`espos_n2k/twai_receiver.h`](api-c/twai__receiver_8h.md) | `espos_n2k` | `TwaiReceiver`: owns the bus, emits frames on its task |
+| [`espos_n2k/twai_transmitter.h`](api-c/twai__transmitter_8h.md) | `espos_n2k` | `TwaiTransmitter`: joins the receiver's bus |
+| [`espos_n2k/candump_tcp_server.h`](api-c/candump__tcp__server_8h.md) | `espos_n2k` | candump-format TCP server, advertised over mDNS |
+| [`espos_n2k/candump_format.h`](api-c/candump__format_8h.md) | `espos_n2k` | candump ASCII encode/decode (host-tested) |
+| [`espos_n2k/twai_message.h`](api-c/twai__message_8h.md) | `espos_n2k` | compatibility alias `TwaiMessage` → `CanMessage` |
+| [`espos_voice/wyoming_satellite.h`](api-c/wyoming__satellite_8h.md) | `espos_voice` | the Wyoming satellite server |
+| [`espos_voice/wake_engine.h`](api-c/wake__engine_8h.md) | `espos_voice` | esp-sr WakeNet wrapper |
+| [`espos_voice/protocol/events.h`](api-c/events_8h.md), [`framing.h`](api-c/framing_8h.md) | `espos_voice` | the Wyoming wire protocol |
+
+## How the reference is built
+
+`Doxyfile` at the repository root reads only `components/*/include`
+(`EXTRACT_ALL`, so an undocumented declaration still appears; XML output
+only). The site build runs it through the mkdoxy plugin (`mkdocs.yml`), which
+writes the XML under the site output and renders these pages from it; nothing
+is committed. Doxygen warnings name a header to fix and are printed by the
+build but do not fail it. Standalone, from the repository root:
+
+```sh
+doxygen Doxyfile            # XML under build/doxygen/, warnings on stderr
+```
+
+Building the whole site locally is described in
+[Development → Documentation site](development.md#documentation-site).

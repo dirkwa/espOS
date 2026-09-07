@@ -1,0 +1,42 @@
+{
+  "$comment": "Version 2: the v1 key `name` became `label`; main.c carries the migration step that moves stored values.",
+  "namespace": "app",
+  "version": 2,
+  "title": "Tank sender",
+  "description": "Settings of the custom_settings example: a tank level sender with a simulated sensor.",
+  "keys": [
+    {
+      "name": "label",
+      "type": "string",
+      "default": "Fresh water",
+      "maxLength": 32,
+      "title": "Tank name",
+      "description": "Published as tanks.<tank>.0.name."
+    },
+    {
+      "name": "interval_ms",
+      "type": "int",
+      "default": 2000,
+      "min": 200,
+      "max": 60000,
+      "unit": "ms",
+      "title": "Publish interval",
+      "description": "How often the level is sent."
+    },
+    {
+      "name": "enabled",
+      "type": "bool",
+      "default": true,
+      "title": "Enabled",
+      "description": "Off keeps the device on the network and the web UI up, but publishes nothing."
+    },
+    {
+      "name": "tank",
+      "type": "string",
+      "default": "freshWater",
+      "enum": ["freshWater", "fuel", "blackWater", "wasteWater"],
+      "title": "Tank",
+      "description": "Chooses the Signal K path: tanks.<tank>.0.currentLevel."
+    }
+  ]
+}
