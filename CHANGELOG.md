@@ -184,6 +184,6 @@ machine with captive portal, SignalK discovery, token and delta stream in
 both directions, web UI, device health, signed OTA with rollback, and the
 BLE, NMEA 2000 and voice components. Earlier history is in git.
 
-[Unreleased]: https://github.com/dirkwa/espOS/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/dirkwa/espOS/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/dirkwa/espOS/releases/tag/v0.6.0
+[Unreleased]: https://github.com/espos/espos/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/espos/espos/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/espos/espos/releases/tag/v0.6.0

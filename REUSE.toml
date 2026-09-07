@@ -4,7 +4,7 @@
 version = 1
 SPDX-PackageName = "espOS"
 SPDX-PackageSupplier = "Dirk Wahrheit <dirkwahrheit@gmail.com>"
-SPDX-PackageDownloadLocation = "https://github.com/dirkwa/espOS"
+SPDX-PackageDownloadLocation = "https://github.com/espos/espos"
 
 [[annotations]]
 path = [

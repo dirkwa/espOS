@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report privately through GitHub's security advisories:
-<https://github.com/dirkwa/espOS/security/advisories/new> ("Report a
+<https://github.com/espos/espos/security/advisories/new> ("Report a
 vulnerability" on the Security tab). Do not open a public issue or a
 Discussion for anything that could be exploited on a device that is already
 out there.
