@@ -78,6 +78,39 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Added
 
+- examples: eleven buildable example projects under `components/<c>/examples/`,
+  indexed in `examples/README.md`, each a complete IDF project on the shared
+  prologue (≤ 120 lines of C) naming the SensESP example it replaces. Core:
+  `minimal` (the project a new firmware starts from), `two_phase_boot`,
+  `custom_settings`, `app_endpoint_and_page`, `health_and_led`; Signal K with
+  real peripherals: `analog_input`, `pulse_counter`, `digital_switch`,
+  `listener_relay`, `json_and_meta`, `tls_server`. `main/` stays the
+  all-components reference app.
+- wifi: the manifest names `espressif/esp_wifi_remote` for the ESP32-P4 next
+  to `esp_hosted` (esp_hosted's own manifest declares only `idf`), so a
+  consumer no longer repeats both lines; component manifests exclude example
+  build state from registry packs.
+- docs: documentation site at signalk-espos.github.io/espOS — mkdocs-material
+  (`mkdocs.yml`, `docs/requirements.txt`), strict build on every pull request
+  and deploy from `main` (`.github/workflows/docs.yml`); new pages: home,
+  getting started, examples index, hardware, troubleshooting, roadmap, C API
+  overview; the C API reference is generated from `components/*/include` by
+  Doxygen (`Doxyfile`) through mkdoxy; the changelog page is rendered from this
+  file (`docs/_hooks/root_files.py`).
+- docs: `docs/migration-from-sensesp.md` — the three things that change coming
+  from SensESP, a symbol-by-symbol table (SensESP → espOS today → planned
+  facade), a worked port of SensESP's `analog_input.cpp`, what has no
+  equivalent yet, what espOS adds. Six tutorials under `docs/tutorials/`
+  (first-sensor, add-a-setting, tank-level, app-endpoint-and-ui-tab,
+  ota-from-a-manifest, logs-and-core-dumps), labelled Essential / Newbie /
+  Advanced. `concepts.md` gains "From SensESP's model to espOS's".
+- Template: `scripts/sync_template.sh` generates the espos-template repository
+  from the `minimal` example (espOS as the `espos/` submodule, a five-target
+  CI, README with the ten-minute path); `scripts/build_example.sh` builds one
+  example the way CI does. CI gains an `examples` matrix (every example on
+  esp32c6, `minimal` on all five targets) and size caps for tutorials.
+- build: `sdkconfig.d/debug.defaults` raises the maximum log level to debug so
+  `PUT /api/v1/logs/level` can actually switch to it.
 - `espos_core`: `espos_start()` one-call boot (log → config → httpd → wifi →
   sk → ota → ble, optional stacks only when built), `espos_init()`,
   `espos_start_network()`, `espos_version()`, `espos_app_name()`; Kconfig
