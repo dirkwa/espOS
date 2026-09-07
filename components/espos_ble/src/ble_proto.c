@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Wire-format helpers - see ble_proto.h. Pure C, host-testable.
  */
@@ -116,7 +117,8 @@ espos_ble_write_mode_t espos_ble_parse_write_mode(const void *cjson_obj)
  * 32-bit UUID is shorthand for this with the short value in bytes 0-3. */
 static const uint8_t kBaseUuid[16] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
-    0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb};
+    0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb
+};
 
 static int hex_byte(const char *s)
 {
@@ -147,7 +149,7 @@ bool espos_ble_uuid_parse(const char *str, uint8_t out[16], uint8_t *out_bits)
     }
 
     if (len == 36) {
-        static const int dash[] = {8, 13, 18, 23};
+        static const int dash[] = { 8, 13, 18, 23 };
         for (size_t i = 0; i < 4; i++) {
             if (str[dash[i]] != '-') return false;
         }

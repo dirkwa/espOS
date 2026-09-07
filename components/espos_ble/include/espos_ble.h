@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_ble — BLE gateway: bridges BLE devices to signalk-server's BLE
  * provider API.
@@ -14,7 +15,7 @@
  *
  *   POST /signalk/v2/api/ble/gateway/advertisements
  *        Batched advertisements, sent periodically.
- *   WS   /signalk/v2/api/ble/gateway/ws?token=<jwt>
+ *   WS   /signalk/v2/api/ble/gateway/ws   (Authorization: Bearer <jwt>)
  *        Control protocol: hello/status out, gatt_* commands in.
  *
  * Needs espos_config, espos_httpd and espos_sk started first.
@@ -63,7 +64,7 @@ typedef struct {
  * rather than serve the struct. */
 esp_err_t espos_ble_get_status(espos_ble_status_t *out);
 
-/** Status document for docs/api.md (malloc'ed JSON; caller frees). */
+/** Status document for docs/rest-api.md (malloc'ed JSON; caller frees). */
 esp_err_t espos_ble_status_json(char **out_json);
 
 /** Register GET /api/v1/ble/status and the `ble` SSE snapshot hook. Called by

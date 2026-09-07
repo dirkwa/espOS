@@ -36,6 +36,19 @@ menu "espOS SignalK"
             Mozilla roots; there is no way yet to pin a private CA, so a
             self-signed server certificate will be refused.
 
+    config ESPOS_SK_HTTP_MAX_CONCURRENT
+        int "Concurrent HTTP requests to the server"
+        default 2
+        range 1 8
+        help
+            Upper bound on espos_sk_http_* requests in flight at once --
+            the token machine's and the meta reconciliation's own calls
+            included. Each open request is a socket and, over TLS, roughly
+            20 KB of RAM; a display that fetches one value per widget on a
+            layout change would otherwise open dozens at the same moment.
+            A caller over the limit waits up to its own timeout for a slot
+            and gets ESP_ERR_TIMEOUT if none frees up.
+
     config ESPOS_SK_NOTIFICATIONS
         bool "Device-health notifications"
         default y

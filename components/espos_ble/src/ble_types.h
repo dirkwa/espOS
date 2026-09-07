@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Types shared between the BLE backends and the gateway. Deliberately free of
  * ESP-IDF Bluetooth headers so the protocol logic above can be built and
@@ -21,8 +22,8 @@ extern "C" {
  * second 31. Sized for both so a future active-scan path fits without
  * touching the struct. */
 #define ESPOS_BLE_ADV_DATA_MAX 62
-#define ESPOS_BLE_NAME_MAX 32
-#define ESPOS_BLE_ADDR_LEN 18 /* "AA:BB:CC:DD:EE:FF" + NUL */
+#define ESPOS_BLE_NAME_MAX     32
+#define ESPOS_BLE_ADDR_LEN     18 /* "AA:BB:CC:DD:EE:FF" + NUL */
 
 /* One advertisement, copied out of the stack callback. Values only - no
  * pointers into stack-owned buffers, because these are queued. */

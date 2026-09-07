@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Host harness: config store on emulated NVS + real REST server. The port
  * comes from ESPOS_TEST_PORT (default 18080). run_test.py drives it.
@@ -52,9 +53,15 @@ static void on_change(const char *ns, const char *key, void *arg)
 #include "freertos/semphr.h"
 #include "espos_httpd.h"
 #include "espos_sk_parse.h"
+#include "espos_sk_http.h"
 #include "cJSON.h"
 
-typedef struct { char path[96]; char value[256]; char meta[256]; char src[32]; } rx_t;
+typedef struct {
+    char path[96];
+    char value[256];
+    char meta[256];
+    char src[32];
+} rx_t;
 static rx_t s_rx[64];
 static size_t s_rx_n, s_rx_total;
 static SemaphoreHandle_t s_rx_lock;
@@ -180,6 +187,92 @@ static esp_err_t put_result_get(httpd_req_t *req)
     return espos_httpd_send_json(req, NULL, s_put_result[0] ? s_put_result : "null");
 }
 
+/* ---- HTTP helper probe: espos_sk_http_* against MockSignalK ----
+ *
+ * POST {"op":"get"|"put"|"post"|"delete","path":"/signalk"[,"json":"{…}","max_body":N,"timeout_ms":N,"no_auth":true,"no_report":true]}
+ *      → {"err":"ESP_OK","status":200,"len":123,"truncated":false,"body":"…"}
+ * POST {"op":"value"|"meta","path":"navigation.speedOverGround"} → {"err":…,"json":<value or null>}
+ * POST {"op":"url"|"ws_url","path":"/x"}                          → {"err":…,"url":"…"}
+ *
+ * Blocks the httpd task for the whole request, which is fine in a harness
+ * and exactly what espos_sk_http.h tells an application not to do. */
+static esp_err_t http_probe_post(httpd_req_t *req)
+{
+    char *body = NULL;
+    size_t len = 0;
+    if (espos_httpd_read_body(req, &body, &len) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    cJSON *j = cJSON_ParseWithLength(body, len);
+    free(body);
+    const cJSON *op = cJSON_GetObjectItem(j, "op");
+    const cJSON *path = cJSON_GetObjectItem(j, "path");
+    if (!cJSON_IsString(op) || !cJSON_IsString(path)) {
+        cJSON_Delete(j);
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", "op and path");
+    }
+    const char *o = op->valuestring;
+    const char *p = path->valuestring;
+    cJSON *out = cJSON_CreateObject();
+    if (strcmp(o, "url") == 0 || strcmp(o, "ws_url") == 0) {
+        char url[ESPOS_SK_URL_MAX];
+        esp_err_t e = strcmp(o, "url") == 0 ? espos_sk_url(p, url, sizeof(url)) : espos_sk_ws_url(p, url, sizeof(url));
+        cJSON_AddStringToObject(out, "err", esp_err_to_name(e));
+        cJSON_AddStringToObject(out, "url", e == ESP_OK ? url : "");
+    } else if (strcmp(o, "value") == 0 || strcmp(o, "meta") == 0) {
+        char *js = NULL;
+        esp_err_t e = strcmp(o, "value") == 0 ? espos_sk_get_value(p, &js) : espos_sk_get_meta(p, &js);
+        cJSON_AddStringToObject(out, "err", esp_err_to_name(e));
+        if (js) {
+            cJSON_AddRawToObject(out, "json", js);
+        } else {
+            cJSON_AddNullToObject(out, "json");
+        }
+        free(js);
+    } else {
+        const cJSON *json = cJSON_GetObjectItem(j, "json");
+        const cJSON *mb = cJSON_GetObjectItem(j, "max_body");
+        const cJSON *tm = cJSON_GetObjectItem(j, "timeout_ms");
+        espos_sk_http_opts_t opts = {
+            .max_body = cJSON_IsNumber(mb) ? (size_t)mb->valuedouble : 0,
+            .timeout_ms = cJSON_IsNumber(tm) ? (uint32_t)tm->valuedouble : 0,
+            .no_auth = cJSON_IsTrue(cJSON_GetObjectItem(j, "no_auth")),
+            .no_report_unauthorized = cJSON_IsTrue(cJSON_GetObjectItem(j, "no_report")),
+        };
+        const char *jb = cJSON_IsString(json) ? json->valuestring : NULL;
+        espos_sk_http_resp_t r;
+        esp_err_t e;
+        if (strcmp(o, "get") == 0) {
+            e = espos_sk_http_get(p, &opts, &r);
+        } else if (strcmp(o, "put") == 0) {
+            e = espos_sk_http_put(p, jb, &opts, &r);
+        } else if (strcmp(o, "post") == 0) {
+            e = espos_sk_http_post(p, jb, &opts, &r);
+        } else if (strcmp(o, "delete") == 0) {
+            e = espos_sk_http_delete(p, &opts, &r);
+        } else {
+            cJSON_Delete(out);
+            cJSON_Delete(j);
+            return espos_httpd_send_error(req, "400 Bad Request", "validation", "op");
+        }
+        cJSON_AddStringToObject(out, "err", esp_err_to_name(e));
+        cJSON_AddNumberToObject(out, "status", r.status);
+        cJSON_AddNumberToObject(out, "len", (double)r.len);
+        cJSON_AddBoolToObject(out, "truncated", r.truncated);
+        cJSON_AddStringToObject(out, "body", r.body ? r.body : "");
+        espos_sk_http_resp_free(&r);
+    }
+    cJSON_Delete(j);
+    char *txt = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!txt) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "");
+    }
+    esp_err_t rc = espos_httpd_send_json(req, NULL, txt);
+    free(txt);
+    return rc;
+}
+
 static void harness_sk_inbound_init(void)
 {
     s_rx_lock = xSemaphoreCreateMutex();
@@ -189,6 +282,7 @@ static void harness_sk_inbound_init(void)
         { .uri = "/__harness/sk/sub", .method = HTTP_POST, .handler = sub_post },
         { .uri = "/__harness/sk/put", .method = HTTP_POST, .handler = put_post },
         { .uri = "/__harness/sk/put", .method = HTTP_GET, .handler = put_result_get },
+        { .uri = "/__harness/sk/http", .method = HTTP_POST, .handler = http_probe_post },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         ESP_ERROR_CHECK(espos_httpd_register(&uris[i]));
@@ -218,7 +312,7 @@ void app_main(void)
     ESP_ERROR_CHECK(espos_wifi_start()); /* simulated driver on the host, see port_sim.c */
     ESP_ERROR_CHECK(espos_sk_start());   /* real HTTP; servers from ESPOS_SIM_SK_SERVERS */
     ESP_ERROR_CHECK(espos_ota_start());  /* sim port: downloads counted, no flash */
-    harness_sk_inbound_init();           /* subscriptions + PUT probe endpoints (M7) */
+    harness_sk_inbound_init();           /* subscriptions, PUT and HTTP-helper probe endpoints */
     /* Announce readiness with a raw write loop: stdio gives up on EINTR
      * (which the simulator's tick signals can cause) and would silently drop
      * the line. */

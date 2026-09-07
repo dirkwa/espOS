@@ -1,16 +1,22 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * The gateway: signalk-server's BLE provider protocol.
  *
  * Two channels, both bearing the token espos_sk already holds:
  *   POST .../ble/gateway/advertisements   batched advertisements
- *   WS   .../ble/gateway/ws?token=<jwt>   hello/status out, gatt_* in
+ *   WS   .../ble/gateway/ws               hello/status out, gatt_* in
+ *
+ * Both are addressed through espos_sk_http.h, so the scheme follows the
+ * selected server's tls flag (http/ws, or https/wss) and the token travels
+ * as an Authorization header -- on the WebSocket upgrade too: signalk-server's
+ * gateway upgrade handler accepts it from the header, the query string or a
+ * cookie, and a header keeps the token out of URL logs.
  *
  * Wire-format invariants (contract with signalk-server's ble-schemas.ts):
  *   - snake_case keys throughout;
  *   - advertisement adv_data is UPPERCASE hex, GATT data is lowercase;
- *   - the JWT rides in the WS query string, not a header;
  *   - an empty token means the Authorization header is omitted entirely,
  *     which is valid when the server runs without security.
  */
@@ -26,8 +32,10 @@
 #include "ble_proto.h"
 #include "ble_types.h"
 #include "cJSON.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "esp_crt_bundle.h"
+#endif
 #include "esp_heap_caps.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
@@ -35,6 +43,7 @@
 #include "espos_config.h"
 #include "espos_cfg_keys.h"
 #include "espos_sk.h"
+#include "espos_sk_http.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -42,11 +51,11 @@
 static const char *TAG = "espos_ble";
 
 #define ADV_PATH "/signalk/v2/api/ble/gateway/advertisements"
-#define WS_PATH "/signalk/v2/api/ble/gateway/ws"
+#define WS_PATH  "/signalk/v2/api/ble/gateway/ws"
 
 /* Advertisements per POST. Bounded so one flush cannot build an unbounded
  * JSON document out of a busy marina. */
-#define POST_BATCH_MAX 40
+#define POST_BATCH_MAX CONFIG_ESPOS_BLE_POST_BATCH_MAX
 
 typedef struct {
     bool active;
@@ -174,12 +183,11 @@ static char *build_adv_body(const espos_ble_adv_t *ads, size_t n)
  * only happens once a token exists, so it hides until the device is fully
  * provisioned. Only the gateway task touches these. */
 static espos_ble_adv_t s_post_batch[POST_BATCH_MAX];
-static char s_token[512];
-static char s_auth[540];
-static char s_url[160];
 
 static void post_pending(void)
 {
+    /* Checked here, not left to the helper: a drained batch with nowhere to
+     * post would be lost, so the ring keeps buffering until a server exists. */
     espos_sk_server_t srv;
     if (espos_sk_get_server(&srv) != ESP_OK || !srv.host[0]) return;
 
@@ -194,42 +202,28 @@ static void post_pending(void)
     char *body = build_adv_body(batch, n);
     if (!body) return;
 
-    snprintf(s_url, sizeof(s_url), "http://%s:%u" ADV_PATH, srv.host, srv.port);
-
-    esp_http_client_config_t cfg = {
-        .url = s_url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 3000,
-    };
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    if (!c) { free(body); return; }
-
-    esp_http_client_set_header(c, "Content-Type", "application/json");
-    if (espos_sk_get_token(s_token, sizeof(s_token)) == ESP_OK && s_token[0]) {
-        snprintf(s_auth, sizeof(s_auth), "Bearer %s", s_token);
-        esp_http_client_set_header(c, "Authorization", s_auth);
-    } /* else: no header at all - correct when the server has security off */
-    esp_http_client_set_post_field(c, body, strlen(body));
-
-    esp_err_t err = esp_http_client_perform(c);
-    int status = esp_http_client_get_status_code(c);
-    esp_http_client_cleanup(c);
+    /* espos_sk owns the client: scheme from the server's tls flag, the token
+     * as a Bearer header (no header at all when it is empty - correct when
+     * the server has security off), a fresh handle per call, and a 401/403
+     * reported to the token machine instead of answered with an access
+     * request of our own. The reply body is a status line at most. */
+    espos_sk_http_opts_t opts = { .timeout_ms = 3000, .max_body = 512 };
+    espos_sk_http_resp_t r;
+    esp_err_t err = espos_sk_http_post(ADV_PATH, body, &opts, &r);
     free(body);
 
-    if (err == ESP_OK && status == 200) {
+    if (err == ESP_OK && r.status == 200) {
         g.adv_posted += n;
         g.post_ok++;
     } else {
         g.post_fail++;
-        if (status == 401 || status == 403) {
-            /* Let espos_sk decide what to do about the token rather than
-             * re-running an access request of our own. */
-            ESP_LOGW(TAG, "POST rejected (%d) - reporting to espos_sk", status);
-            espos_sk_report_unauthorized();
+        if (r.status == 401 || r.status == 403) {
+            ESP_LOGW(TAG, "POST rejected (%d) - espos_sk is re-checking the token", r.status);
         } else {
-            ESP_LOGW(TAG, "POST failed: err=%s status=%d", esp_err_to_name(err), status);
+            ESP_LOGW(TAG, "POST failed: err=%s status=%d", esp_err_to_name(err), r.status);
         }
     }
+    espos_sk_http_resp_free(&r);
 }
 
 /* ---------------------------------------------------------------- */
@@ -426,7 +420,10 @@ static void handle_gatt_subscribe(cJSON *doc)
     size_t limit = g.max_gatt < MAX_SESSIONS ? g.max_gatt : MAX_SESSIONS;
     session_t *s = NULL;
     for (size_t i = 0; i < limit; i++) {
-        if (!g.sessions[i].active) { s = &g.sessions[i]; break; }
+        if (!g.sessions[i].active) {
+            s = &g.sessions[i];
+            break;
+        }
     }
     if (!s) {
         sess_unlock();
@@ -508,7 +505,10 @@ static void handle_gatt_write(cJSON *doc)
 
     if (!sess_lock()) return;
     session_t *s = session_by_id(sid->valuestring);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
 
     uint8_t buf[ESPOS_BLE_WRITE_DATA_MAX];
     int len = espos_ble_hex_decode(data->valuestring, buf, sizeof(buf));
@@ -531,7 +531,10 @@ static void handle_gatt_close(cJSON *doc)
     if (!cJSON_IsString(sid)) return;
     if (!sess_lock()) return;
     session_t *s = session_by_id(sid->valuestring);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
     espos_ble_gatt_disconnect(s->conn_handle);
     session_free(s);
     sess_unlock();
@@ -543,9 +546,12 @@ static void handle_ws_text(const char *data, size_t len)
     if (!doc) return;
     const cJSON *type = cJSON_GetObjectItemCaseSensitive(doc, "type");
     if (cJSON_IsString(type)) {
-        if (!strcmp(type->valuestring, "gatt_subscribe")) handle_gatt_subscribe(doc);
-        else if (!strcmp(type->valuestring, "gatt_write")) handle_gatt_write(doc);
-        else if (!strcmp(type->valuestring, "gatt_close")) handle_gatt_close(doc);
+        if (!strcmp(type->valuestring, "gatt_subscribe"))
+            handle_gatt_subscribe(doc);
+        else if (!strcmp(type->valuestring, "gatt_write"))
+            handle_gatt_write(doc);
+        else if (!strcmp(type->valuestring, "gatt_close"))
+            handle_gatt_close(doc);
         /* hello_ack needs no action beyond confirming the server heard us. */
     }
     cJSON_Delete(doc);
@@ -553,7 +559,8 @@ static void handle_ws_text(const char *data, size_t len)
 
 static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    (void)arg; (void)base;
+    (void)arg;
+    (void)base;
     esp_websocket_event_data_t *ev = data;
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
@@ -575,10 +582,18 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
-/* Host:port the live control socket was opened against, so a server change is
- * noticed rather than silently ignored for the lifetime of the handle. */
+/* The server the live control socket was opened against - host, port and
+ * scheme - so a change is noticed rather than silently ignored for the
+ * lifetime of the handle. */
 static char s_ws_host[ESPOS_SK_HOST_MAX];
 static uint16_t s_ws_port;
+static bool s_ws_tls;
+
+/* Upgrade headers and the token they are built from. Static, like the POST
+ * scratch: 2 KB is too much for the gateway task's stack, and only that task
+ * runs here. esp_websocket_client_init() copies the headers. */
+static char s_ws_token[ESPOS_SK_TOKEN_MAX];
+static char s_ws_headers[ESPOS_SK_TOKEN_MAX + 32];
 
 static void ws_connect(void)
 {
@@ -588,42 +603,54 @@ static void ws_connect(void)
 
     if (g.ws) {
         /* Already connected to this server: nothing to do. Pointed at a
-         * different one (the user re-pinned it, or discovery moved): tear the
-         * old socket down so the code below re-dials the new address. */
-        if (strcmp(s_ws_host, srv.host) == 0 && s_ws_port == srv.port) return;
-        ESP_LOGI(TAG, "control WS server changed %s:%u -> %s:%u",
-                 s_ws_host, s_ws_port, srv.host, srv.port);
+         * different one (the user re-pinned it, discovery moved, or sk.tls
+         * flipped): tear the old socket down so the code below re-dials. */
+        if (strcmp(s_ws_host, srv.host) == 0 && s_ws_port == srv.port && s_ws_tls == srv.tls) return;
+        ESP_LOGI(TAG, "control WS server changed %s://%s:%u -> %s://%s:%u",
+                 s_ws_tls ? "wss" : "ws", s_ws_host, s_ws_port,
+                 srv.tls ? "wss" : "ws", srv.host, srv.port);
         esp_websocket_client_stop(g.ws);
         esp_websocket_client_destroy(g.ws);
         g.ws = NULL;
         g.ws_connected = false;
     }
 
-    s_token[0] = '\0';
-    espos_sk_get_token(s_token, sizeof(s_token));
+    char url[ESPOS_SK_URL_MAX];
+    if (espos_sk_ws_url(WS_PATH, url, sizeof(url)) != ESP_OK) return;
 
-    /* The JWT rides in the query string: the server reads it there, and a raw
-     * WS upgrade carries no Authorization header anyway. */
-    char *url = malloc(700);
-    if (!url) return;
-    snprintf(url, 700, "ws://%s:%u" WS_PATH "?token=%s", srv.host, srv.port, s_token);
+    /* The token travels as an upgrade header, as on the delta stream;
+     * signalk-server's gateway handler reads it from the header, the query
+     * string or a cookie. No token, no header: correct against an open server. */
+    s_ws_token[0] = '\0';
+    espos_sk_get_token(s_ws_token, sizeof(s_ws_token));
+    if (s_ws_token[0]) {
+        snprintf(s_ws_headers, sizeof(s_ws_headers), "Authorization: Bearer %s\r\n", s_ws_token);
+    } else {
+        s_ws_headers[0] = '\0';
+    }
 
     esp_websocket_client_config_t cfg = {
         .uri = url,
+        .headers = s_ws_headers[0] ? s_ws_headers : NULL,
         .task_stack = 6144,
         /* Roomy enough that a large gatt_subscribe arrives in one frame; the
          * implementation this replaces used 1 KB and could not reassemble. */
-        .buffer_size = 4096,
+        .buffer_size = CONFIG_ESPOS_BLE_WS_BUFFER,
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 10000,
+#if CONFIG_ESPOS_SK_TLS
+        /* wss verifies against the same bundled roots as the delta stream and
+         * the HTTP helper (sk_http.c): a self-signed server is refused. */
+        .crt_bundle_attach = srv.tls ? esp_crt_bundle_attach : NULL,
+#endif
     };
     g.ws = esp_websocket_client_init(&cfg);
-    free(url);
     if (!g.ws) return;
     esp_websocket_register_events(g.ws, WEBSOCKET_EVENT_ANY, ws_event, NULL);
     esp_websocket_client_start(g.ws);
     snprintf(s_ws_host, sizeof(s_ws_host), "%s", srv.host);
     s_ws_port = srv.port;
+    s_ws_tls = srv.tls;
 }
 
 /* ---------------------------------------------------------------- */
@@ -635,7 +662,10 @@ static void on_gatt_connected(int h, void *arg)
     (void)arg;
     if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
     run_subscribes(s);
     run_init_writes(s);
     sess_unlock();
@@ -646,7 +676,10 @@ static void on_gatt_disconnected(int h, int reason, void *arg)
     (void)arg;
     if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
     char sid[sizeof(s->session_id)];
     snprintf(sid, sizeof(sid), "%s", s->session_id);
     session_free(s);
@@ -662,7 +695,10 @@ static void on_gatt_notify(int h, const char *uuid, const uint8_t *data,
     char sid[sizeof(g.sessions[0].session_id)];
     if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
     snprintf(sid, sizeof(sid), "%s", s->session_id);
     sess_unlock();
 
@@ -692,7 +728,10 @@ static void on_gatt_write_done(int h, const char *uuid, bool ok, void *arg)
     (void)arg;
     if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s || s->init_index >= s->init_count) { sess_unlock(); return; }
+    if (!s || s->init_index >= s->init_count) {
+        sess_unlock();
+        return;
+    }
 
     /* Only a completion for the write we are actually waiting on advances the
      * chain. A server-driven gatt_write during initialisation completes on the
@@ -724,7 +763,10 @@ static void on_gatt_error(int h, const char *error, void *arg)
     (void)arg;
     if (!sess_lock()) return;
     session_t *s = session_by_handle(h);
-    if (!s) { sess_unlock(); return; }
+    if (!s) {
+        sess_unlock();
+        return;
+    }
     char sid[sizeof(s->session_id)];
     snprintf(sid, sizeof(sid), "%s", s->session_id);
     session_free(s);
@@ -814,11 +856,20 @@ esp_err_t espos_ble_start(void)
     int32_t v;
     g.active_scan = false;
     espos_config_get_bool(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_ACTIVE_SCAN, &g.active_scan);
-    v = 320;  espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_SCAN_INT_MS, &v);   g.scan_int = (uint32_t)v;
-    v = 160;  espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_SCAN_WIN_MS, &v);   g.scan_win = (uint32_t)v;
-    v = 2000; espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_POST_INT_MS, &v);   g.post_int = (uint32_t)v;
-    v = 30000;espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_STATUS_INT_MS, &v); g.status_int = (uint32_t)v;
-    v = 3;    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_MAX_GATT_SESS, &v);
+    v = 320;
+    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_SCAN_INT_MS, &v);
+    g.scan_int = (uint32_t)v;
+    v = 160;
+    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_SCAN_WIN_MS, &v);
+    g.scan_win = (uint32_t)v;
+    v = 2000;
+    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_POST_INT_MS, &v);
+    g.post_int = (uint32_t)v;
+    v = 30000;
+    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_STATUS_INT_MS, &v);
+    g.status_int = (uint32_t)v;
+    v = 3;
+    espos_config_get_i32(ESPOS_CFG_NS_BLE, ESPOS_CFG_BLE_MAX_GATT_SESS, &v);
     if (v < 0) v = 0;
     if (v > MAX_SESSIONS) v = MAX_SESSIONS;
     g.max_gatt = (uint32_t)v;
@@ -839,8 +890,14 @@ esp_err_t espos_ble_start(void)
     g.lock = xSemaphoreCreateMutex();
     g.sess_lock = xSemaphoreCreateMutex();
     if (!g.lock || !g.sess_lock) {
-        if (g.lock) { vSemaphoreDelete(g.lock); g.lock = NULL; }
-        if (g.sess_lock) { vSemaphoreDelete(g.sess_lock); g.sess_lock = NULL; }
+        if (g.lock) {
+            vSemaphoreDelete(g.lock);
+            g.lock = NULL;
+        }
+        if (g.sess_lock) {
+            vSemaphoreDelete(g.sess_lock);
+            g.sess_lock = NULL;
+        }
         free(g.storage);
         g.storage = NULL;
         return ESP_ERR_NO_MEM;
@@ -869,11 +926,11 @@ esp_err_t espos_ble_start(void)
 
     g.running = true;
     g.task_exited = false;
-    /* 8 KB: cJSON serialisation plus esp_http_client's own frame need real
-     * headroom, and a stack-protection fault here is a reboot loop rather
-     * than a degraded mode. The big scratch buffers are static (see
+    /* 8 KB by default: cJSON serialisation plus the HTTP helper's own frame
+     * need real headroom, and a stack-protection fault here is a reboot loop
+     * rather than a degraded mode. The big scratch buffers are static (see
      * s_post_batch) so this covers the call depth, not the payloads. */
-    if (xTaskCreate(gateway_task, "espos_ble", 8192, NULL, 5, &g.task) != pdPASS) {
+    if (xTaskCreate(gateway_task, "espos_ble", CONFIG_ESPOS_BLE_STACK_SIZE, NULL, 5, &g.task) != pdPASS) {
         g.running = false;
         espos_ble_scan_stop();
         vSemaphoreDelete(g.lock);
@@ -934,8 +991,14 @@ esp_err_t espos_ble_stop(void)
         sess_unlock();
     }
 
-    if (g.lock) { vSemaphoreDelete(g.lock); g.lock = NULL; }
-    if (g.sess_lock) { vSemaphoreDelete(g.sess_lock); g.sess_lock = NULL; }
+    if (g.lock) {
+        vSemaphoreDelete(g.lock);
+        g.lock = NULL;
+    }
+    if (g.sess_lock) {
+        vSemaphoreDelete(g.sess_lock);
+        g.sess_lock = NULL;
+    }
     free(g.storage);
     g.storage = NULL;
     memset(&g.q, 0, sizeof(g.q));

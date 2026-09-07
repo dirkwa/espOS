@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * GET /api/v1/ble/status plus the `ble` SSE event. Registered on espOS's own
  * HTTP server rather than a second instance - there is no need for port
@@ -73,7 +74,7 @@ static void sse_hello(int client, void *arg)
 esp_err_t espos_ble_register_api(void)
 {
     static const httpd_uri_t uris[] = {
-        {.uri = "/api/v1/ble/status", .method = HTTP_GET, .handler = status_get},
+        { .uri = "/api/v1/ble/status", .method = HTTP_GET, .handler = status_get },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         esp_err_t err = espos_httpd_register(&uris[i]);

@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Bluedroid GATT client - see ble_gattc.h.
  *
@@ -29,7 +30,7 @@ static const char *TAG = "espos_ble_gattc";
 /* Client Characteristic Configuration Descriptor; writing 0x0001 to it is what
  * actually turns notifications on, over and above register_for_notify(). */
 static const uint16_t kCccdUuid = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
-static const uint8_t kNotifyEnable[2] = {0x01, 0x00};
+static const uint8_t kNotifyEnable[2] = { 0x01, 0x00 };
 
 #define MAX_CHARS 16
 
@@ -160,7 +161,10 @@ int espos_ble_gatt_connect(const char *mac, const char *service_uuid)
 
     conn_slot_t *s = NULL;
     for (size_t i = 0; i < ESPOS_BLE_GATTC_MAX_CONN; i++) {
-        if (!s_slots[i].in_use) { s = &s_slots[i]; break; }
+        if (!s_slots[i].in_use) {
+            s = &s_slots[i];
+            break;
+        }
     }
     if (!s) {
         ESP_LOGW(TAG, "no free connection slot (max %d)", ESPOS_BLE_GATTC_MAX_CONN);
@@ -219,7 +223,7 @@ esp_err_t espos_ble_gatt_subscribe(int conn_handle, const char *char_uuid)
     /* And enable them at the peripheral by writing the CCCD. */
     uint16_t count = 1;
     esp_gattc_descr_elem_t descr;
-    esp_bt_uuid_t cccd = {.len = ESP_UUID_LEN_16, .uuid = {.uuid16 = kCccdUuid}};
+    esp_bt_uuid_t cccd = { .len = ESP_UUID_LEN_16, .uuid = { .uuid16 = kCccdUuid } };
     esp_gatt_status_t st = esp_ble_gattc_get_descr_by_char_handle(
         s_gattc_if, s->conn_id, handle, cccd, &descr, &count);
     if (st == ESP_GATT_OK && count > 0) {

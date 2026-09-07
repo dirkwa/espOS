@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Bluedroid GATT client, shared by both backends: the ESP32-P4 (HCI at the C6
  * over esp_hosted) and native Bluedroid targets differ only in how the
@@ -28,7 +29,7 @@ extern "C" {
 #endif
 
 /* Bluedroid's own ceiling for simultaneous GATT connections. */
-#define ESPOS_BLE_GATTC_MAX_CONN 3
+#define ESPOS_BLE_GATTC_MAX_CONN CONFIG_ESPOS_BLE_GATTC_MAX_CONN
 
 /* Register with Bluedroid. Call once after esp_bluedroid_enable(). */
 esp_err_t espos_ble_gattc_init(const espos_ble_callbacks_t *cb);
