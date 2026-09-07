@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
-## espos_core component manifest: registry metadata for signalk-espos/espos_core.
+## espos_net component manifest: registry metadata for signalk-espos/espos_net.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
-description: "One-call boot: espos_start() brings log, config, HTTP, the network seam, WiFi and the optional stacks up in order"
-url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_core"
+description: "Network seam: default route across transports, hostname, device id, mDNS responder, /net/status"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_net"
 repository: "https://github.com/signalk-espOS/espOS.git"
-documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/concepts.md"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/net.md"
 issues: "https://github.com/signalk-espOS/espOS/issues"
 license: "Apache-2.0"
 maintainers:
@@ -16,8 +16,9 @@ tags:
   - marine
   - esp-idf
   - espos
-  - runtime
-  - boot
+  - network
+  - mdns
+  - hostname
 files:
   exclude:
     - "build/**/*"
@@ -37,31 +38,22 @@ dependencies:
   # firmware that vendors espOS as a submodule) use the checkout next to this
   # file instead of downloading espos/<name> from the registry; a copy fetched
   # from the registry has no such directory and the field is ignored there.
-  # espos_sk, espos_ota and espos_ble are optional and deliberately absent:
-  # a firmware that wants them lists them, and espos_start() picks them up.
-  signalk-espos/espos_log:
-    version: "^0.7.0"
-    override_path: "../espos_log"
   signalk-espos/espos_config:
     version: "^0.7.0"
     override_path: "../espos_config"
-  signalk-espos/espos_health:
-    version: "^0.7.0"
-    override_path: "../espos_health"
   signalk-espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
-  signalk-espos/espos_net:
-    version: "^0.7.0"
-    override_path: "../espos_net"
-  # WiFi on every chip with a radio or a co-processor; the 802.15.4-only
-  # H-series has neither and espos_wifi cannot build there (the CMakeLists
-  # applies the same rule to its REQUIRES).
-  signalk-espos/espos_wifi:
-    version: "^0.7.0"
-    override_path: "../espos_wifi"
-    rules:
-      - if: "target not in [esp32h2, esp32h21, esp32h4]"
   signalk-espos/espos_event:
     version: "^0.7.0"
     override_path: "../espos_event"
+  # cJSON, exact-pinned like every other registry dependency here.
+  espressif/cjson: "==1.7.19~2"
+  # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.
+  # The responder lives here (src/mdns.c, include/espos_mdns.h); espos_sk
+  # browses through it and gets the headers via this component's REQUIRES.
+  # Not on the linux target, where the component does not exist.
+  espressif/mdns:
+    version: "==1.11.3"
+    rules:
+      - if: "target != linux"

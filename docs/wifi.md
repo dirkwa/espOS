@@ -1,9 +1,15 @@
 # WiFi (`espos_wifi`)
 
 Station connection manager with an explicit status model, a priority list of
-networks, exponential backoff and a SoftAP provisioning portal. Configuration
-is the `wifi` namespace (see the schema); status is `GET /api/v1/wifi/status`
-and the `wifi` SSE event.
+networks, exponential backoff, DHCP or static addressing and a SoftAP
+provisioning portal. Configuration is the `wifi` namespace (see the schema);
+status is `GET /api/v1/wifi/status` and the `wifi` SSE event.
+
+The station is one transport of [`espos_net`](net.md): it reports its link
+there, and "is the network up" is `espos_net_is_up()`, not this component's
+state. The device id, the hostname (`net.hostname`, until 0.7
+`wifi.hostname`) and the mDNS responder are `espos_net`'s. `espos_wifi_start()`
+requires `espos_net_start()` to have run.
 
 ## State machine
 
@@ -65,6 +71,21 @@ them, PMF capable). Passwords must be 8..63 characters — shorter ones are
 not valid WPA and the slot is skipped with a warning. Empty password = open
 network.
 
+## Addressing
+
+`wifi.ip_mode` is `dhcp` (default) or `static`; with `static`, `wifi.ip`
+and `wifi.netmask` are required, `wifi.gateway`, `wifi.dns0` and `wifi.dns1`
+optional (empty `dns0` = the gateway, empty `dns1` = none). The port applies
+them to the station netif before every `esp_wifi_connect()`
+(`esp_netif_dhcpc_stop` + `esp_netif_set_ip_info` + `esp_netif_set_dns_info`,
+or `esp_netif_dhcpc_start` back to DHCP), so a change takes effect at the
+next (re)connection or reboot — the keys are flagged restart-required for
+that reason. An `ip` or `netmask` that does not parse falls back to DHCP
+with one warning in the log rather than leave the device unreachable. A
+static address still raises `IP_EVENT_STA_GOT_IP` on association, so the
+state machine, `espos_net` and everything above them see exactly what they
+see with DHCP.
+
 ## Portal (SoftAP provisioning)
 
 The station keeps retrying while the portal is up — the portal never
@@ -78,7 +99,8 @@ replaces the station, it runs alongside (APSTA).
 | connected                          | down                                      |
 | `portal_enabled = false`           | never                                     |
 
-SSID `portal_ssid` (default `espOS-<last 4 hex of MAC>`), open unless
+SSID `portal_ssid` (default `espOS-<id>`, the device id being the last 4 hex
+of the base MAC, [net.md](net.md)), open unless
 `portal_psk` (≥ 8 chars) is set. The AP is `192.168.4.1/24` with DHCP; a
 tiny DNS responder answers every name with that address and the usual OS
 probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`,
@@ -118,8 +140,11 @@ esptool.py --port /dev/ttyACM0 write_flash 0x9000 wifi.nvs.bin
 
 `ssid/bssid/channel/rssi` appear from `obtaining_ip` on, `ip/netmask/gateway/
 connected_s` only in `connected`, `backoff_ms` only in `backoff`, `portal.ip`
-and `portal.clients` only while the portal is active. The same document is
-pushed as the `wifi` SSE event on every change (and once on connect).
+and `portal.clients` only while the portal is active. `hostname` is
+`net.hostname` as `espos_net` applied it at boot. The same document is
+pushed as the `wifi` SSE event on every change (and once on connect). The
+transport-neutral view — is there a route, on which interface, with which
+address — is `GET /api/v1/net/status` ([net.md](net.md)).
 
 ## Co-processor link watchdog (esp_hosted boards)
 
@@ -184,95 +209,11 @@ the valuable half.
 
 ## mDNS
 
-`espos_wifi` runs the device's mDNS responder (`espos_mdns.h`, `src/mdns.c`).
-It answers for **`<hostname>.local`** — `wifi.hostname`, default
-`espos-<last 4 hex of MAC>` — with that name as the instance name, and
-advertises two services on `httpd.port`:
-
-| Service        | TXT                                                                                    | For                                         |
-|----------------|----------------------------------------------------------------------------------------|---------------------------------------------|
-| `_http._tcp`   | `path=/`                                                                               | browsers, "open the device" in any mDNS app |
-| `_espos._tcp`  | `v=<app version>` `app=<app name>` `espos=<espOS version>` `target=<chip>` `id=<short id>` `api=/api/v1` `auth=0` | finding every espOS device with one query and knowing what it is before fetching anything |
-
-`v` and `app` are IDF's `PROJECT_VER` / `PROJECT_NAME` (the values
-`esp_app_desc_t` carries, `git describe` for the version in a tagged
-checkout), compiled in by the component's `CMakeLists.txt`; `espos` is
-espOS's own `version.txt` (the manifest version in a registry-installed
-copy). `id` is `espos_wifi_short_id()`. `auth=0` says the REST API takes no
-credentials; it flips when it grows some.
-
-`espos_wifi_start()` brings the responder up right after the driver — before
-the station has an address. That is deliberate: the responder accepts
-records without a link and announces them itself on GOT_IP, and doing the
-work there rather than in a `NETWORK_UP` handler keeps the event loop free
-(`mdns_hostname_set()` waits for the responder task; `mdns_service_add()`
-takes a lock that task holds while it parses packets — neither belongs in a
-handler). The link state is tracked separately:
-**`ESPOS_EVENT_MDNS_READY`** is posted on every `NETWORK_UP` once the
-responder runs, and `espos_mdns_is_ready()` answers true exactly while a
-query or an announcement can reach the network (false again on
-`NETWORK_DOWN`). SignalK discovery starts browsing on that signal.
-
-### Registering a service
-
-```c
-#include "espos_mdns.h"
-
-static const char *const txt[] = { "schema=1", "widgets=label,value,toggle", "api=/layout,/hello" };
-ESP_ERROR_CHECK(espos_mdns_add_service("_signalk-player", "_tcp", 8081, txt, 3));
-/* ... */
-espos_mdns_remove_service("_signalk-player", "_tcp");
-```
-
-* Callable **any time**, from any application task or `app_main()` — before
-  `espos_start()`, before WiFi, before the responder exists. The entry waits
-  in a table of `CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES` (default 6) slots and
-  is registered when the responder comes up; afterwards it is registered at
-  once. There is no readiness to wait for and nothing to retry.
-* Adding a `(type, proto)` that is already in the table replaces its port
-  and TXT: the old record is withdrawn, the new one announced.
-* Limits (refused, never truncated): type < 32 chars starting with `_`,
-  proto `_tcp` or `_udp`, up to 8 TXT items totalling 256 bytes with their
-  separators. `"k"` without `=` is a flag item (empty value).
-* Returns `ESP_ERR_INVALID_ARG` / `ESP_ERR_INVALID_SIZE` for a malformed
-  request, `ESP_ERR_NO_MEM` when the table is full, and the responder's own
-  error when it refuses the record (its ceiling is `CONFIG_MDNS_MAX_SERVICES`,
-  default 10: the two built-ins, these slots and anything a component adds
-  with `mdns_service_add()` directly all count) — then the entry is
-  dropped, not queued. `ESP_ERR_NOT_SUPPORTED` when built without the
-  responder.
-* Threading: `espos_mdns_start()`, `espos_mdns_add_service()` and
-  `espos_mdns_remove_service()` run on the caller's task and may block for a
-  few milliseconds on the responder — not from an `ESPOS_EVENT` handler or a
-  URI handler. `espos_mdns_is_ready()` only takes the table mutex.
-
-What this replaces in consumers: a 2-second retry loop around
-`mdns_service_add()` that watched for `ESP_ERR_INVALID_STATE` until espOS
-happened to have started the responder (the P4 cockpit's
-`mdns_announce.cpp`) becomes the one call above. `espos_n2k` keeps its own
-`mdns_service_add()` in the candump server: that component deliberately has
-no espOS dependencies, and the responder is the same one either way.
-
-### Configuration
-
-* `CONFIG_ESPOS_WIFI_MDNS` (default y) — the responder and the whole API.
-  Off saves the responder task and its sockets (~4 KB) and makes the device
-  reachable by address only; SignalK discovery cannot run without it and
-  `sk.server_host` must be set. Not available on the linux target
-  (`espressif/mdns` does not exist there), where `espos_mdns_*` compile to
-  stubs returning `ESP_ERR_NOT_SUPPORTED` / `false`.
-* `CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES` (default 6, 1..16) — application
-  service slots.
-* `wifi.hostname` (restart required) — the `.local` name.
-
-### Why here, and where it goes
-
-mDNS follows an interface, not a radio. It sits in `espos_wifi` because the
-WiFi station is the only interface espOS has today and the responder needs
-that component's netif and event loop to exist; when Ethernet arrives the
-file and the header move, unchanged, to a transport-neutral `espos_net`
-that `espos_wifi` and an Ethernet driver both feed. Nothing in the API names
-WiFi, so that move costs consumers an include path at most.
+The responder moved to [`espos_net`](net.md#mdns) with the network seam,
+API unchanged (`espos_mdns.h`, `espos_mdns_add_service()`,
+`ESPOS_EVENT_MDNS_READY`): it follows whatever interface carries the default
+route, and the knobs are `CONFIG_ESPOS_NET_MDNS` and
+`CONFIG_ESPOS_NET_MDNS_MAX_SERVICES`. The `.local` name is `net.hostname`.
 
 ## Design notes
 
@@ -333,5 +274,11 @@ WiFi, so that move costs consumers an include path at most.
   out), an application that must survive it unattended should reboot on
   its own liveness signal — real traffic, not `ESPOS_WIFI_ST_CONNECTED`,
   which keeps reporting success.
+* The state machine posts nothing itself: on every status change
+  `espos_wifi.c` queues a report for `espos_net` and delivers it from the
+  drainer, outside the SM lock (`espos_net_report()` takes its own lock and
+  runs subscriber callbacks). `espos_net` decides whether the default route
+  changed and posts `NETWORK_UP`/`NETWORK_DOWN`; the port's `GOT_IP` handler
+  only logs the "connected to … web UI" line.
 * Not yet: BLE provisioning (`espressif/network_provisioning`, planned as a
-  follow-up), country code, static IP.
+  follow-up), country code.

@@ -21,7 +21,18 @@
 #include "espos_health.h"
 #include "espos_httpd.h"
 #include "espos_log.h"
+#include "espos_net.h"
+#include "espos_time.h"
+/* espos_wifi is in the build on every target with a radio (or, ESP32-P4, a
+ * co-processor) and excluded on the 802.15.4-only H-series; CONFIG_ESPOS_WIFI
+ * lets a firmware that links it (an Ethernet gateway on a WiFi chip) leave
+ * the station off without touching the component list. */
+#if ESPOS_HAVE_WIFI && CONFIG_ESPOS_WIFI
+#define START_WIFI 1
 #include "espos_wifi.h"
+#else
+#define START_WIFI 0
+#endif
 #if ESPOS_HAVE_SK
 #include "espos_sk.h"
 #endif
@@ -64,7 +75,7 @@ static struct {
 } s = { .health_watchdog = true }; /* the default when espos_init() is called without espos_start() */
 
 /* netDown is a warning and never fatal, by construction. A router reboot, an
- * access-point roam or a trip out of range are normal, and espos_wifi
+ * access-point roam or a trip out of range are normal, and the transport
  * reconnects by itself; a restart would throw away the UI, every socket and
  * any unsaved state to fix nothing, and while the network is marginal it
  * would repeat every strike window — a consumer once shipped exactly that
@@ -79,7 +90,7 @@ static void on_network(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (id == ESPOS_EVENT_NETWORK_UP) {
         (void)espos_health_report_ex("netDown", ESPOS_HEALTH_NORMAL, "", 0);
     } else if (id == ESPOS_EVENT_NETWORK_DOWN) {
-        (void)espos_health_report_ex("netDown", ESPOS_HEALTH_WARN, "station link lost", 0);
+        (void)espos_health_report_ex("netDown", ESPOS_HEALTH_WARN, "network link lost", 0);
     }
 }
 
@@ -159,10 +170,29 @@ esp_err_t espos_start_network(void)
     if (s.network_started) {
         return ESP_OK;
     }
-    /* httpd before wifi: the portal's page must exist when the AP comes up.
-     * wifi before sk: discovery is mDNS. ota and ble need both. */
+    /* httpd before net: /net/status and the portal's page live on it. net
+     * before any transport: it owns the hostname the transport's DHCP request
+     * carries, and the mDNS responder. time after net and before every
+     * transport, so the first NETWORK_UP — whichever transport produces it —
+     * is the one that starts SNTP. wifi (when built and enabled) before
+     * sk: discovery is mDNS and needs a link. ota and ble need all of it. */
     STAGE(espos_httpd_start());
+    STAGE(espos_net_start());
+    /* Not a STAGE: a device that boots without knowing the time still does
+     * everything else, and the log says which it is. The alternative — refusing
+     * to come up because an NTP client could not be armed — would be a device
+     * bricked by a configuration typo. */
+    {
+        esp_err_t terr = espos_time_start();
+        if (terr != ESP_OK) {
+            ESP_LOGE(TAG, "espos_time_start: %s — running without a wall clock", esp_err_to_name(terr));
+        }
+    }
+#if START_WIFI
     STAGE(espos_wifi_start());
+#else
+    ESP_LOGW(TAG, "no WiFi in this build: the network comes up only if a transport reports into espos_net");
+#endif
 #if ESPOS_HAVE_SK
     /* Shows up in the server's access-request list as "<app> <hostname>"
      * unless sk.description is set — the operator approving it sees which

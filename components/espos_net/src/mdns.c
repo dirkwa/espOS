@@ -11,16 +11,18 @@
  * waits for the responder's task and mdns_service_add() takes a lock that
  * task holds while it parses packets, and an ESPOS_EVENT handler must do
  * neither. Nothing is lost by starting early — the responder accepts records
- * before the station has an address and announces them itself on GOT_IP
+ * before any interface has an address and announces them itself on GOT_IP
  * (it registers its own IP_EVENT handler), which is how SignalK discovery
  * has always used it. The event handlers here only track whether there is a
- * link to announce on and post MDNS_READY.
+ * link to announce on and post MDNS_READY. Which interface that is does not
+ * matter here: espos_net posts NETWORK_UP for whatever carries the default
+ * route, and the responder follows the netifs by itself.
  */
 #include "sdkconfig.h"
 
 #include "espos_mdns.h"
 
-#if CONFIG_ESPOS_WIFI_MDNS
+#if CONFIG_ESPOS_NET_MDNS
 
 #include <stdio.h>
 #include <string.h>
@@ -33,7 +35,7 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_event.h"
-#include "espos_wifi.h"
+#include "espos_net.h"
 
 static const char *TAG = "espos_mdns";
 
@@ -66,7 +68,7 @@ static struct {
     bool up;      /* responder running, hostname set, built-ins registered */
     bool net_up;  /* NETWORK_UP seen and no NETWORK_DOWN since */
     bool subscribed;
-    service_t services[CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES];
+    service_t services[CONFIG_ESPOS_NET_MDNS_MAX_SERVICES];
 } s;
 
 /* The mutex is created on first use rather than in espos_mdns_start():
@@ -144,7 +146,7 @@ static void register_builtin(void)
         { "app", ESPOS_MDNS_PROJECT_NAME },
         { "espos", ESPOS_MDNS_ESPOS_VERSION },
         { "target", CONFIG_IDF_TARGET },
-        { "id", espos_wifi_short_id() },
+        { "id", espos_net_short_id() },
         { "api", "/api/v1" },
         { "auth", "0" },
     };
@@ -174,11 +176,12 @@ static void on_network(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 esp_err_t espos_mdns_start(void)
 {
-    /* Needs the netif and the default event loop, both espos_wifi's driver
-     * init; the status call is the same probe espos_sk_start() uses. */
-    espos_wifi_status_t ws;
-    if (espos_wifi_get_status(&ws) != ESP_OK) {
-        ESP_LOGE(TAG, "espos_mdns_start: call espos_wifi_start() first (or espos_start())");
+    /* Needs the netif layer and the default event loop, both espos_net's port
+     * init, and the hostname espos_net owns; the status call is the same
+     * probe espos_sk_start() uses. */
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_mdns_start: call espos_net_start() first (or espos_start())");
         return ESP_ERR_INVALID_STATE;
     }
     lock();
@@ -187,7 +190,7 @@ esp_err_t espos_mdns_start(void)
     if (up) {
         return ESP_OK;
     }
-    const char *hostname = ws.hostname[0] ? ws.hostname : "espos";
+    const char *hostname = ns.hostname[0] ? ns.hostname : "espos";
     /* ESP_OK when a component brought the responder up before us (1.11.x);
      * INVALID_STATE is what older releases answered for the same thing. */
     esp_err_t err = mdns_init();
@@ -215,7 +218,7 @@ esp_err_t espos_mdns_start(void)
 
     lock();
     register_builtin();
-    for (size_t i = 0; i < CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES; i++) {
+    for (size_t i = 0; i < CONFIG_ESPOS_NET_MDNS_MAX_SERVICES; i++) {
         if (s.services[i].used && apply_locked(&s.services[i]) != ESP_OK) {
             s.services[i].used = false; /* refused by the responder: not queued, see the header */
         }
@@ -224,9 +227,8 @@ esp_err_t espos_mdns_start(void)
     unlock();
     ESP_LOGI(TAG, "responding as %s.local", hostname);
 
-    (void)espos_wifi_get_status(&ws);
     bool ready = false;
-    if (ws.sm.state == ESPOS_WIFI_ST_CONNECTED) {
+    if (espos_net_is_up()) {
         lock();
         s.net_up = true;
         ready = true;
@@ -269,7 +271,7 @@ esp_err_t espos_mdns_add_service(const char *type, const char *proto, uint16_t p
 
     lock();
     service_t *svc = NULL;
-    for (size_t i = 0; i < CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES; i++) {
+    for (size_t i = 0; i < CONFIG_ESPOS_NET_MDNS_MAX_SERVICES; i++) {
         service_t *e = &s.services[i];
         if (e->used && strcmp(e->type, type) == 0 && strcmp(e->proto, proto) == 0) {
             svc = e; /* replace: same slot, new port and TXT */
@@ -281,8 +283,8 @@ esp_err_t espos_mdns_add_service(const char *type, const char *proto, uint16_t p
     }
     if (!svc) {
         unlock();
-        ESP_LOGW(TAG, "%s.%s: service table full (CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES=%d)", type, proto,
-                 CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES);
+        ESP_LOGW(TAG, "%s.%s: service table full (CONFIG_ESPOS_NET_MDNS_MAX_SERVICES=%d)", type, proto,
+                 CONFIG_ESPOS_NET_MDNS_MAX_SERVICES);
         return ESP_ERR_NO_MEM;
     }
     memset(svc, 0, sizeof(*svc));
@@ -326,7 +328,7 @@ esp_err_t espos_mdns_remove_service(const char *type, const char *proto)
     }
     lock();
     esp_err_t err = ESP_ERR_NOT_FOUND;
-    for (size_t i = 0; i < CONFIG_ESPOS_WIFI_MDNS_MAX_SERVICES; i++) {
+    for (size_t i = 0; i < CONFIG_ESPOS_NET_MDNS_MAX_SERVICES; i++) {
         service_t *e = &s.services[i];
         if (e->used && strcmp(e->type, type) == 0 && strcmp(e->proto, proto) == 0) {
             e->used = false;
@@ -355,9 +357,9 @@ bool espos_mdns_is_ready(void)
     return ready;
 }
 
-#else /* !CONFIG_ESPOS_WIFI_MDNS */
+#else /* !CONFIG_ESPOS_NET_MDNS */
 
-/* Built without the responder (CONFIG_ESPOS_WIFI_MDNS=n, or the linux target
+/* Built without the responder (CONFIG_ESPOS_NET_MDNS=n, or the linux target
  * where espressif/mdns does not exist): the API is present so callers need
  * no #ifdef, and answers that nothing is advertised. */
 esp_err_t espos_mdns_start(void) { return ESP_ERR_NOT_SUPPORTED; }
@@ -378,4 +380,4 @@ esp_err_t espos_mdns_remove_service(const char *type, const char *proto)
 }
 bool espos_mdns_is_ready(void) { return false; }
 
-#endif /* CONFIG_ESPOS_WIFI_MDNS */
+#endif /* CONFIG_ESPOS_NET_MDNS */

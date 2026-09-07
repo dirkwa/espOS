@@ -8,41 +8,8 @@ menu "espOS WiFi"
             Number of ssidN/pskN/bssidN slots honoured from the "wifi"
             namespace (the descriptor declares four).
 
-    config ESPOS_WIFI_MDNS
-        bool "mDNS responder (<hostname>.local, _http._tcp, _espos._tcp)"
-        default y
-        depends on !IDF_TARGET_LINUX
-        help
-            Answer for <wifi.hostname>.local and advertise the web UI as
-            _http._tcp and the device as _espos._tcp (TXT: app name and
-            version, espOS version, chip, short id, API root). Applications
-            register their own services with espos_mdns_add_service().
-
-            This is how a device is found without knowing its address: a
-            phone opens http://espos-1a2b.local, SignalK discovery browses
-            for servers, a display client browses for players. Turning it
-            off saves the responder task and its sockets (roughly 4 KB of
-            RAM) and makes the device reachable by IP address only; SignalK
-            discovery then cannot run and sk.server_host must be set.
-
-            Not available on the linux target (no espressif/mdns there);
-            the API compiles to stubs that report ESP_ERR_NOT_SUPPORTED.
-
-    config ESPOS_WIFI_MDNS_MAX_SERVICES
-        int "Application services (espos_mdns_add_service slots)"
-        depends on ESPOS_WIFI_MDNS
-        default 6
-        range 1 16
-        help
-            Services an application may register on top of the two
-            built-in ones; each slot holds one service type with its TXT
-            record (up to 256 bytes) and is kept until the responder is
-            up, so a service may be added before the network exists. A
-            display with a player service and a control channel needs two.
-
-            The responder has its own ceiling, CONFIG_MDNS_MAX_SERVICES
-            (default 10): the two built-ins, these slots and any service a
-            component registers with the responder directly (espos_n2k's
-            candump server) all count against it.
+            The mDNS responder that used to be configured here moved to
+            espos_net with the seam: CONFIG_ESPOS_NET_MDNS and
+            CONFIG_ESPOS_NET_MDNS_MAX_SERVICES under "espOS network".
 
 endmenu

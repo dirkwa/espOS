@@ -6,16 +6,43 @@
 # only when the project builds them — decided here, at configure time, from
 # the component list, so the application never spells the list itself.
 idf_build_get_property(target IDF_TARGET)
+set(reqs espos_log espos_config espos_health espos_httpd espos_net espos_event espos_time)
+
+# WiFi is part of the core set on every chip with a radio (or, on the ESP32-P4,
+# a co-processor) and absent on the 802.15.4-only H-series, where esp_wifi does
+# not exist and espos_wifi cannot build. espos_project_prologue() records the
+# decision as the ESPOS_WIFI build property and excludes the component; a
+# project that bypasses the prologue gets the same rule from the target name.
+# A hard REQUIRES rather than idf_component_optional_requires(): under a
+# consumer's MINIMAL_BUILD only what is required gets compiled, and "WiFi
+# vanished because nothing asked for it" is not a failure mode a firmware
+# should have. Everything above the seam depends on espos_net, not on this.
+idf_build_get_property(_espos_wifi ESPOS_WIFI)
+if("${_espos_wifi}" STREQUAL "")
+    set(_espos_no_wifi_targets esp32h2 esp32h21 esp32h4)
+    if(target IN_LIST _espos_no_wifi_targets)
+        set(_espos_wifi OFF)
+    else()
+        set(_espos_wifi ON)
+    endif()
+endif()
+if(_espos_wifi)
+    list(APPEND reqs espos_wifi)
+endif()
+
 idf_component_register(
     SRCS src/espos_core.c
     INCLUDE_DIRS include
-    REQUIRES espos_log espos_config espos_health espos_httpd espos_wifi espos_event)
+    REQUIRES ${reqs})
 
 # Optional stages: link them only when they are in the build, and tell the
 # source which ones are, so espos_start() can call into them without an
 # #include that would fail in a firmware built without them.
 idf_component_optional_requires(PRIVATE espos_sk espos_ota espos_ble)
 idf_build_get_property(comps BUILD_COMPONENTS)
+if(espos_wifi IN_LIST comps)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPOS_HAVE_WIFI=1)
+endif()
 if(espos_sk IN_LIST comps)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPOS_HAVE_SK=1)
 endif()

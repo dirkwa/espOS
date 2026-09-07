@@ -8,13 +8,28 @@ menu "espOS core"
             device restarts after three consecutive 10 s ticks with a
             condition in ALARM that was reported with
             ESPOS_HEALTH_F_REBOOT_ON_ALARM (internal RAM exhausted, the
-            SignalK stream dead for sk.stall_s while WiFi is up, a watched
-            task stalled). A WiFi loss never counts. The per-app
+            SignalK stream dead for sk.stall_s while the network is up, a
+            watched task stalled). A network loss never counts. The per-app
             espos_start_opts_t.health_watchdog can still turn it off at
             runtime. Details: docs/health.md.
 
             Turn it off for a device whose application handles such
             conditions itself, or where a restart would be worse than the
             condition (a display mid-passage).
+
+    config ESPOS_WIFI
+        bool "Start the WiFi station manager (espos_wifi) in espos_start()"
+        default y
+        depends on SOC_WIFI_SUPPORTED || SOC_WIRELESS_HOST_SUPPORTED
+        help
+            espos_start() brings espos_wifi up right after the network seam
+            (espos_net) on every chip that has a radio, or — the ESP32-P4 —
+            a co-processor it drives through esp_wifi_remote. Turn this off
+            for a firmware that links espos_wifi but carries its network on
+            another transport (an Ethernet gateway): the station, its
+            portal and the /wifi endpoints then never start, and nothing
+            else changes — SignalK, OTA and mDNS follow espos_net, not the
+            radio. Not offered on chips without WiFi (the 802.15.4-only
+            H-series), where espos_wifi is not built at all.
 
 endmenu

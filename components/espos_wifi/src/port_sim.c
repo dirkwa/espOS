@@ -179,18 +179,6 @@ static esp_err_t d_scan_start(void)
     return ESP_OK;
 }
 
-static esp_err_t d_get_mac(uint8_t mac[6])
-{
-    memcpy(mac, (uint8_t[]) { 0x02, 0x00, 0x00, 0x00, 0x1a, 0x2b }, 6);
-    return ESP_OK;
-}
-
-static esp_err_t d_set_hostname(const char *hostname)
-{
-    ESP_LOGI(TAG, "hostname %s", hostname);
-    return ESP_OK;
-}
-
 static esp_err_t d_set_ps(const char *mode)
 {
     (void)mode;
@@ -203,8 +191,6 @@ static const espos_wifi_driver_t k_driver = {
     .sm_port = &k_sm_port,
     .rssi = d_rssi,
     .scan_start = d_scan_start,
-    .get_mac = d_get_mac,
-    .set_hostname = d_set_hostname,
     .set_ps = d_set_ps,
     .portal_ip = "192.168.4.1",
 };

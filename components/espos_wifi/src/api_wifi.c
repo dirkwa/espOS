@@ -5,6 +5,7 @@
  * /api/v1/wifi/status, /api/v1/wifi/scan and the captive-portal probes.
  */
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -87,7 +88,11 @@ esp_err_t espos_wifi_register_api(void)
         { .uri = "/success.txt", .method = HTTP_GET, .handler = captive_redirect },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        esp_err_t err = espos_httpd_register(&uris[i]);
+        /* The captive-portal probes are what a phone fetches before it has any
+         * credentials; they must answer without a key. Everything under
+         * /api/ stays behind the device key like every other endpoint. */
+        bool probe = strncmp(uris[i].uri, "/api/", 5) != 0;
+        esp_err_t err = espos_httpd_register_ex(&uris[i], probe ? ESPOS_HTTPD_PUBLIC : ESPOS_HTTPD_PROTECTED);
         if (err != ESP_OK) {
             return err;
         }
