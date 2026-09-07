@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
-## espos_core component manifest: registry metadata for espos/espos_core.
+## espos_core component manifest: registry metadata for signalk-espos/espos_core.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
 description: "One-call boot: espos_start() brings log, config, HTTP, WiFi and the optional stacks up in order"
-url: "https://github.com/espos/espos/tree/main/components/espos_core"
-repository: "https://github.com/espos/espos.git"
-documentation: "https://github.com/espos/espos/blob/main/docs/concepts.md"
-issues: "https://github.com/espos/espos/issues"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_core"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/concepts.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
 license: "Apache-2.0"
 maintainers:
   - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
@@ -33,21 +33,21 @@ dependencies:
   # from the registry has no such directory and the field is ignored there.
   # espos_sk, espos_ota and espos_ble are optional and deliberately absent:
   # a firmware that wants them lists them, and espos_start() picks them up.
-  espos/espos_log:
+  signalk-espos/espos_log:
     version: "^0.7.0"
     override_path: "../espos_log"
-  espos/espos_config:
+  signalk-espos/espos_config:
     version: "^0.7.0"
     override_path: "../espos_config"
-  espos/espos_health:
+  signalk-espos/espos_health:
     version: "^0.7.0"
     override_path: "../espos_health"
-  espos/espos_httpd:
+  signalk-espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
-  espos/espos_wifi:
+  signalk-espos/espos_wifi:
     version: "^0.7.0"
     override_path: "../espos_wifi"
-  espos/espos_event:
+  signalk-espos/espos_event:
     version: "^0.7.0"
     override_path: "../espos_event"

@@ -12,6 +12,10 @@ Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6, ESP32-P4 — one codebase.
 Toolchain: ESP-IDF pinned in [`.idf-version`](.idf-version). HTTP:
 `esp_http_server`. Storage: NVS for config and secrets.
 
+espOS lives at [github.com/signalk-espOS/espOS](https://github.com/signalk-espOS/espOS)
+and publishes its components as `signalk-espos/espos_*`. It is a community
+project, not an official Signal K repository.
+
 ## Status
 
 espOS is at **v0.7.0**. The core is done and in use: config store, HTTP

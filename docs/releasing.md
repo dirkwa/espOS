@@ -88,12 +88,12 @@ number people actually need.
 
 Every `components/espos_*` directory is also a component on the [Espressif
 Component Registry](https://components.espressif.com), under the `espos`
-namespace: `espos/espos_config`, `espos/espos_sk`, and so on. A firmware
+namespace: `signalk-espos/espos_config`, `signalk-espos/espos_sk`, and so on. A firmware
 that does not want the submodule adds what it needs and the component
 manager pulls the rest:
 
 ```sh
-idf.py add-dependency "espos/espos_sk^0.7"
+idf.py add-dependency "signalk-espos/espos_sk^0.7"
 ```
 
 `espos_sk`'s manifest names `espos_config`, `espos_httpd`, `espos_wifi` and
@@ -117,7 +117,7 @@ Lockstep has to be maintained by the release, not by hand. `scripts/release.sh`
 must, for every `components/*/idf_component.yml`:
 
 * set the top-level `version:` to the release version;
-* set each `espos/espos_*` dependency's `version:` to `^<release version>`
+* set each `signalk-espos/espos_*` dependency's `version:` to `^<release version>`
   (pre-1.0, `^0.7.0` excludes `0.8.0`, so a minor bump that leaves the
   ranges behind publishes components that cannot be installed together);
 * `git add` the manifests with `version.txt`, so the release commit carries

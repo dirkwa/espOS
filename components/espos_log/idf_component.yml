@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
-## espos_log component manifest: registry metadata for espos/espos_log.
+## espos_log component manifest: registry metadata for signalk-espos/espos_log.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
 description: "Log ring served over REST, so a device is debuggable without a serial cable"
-url: "https://github.com/espos/espos/tree/main/components/espos_log"
-repository: "https://github.com/espos/espos.git"
-documentation: "https://github.com/espos/espos/blob/main/docs/rest-api.md"
-issues: "https://github.com/espos/espos/issues"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_log"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/rest-api.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
 license: "Apache-2.0"
 maintainers:
   - "Dirk Wahrheit <dirkwahrheit@gmail.com>"

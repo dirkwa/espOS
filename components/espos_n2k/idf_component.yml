@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
-## espos_n2k component manifest: registry metadata for espos/espos_n2k.
+## espos_n2k component manifest: registry metadata for signalk-espos/espos_n2k.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
 description: "NMEA 2000 over TWAI + a candump TCP server"
-url: "https://github.com/espos/espos/tree/main/components/espos_n2k"
-repository: "https://github.com/espos/espos.git"
-documentation: "https://github.com/espos/espos/blob/main/docs/n2k.md"
-issues: "https://github.com/espos/espos/issues"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_n2k"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/n2k.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
 license: "Apache-2.0"
 maintainers:
   - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
