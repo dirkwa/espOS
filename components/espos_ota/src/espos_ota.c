@@ -22,10 +22,18 @@
 #include "espos_event.h"
 #include "espos_httpd.h"
 #include "espos_httpd_sse.h"
+#include "espos_net.h"
 #include "espos_ota.h"
 #include "espos_ota_manifest.h"
-#include "espos_wifi.h"
 #include "ota_port.h"
+/* The one WiFi-specific question left here — "is there no station configured
+ * at all?" — decides whether a portal-only device confirms a new image
+ * after a grace period instead of rolling back. Optional: a build without
+ * espos_wifi (Ethernet, H-series) has no such state and never takes that
+ * shortcut. */
+#if ESPOS_OTA_HAVE_WIFI
+#include "espos_wifi.h"
+#endif
 
 static const char *TAG = "espos_ota";
 
@@ -252,11 +260,15 @@ static void tick_confirm(void)
     if (!info.pending_verify || s.confirmed_this_boot) {
         return;
     }
-    espos_wifi_status_t w;
-    bool wifi_ok = espos_wifi_get_status(&w) == ESP_OK;
     uint32_t up = espos_ota_port_uptime_s();
-    bool connected = wifi_ok && w.sm.state == ESPOS_WIFI_ST_CONNECTED;
-    bool no_station = wifi_ok && (w.sm.state == ESPOS_WIFI_ST_UNCONFIGURED || w.sm.state == ESPOS_WIFI_ST_DISABLED);
+    bool connected = espos_net_is_up();
+    bool no_station = false;
+#if ESPOS_OTA_HAVE_WIFI
+    espos_wifi_status_t w;
+    if (espos_wifi_get_status(&w) == ESP_OK) {
+        no_station = w.sm.state == ESPOS_WIFI_ST_UNCONFIGURED || w.sm.state == ESPOS_WIFI_ST_DISABLED;
+    }
+#endif
     if (connected || (no_station && up >= NO_STA_GRACE_S)) {
         ESP_LOGI(TAG, "new image confirmed (%s), rollback cancelled", connected ? "network up" : "no station configured");
         if (espos_ota_port_mark_valid() == ESP_OK) {
@@ -323,9 +335,8 @@ static void ota_task(void *arg)
             load_config();
         }
         tick_confirm();
-        /* periodic manifest checks: after boot once WiFi is up, then every check_h */
-        espos_wifi_status_t w;
-        bool up = espos_wifi_get_status(&w) == ESP_OK && w.sm.state == ESPOS_WIFI_ST_CONNECTED;
+        /* periodic manifest checks: after boot once the network is up, then every check_h */
+        bool up = espos_net_is_up();
         uint32_t now = espos_ota_port_uptime_s();
         lock();
         bool auto_check = s.auto_check && s.manifest_url[0];
@@ -347,14 +358,14 @@ esp_err_t espos_ota_start(void)
         return ESP_OK;
     }
     /* The API goes onto the HTTP server and the confirm/rollback policy
-     * watches the WiFi state; neither can be retrofitted later. */
+     * watches the network; neither can be retrofitted later. */
     if (!espos_httpd_handle()) {
         ESP_LOGE(TAG, "espos_ota_start: call espos_httpd_start() first (or espos_start())");
         return ESP_ERR_INVALID_STATE;
     }
-    espos_wifi_status_t wifi;
-    if (espos_wifi_get_status(&wifi) != ESP_OK) {
-        ESP_LOGE(TAG, "espos_ota_start: call espos_wifi_start() first (or espos_start())");
+    espos_net_status_t net;
+    if (espos_net_get_status(&net) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_ota_start: call espos_net_start() first (or espos_start())");
         return ESP_ERR_INVALID_STATE;
     }
     if (!s.lock) {

@@ -57,7 +57,7 @@ Out of scope, by design, for now:
   known; reports that show a way *around* the controls that do exist
   (secrets never returned, the cross-origin gate) are welcome.
 * Traffic to the SignalK server is plain `http`/`ws` unless the firmware is
-  built with `CONFIG_ESPOS_SK_TLS` and `sk.tls` is on; the token travels in
+  talking to the server over TLS (`sk.scheme`, `auto` by default); the token travels in
   clear on the LAN. Documented, and a consumer's choice.
 * Physical access: the USB/JTAG port, flash read-out, eFuse state. Hardware
   Secure Boot and flash encryption are release-overlay options a consumer

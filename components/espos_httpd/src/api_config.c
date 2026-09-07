@@ -98,7 +98,7 @@ static esp_err_t schema_get(httpd_req_t *req)
     return httpd_resp_send(req, espos_cfg_schema_json, (ssize_t)espos_cfg_schema_json_len);
 }
 
-esp_err_t espos_httpd_register_config_api(httpd_handle_t h)
+esp_err_t espos_httpd_register_config_api(void)
 {
     static const httpd_uri_t uris[] = {
         { .uri = "/api/v1/config/schema", .method = HTTP_GET, .handler = schema_get },
@@ -106,7 +106,7 @@ esp_err_t espos_httpd_register_config_api(httpd_handle_t h)
         { .uri = "/api/v1/config", .method = HTTP_PUT, .handler = config_put },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        esp_err_t err = httpd_register_uri_handler(h, &uris[i]);
+        esp_err_t err = espos_httpd_register_ex(&uris[i], ESPOS_HTTPD_PROTECTED);
         if (err != ESP_OK) {
             return err;
         }

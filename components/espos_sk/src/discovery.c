@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * mDNS discovery of SignalK servers (_signalk-http._tcp). The responder the
- * queries go through — and the device's own advertisement — is espos_wifi's
+ * queries go through — and the device's own advertisement — is espos_net's
  * (espos_mdns.h); this file only browses. Device build; the host uses
  * discovery_sim.c.
  */
@@ -18,39 +18,40 @@
 
 static const char *TAG = "espos_sk";
 
-#if CONFIG_ESPOS_WIFI_MDNS
+#if CONFIG_ESPOS_NET_MDNS
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "mdns.h"
 
-#include "espos_wifi.h"
+#include "espos_net.h"
 
-/* Our own IPv4 + netmask (0 if not connected). */
+/* Our own IPv4 + netmask on the default route (0 when down). */
 static void local_net(uint32_t *ip, uint32_t *mask)
 {
     *ip = 0;
     *mask = 0;
-    espos_wifi_status_t ws;
-    if (espos_wifi_get_status(&ws) == ESP_OK && ws.sm.state == ESPOS_WIFI_ST_CONNECTED) {
-        *ip = ipaddr_addr(ws.sm.ip.ip);
-        *mask = ipaddr_addr(ws.sm.ip.netmask);
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) == ESP_OK && ns.up) {
+        *ip = ipaddr_addr(ns.ip);
+        *mask = ipaddr_addr(ns.netmask);
     }
 }
 
 esp_err_t espos_sk_discovery_init(const char *hostname)
 {
-    (void)hostname; /* the responder names itself after wifi.hostname */
-    /* The responder is espos_wifi's and espos_wifi_start() brings it up;
+    (void)hostname; /* the responder names itself after net.hostname */
+    /* The responder is espos_net's and espos_net_start() brings it up;
      * asking again here costs nothing (idempotent) and keeps a SignalK build
      * findable when a firmware drives the start sequence by hand. */
     return espos_mdns_start();
 }
 
-/* The station reports CONNECTED from inside the GOT_IP handler while the
- * responder's MDNS_READY is still queued behind it on the event loop, so the
- * browse the sk task fires on that edge can arrive a few milliseconds early.
+/* espos_net reports the route up from inside the transport's GOT_IP handler
+ * while the responder's MDNS_READY is still queued behind it on the event
+ * loop, so the browse the sk task fires on that edge can arrive a few
+ * milliseconds early.
  * An empty pass is only retried after a whole sk.discover_s; wait for the
  * responder instead — bounded, and only while there is a link to wait for. */
 static bool wait_ready(void)
@@ -79,23 +80,20 @@ static const char *txt_get(const mdns_result_t *r, const char *key)
     return "";
 }
 
-size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
+/* One browse of one service type, appending to out[] from index `n`. */
+static size_t browse(const char *service, bool tls, espos_sk_discovered_t *out, size_t n, size_t max,
+                     uint32_t my_ip, uint32_t my_mask)
 {
-    if (!wait_ready()) {
-        return 0;
-    }
     mdns_result_t *results = NULL;
-    esp_err_t err = mdns_query_ptr("_signalk-http", "_tcp", 3000, 20, &results);
+    esp_err_t err = mdns_query_ptr(service, "_tcp", 3000, 20, &results);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "mdns query: %s", esp_err_to_name(err));
-        return 0;
+        ESP_LOGW(TAG, "mdns query %s: %s", service, esp_err_to_name(err));
+        return n;
     }
-    uint32_t my_ip, my_mask;
-    local_net(&my_ip, &my_mask);
-    size_t n = 0;
     for (mdns_result_t *r = results; r && n < max; r = r->next) {
         espos_sk_discovered_t *d = &out[n];
         memset(d, 0, sizeof(*d));
+        d->tls = tls;
         /* Dual-homed servers advertise several A records; prefer the one on
          * our own subnet, else the first IPv4, else <hostname>.local. */
         bool have_ip = false;
@@ -126,20 +124,51 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
         snprintf(d->roles, sizeof(d->roles), "%s", txt_get(r, "roles"));
         snprintf(d->swname, sizeof(d->swname), "%s", txt_get(r, "swname"));
         snprintf(d->swvers, sizeof(d->swvers), "%s", txt_get(r, "swvers"));
-        n++;
+        /* A server that advertises both types (it should not, but a stale
+         * record outlives a config change) is listed once, at the scheme it
+         * most recently claimed -- and https comes second here, so the TLS
+         * answer wins. Duplicates confuse the election, not the scheme. */
+        bool dup = false;
+        for (size_t i = 0; i < n; i++) {
+            if (strcmp(out[i].host, d->host) == 0 && out[i].port == d->port) {
+                out[i] = *d;
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            n++;
+        }
     }
     mdns_query_results_free(results);
     return n;
 }
 
-#else /* !CONFIG_ESPOS_WIFI_MDNS */
+size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
+{
+    if (!wait_ready()) {
+        return 0;
+    }
+    uint32_t my_ip, my_mask;
+    local_net(&my_ip, &my_mask);
+    /* Both service types, because that is how signalk-server says which
+     * scheme it speaks: `ssl: true` publishes _signalk-https._tcp instead of
+     * _signalk-http._tcp (src/interfaces/rest.js). A device that only browsed
+     * the plaintext type could not see a TLS-only server at all -- which is
+     * precisely the server this whole feature exists for. */
+    size_t n = browse("_signalk-http", false, out, 0, max, my_ip, my_mask);
+    n = browse("_signalk-https", true, out, n, max, my_ip, my_mask);
+    return n;
+}
+
+#else /* !CONFIG_ESPOS_NET_MDNS */
 
 /* No responder in this build: there is nothing to browse with. The periodic
  * pass stays (it also ages out stale entries) and finds nothing. */
 esp_err_t espos_sk_discovery_init(const char *hostname)
 {
     (void)hostname;
-    ESP_LOGW(TAG, "built without mDNS (CONFIG_ESPOS_WIFI_MDNS=n): discovery is off, set sk.server_host");
+    ESP_LOGW(TAG, "built without mDNS (CONFIG_ESPOS_NET_MDNS=n): discovery is off, set sk.server_host");
     return ESP_OK;
 }
 
@@ -150,4 +179,4 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
     return 0;
 }
 
-#endif /* CONFIG_ESPOS_WIFI_MDNS */
+#endif /* CONFIG_ESPOS_NET_MDNS */

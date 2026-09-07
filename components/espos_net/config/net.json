@@ -1,0 +1,12 @@
+{
+  "namespace": "net",
+  "version": 1,
+  "title": "Network",
+  "description": "What the device is called on the network, whichever interface carries it.",
+  "keys": [
+    {"name": "hostname", "type": "string", "default": "", "maxLength": 32, "pattern": "^[A-Za-z0-9-]*$",
+     "title": "Hostname",
+     "description": "DHCP and mDNS name (<hostname>.local); also the SignalK source label and the name in the server's access-request list. Empty = espos-<last 4 hex of the device MAC>.",
+     "restart_required": true}
+  ]
+}

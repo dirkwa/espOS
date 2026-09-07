@@ -3,7 +3,7 @@
 ## espos_wifi component manifest: registry metadata for signalk-espos/espos_wifi.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
-description: "Station + provisioning portal, a pure-C state machine, mDNS responder, co-processor watchdog"
+description: "Station + provisioning portal, a pure-C state machine, static IP, co-processor watchdog; reports into espos_net"
 url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_wifi"
 repository: "https://github.com/signalk-espOS/espOS.git"
 documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/wifi.md"
@@ -19,7 +19,6 @@ tags:
   - wifi
   - provisioning
   - captive-portal
-  - mdns
 files:
   exclude:
     - "build/**/*"
@@ -45,16 +44,13 @@ dependencies:
   signalk-espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
+  # The network seam the station reports into; it owns the hostname, the
+  # device id and the mDNS responder (espressif/mdns is its dependency now).
+  signalk-espos/espos_net:
+    version: "^0.7.0"
+    override_path: "../espos_net"
   # cJSON, exact-pinned like every other registry dependency here.
   espressif/cjson: "==1.7.19~2"
-  # mDNS left the IDF core in 5.0; exact-pinned like the other registry deps.
-  # The responder lives here (src/mdns.c, include/espos_mdns.h); espos_sk
-  # browses through it and gets the headers via this component's REQUIRES.
-  # Not on the linux target, where the component does not exist.
-  espressif/mdns:
-    version: "==1.11.3"
-    rules:
-      - if: "target != linux"
   # The ESP32-P4 has no radio: WiFi comes from the C6 co-processor through
   # esp_hosted, and the co-processor watchdog includes its headers on that
   # target. Same pin as espos_ble.

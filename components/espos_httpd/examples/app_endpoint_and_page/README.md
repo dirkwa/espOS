@@ -18,6 +18,13 @@ curl -X POST -H 'Content-Type: application/json' http://<host>/api/v1/app/reset
 curl -N http://<host>/api/v1/events          # event: app.counter / data: {...} once a second
 ```
 
+Both endpoints are **protected** the moment the device has an API key
+(`httpd.api_key`, docs/security.md): `curl` then needs
+`-H 'Authorization: Bearer <key>'`, and the web UI's page below gets in with
+its login cookie. Nothing in `main.c` had to change for that — the check runs
+before the handler. An endpoint that must stay reachable without a key
+registers with `espos_httpd_register_ex(&uri, ESPOS_HTTPD_PUBLIC)` instead.
+
 `/api/v1/app/` is the application's prefix; espOS never uses it. Handlers run on
 the one `esp_http_server` task — build, send, return, nothing that waits
 (docs/concepts.md, "Threading contracts") — and are registered after `espos_start()`,

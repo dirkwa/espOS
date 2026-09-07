@@ -168,7 +168,7 @@ bool espos_httpd_static_mounted(void)
     return s_mounted;
 }
 
-esp_err_t espos_httpd_register_static(httpd_handle_t h)
+esp_err_t espos_httpd_register_static(void)
 {
 #if CONFIG_IDF_TARGET_LINUX
     /* Host: serve from a directory named by ESPOS_WWW_DIR (tests). */
@@ -211,6 +211,8 @@ esp_err_t espos_httpd_register_static(httpd_handle_t h)
         ESP_LOGW(TAG, "ui storage not mounted (%s): serving the embedded page", esp_err_to_name(err));
     }
 #endif
+    /* The UI is public: the login page is part of it. (The 404 fallback that
+     * serves the rest of the bundle never goes through a handler at all.) */
     static const httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = index_get };
-    return httpd_register_uri_handler(h, &root);
+    return espos_httpd_register_ex(&root, ESPOS_HTTPD_PUBLIC);
 }

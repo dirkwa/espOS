@@ -10,16 +10,21 @@
  * espos_start() runs the component starts in the one order that works
  * (docs/concepts.md): the log ring first so the boot log is kept for
  * /api/v1/logs; the config store next because everything else reads it;
- * the HTTP server before WiFi so the provisioning portal has a page to
- * serve the moment its access point is up; WiFi before SignalK because
- * discovery is mDNS; then OTA and BLE, which need all of the above. Each
- * espos_*_start() checks its own prerequisites and fails with
- * ESP_ERR_INVALID_STATE when called out of order — espos_start() is how
- * an application never sees that error.
+ * the HTTP server before the network seam (espos_net) so /net/status and
+ * the provisioning portal have a page to serve the moment there is a link
+ * or an access point; espos_net before WiFi because it owns the hostname
+ * the station's DHCP request carries and the mDNS responder; WiFi before
+ * SignalK because discovery is mDNS; then OTA and BLE, which need all of
+ * the above. Each espos_*_start() checks its own prerequisites and fails
+ * with ESP_ERR_INVALID_STATE when called out of order — espos_start() is
+ * how an application never sees that error.
  *
  * Optional components (espos_sk, espos_ota, espos_ble) are started only
  * when the project builds them. That is decided at configure time from the
- * component list, not by the application.
+ * component list, not by the application. espos_wifi is built wherever the
+ * chip has a radio (or, ESP32-P4, a co-processor) and left out on the
+ * 802.15.4-only H-series; CONFIG_ESPOS_WIFI (default y) is the switch for a
+ * firmware that links it but does not want the station started.
  *
  * Threading: call once, from app_main() or any task. The calls block until
  * every component has started its own tasks, then return; before_network
@@ -52,8 +57,9 @@ typedef struct {
 #define ESPOS_START_OPTS_DEFAULT { .app_name = NULL, .before_network = NULL, .arg = NULL, .health_watchdog = true }
 
 /**
- * Bring everything up: log → config → [before_network] → httpd → wifi →
- * sk → ota → ble, each of the last three only if built. NULL = defaults.
+ * Bring everything up: log → config → [before_network] → httpd → net →
+ * [wifi] → [sk] → [ota] → [ble], the bracketed ones only if built (and,
+ * for wifi, enabled). NULL = defaults.
  * Idempotent: a second call returns ESP_OK and does nothing. On failure
  * the components started so far stay up and the error names the stage.
  */
@@ -67,8 +73,8 @@ esp_err_t espos_start(const espos_start_opts_t *opts);
  */
 esp_err_t espos_init(void);
 
-/** Second half: httpd → wifi → [sk] → [ota] → [ble]. Requires the config
- * store to be up (espos_init()); ESP_ERR_INVALID_STATE otherwise. Idempotent. */
+/** Second half: httpd → net → [wifi] → [sk] → [ota] → [ble]. Requires the
+ * config store to be up (espos_init()); ESP_ERR_INVALID_STATE otherwise. Idempotent. */
 esp_err_t espos_start_network(void);
 
 /** espOS's own version ("0.7.0"): version.txt at build time, or the

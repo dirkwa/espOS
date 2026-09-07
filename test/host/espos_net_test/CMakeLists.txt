@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Host unit tests for the espos_net default-route machine (pure C, injected
+# clock) and the shared backoff curve.
+#   ../../../scripts/build.sh --preview set-target linux && ../../../scripts/build.sh build && ./build/espos_net_test.elf
+cmake_minimum_required(VERSION 3.22)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+set(COMPONENTS main)
+project(espos_net_test)

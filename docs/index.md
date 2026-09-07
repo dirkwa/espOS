@@ -63,7 +63,8 @@ by the application when its board has the hardware.
 | `espos_core` | `espos_start()`: one call brings everything up in the order that works | [Concepts](concepts.md) |
 | `espos_config` | NVS config store, JSON-Schema descriptors, REST-backed settings | [Configuration store](config.md) |
 | `espos_httpd` | HTTP server, REST API, SSE, the web UI from a LittleFS partition | [REST API](rest-api.md) · [Web UI](ui.md) |
-| `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog, mDNS responder | [WiFi and mDNS](wifi.md) |
+| `espos_net` | Interface-agnostic network status and default route, mDNS responder, device id; WiFi/Ethernet plug in underneath | [net.md](net.md) |
+| `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog | [WiFi and mDNS](wifi.md) |
 | `espos_log` | Log ring served over REST, so a device is debuggable without a serial cable | [REST API → Logs](rest-api.md#logs-m5) |
 | `espos_health` | Device conditions (warn/alarm), the sinks that consume them, the watchdog policy | [Device health](health.md) |
 | `espos_event` | `ESPOS_EVENT` on the default event loop: config ready, network up, server found, token approved, update available | [Concepts → Events](concepts.md#events) |

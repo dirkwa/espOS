@@ -47,9 +47,12 @@ table before calling anything from inside a callback.
 | [`espos_health_policy.h`](api-c/espos__health__policy_8h.md) | `espos_health` | the watchdog policy as a pure C state machine over a port |
 | [`espos_httpd.h`](api-c/espos__httpd_8h.md) | `espos_httpd` | the HTTP server, `espos_httpd_register()` for application endpoints |
 | [`espos_httpd_sse.h`](api-c/espos__httpd__sse_8h.md) | `espos_httpd` | publishing named events on `GET /api/v1/events` |
+| [`espos_httpd_auth_policy.h`](api-c/espos__httpd__auth__policy_8h.md) | `espos_httpd` | the pure authentication policy (sessions, throttle, request verdict) behind a port; `espos_httpd_register_ex()` and `espos_httpd_request_authenticated()` are in `espos_httpd.h` |
 | [`espos_wifi.h`](api-c/espos__wifi_8h.md) | `espos_wifi` | station manager, status, portal, `espos_wifi_short_id()` |
 | [`espos_wifi_sm.h`](api-c/espos__wifi__sm_8h.md) | `espos_wifi` | the WiFi state machine and its port (host-testable) |
-| [`espos_mdns.h`](api-c/espos__mdns_8h.md) | `espos_wifi` | the mDNS responder: `espos_mdns_add_service()`, readiness |
+| [`espos_net.h`](api-c/espos__net_8h.md) | `espos_net` | the interface-agnostic network seam: default route status, subscriptions, transport registration, the device short id |
+| [`espos_net_sm.h`](api-c/espos__net__sm_8h.md) | `espos_net` | the pure default-route selection behind a port (host-tested) |
+| [`espos_mdns.h`](api-c/espos__mdns_8h.md) | `espos_net` | the mDNS responder: `espos_mdns_add_service()`, readiness |
 | [`espos_sk.h`](api-c/espos__sk_8h.md) | `espos_sk` | discovery, token, `espos_sk_publish_*`, subscribe, PUT, notify |
 | [`espos_sk_http.h`](api-c/espos__sk__http_8h.md) | `espos_sk` | HTTP to the selected server: GET/PUT/POST/DELETE, value and meta lookups, URLs |
 | [`espos_sk_delta.h`](api-c/espos__sk__delta_8h.md) | `espos_sk` | delta batcher and offline ring (pure C) |

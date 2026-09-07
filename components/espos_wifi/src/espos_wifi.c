@@ -22,7 +22,7 @@
 #include "espos_config.h"
 #include "espos_httpd.h"
 #include "espos_httpd_sse.h"
-#include "espos_mdns.h"
+#include "espos_net.h"
 #include "espos_wifi.h"
 #include "espos_wifi_priv.h"
 
@@ -35,7 +35,6 @@ static struct {
     espos_wifi_sm_t sm;
     const espos_wifi_driver_t *drv;
     bool started;
-    char short_id[8];
     char hostname[33];
     char portal_ssid[33];
     char portal_psk[65];
@@ -58,6 +57,16 @@ static struct {
     } actions[8];
     size_t action_head, action_count;
     char *pending_status_json;   /* latest snapshot to publish (coalesced) */
+    /* The link as espos_net should hear it, decided under the lock on every
+     * SM status change and delivered by the drainer outside it:
+     * espos_net_report() takes its own lock and runs subscriber callbacks,
+     * neither of which may happen under ours. */
+    struct {
+        bool pending;
+        bool up;
+        espos_wifi_ip_t ip;
+        int8_t rssi;
+    } net_report;
     SemaphoreHandle_t drain_lock;
     bool sm_ready;
     bool api_registered;
@@ -75,7 +84,7 @@ static void unlock(void)
 
 const char *espos_wifi_short_id(void)
 {
-    return s.short_id;
+    return espos_net_short_id(); /* deprecated wrapper, see the header */
 }
 
 /* ---------------------------------------------------------- config load */
@@ -136,9 +145,14 @@ static void load_cfg(espos_wifi_cfg_t *c)
     espos_config_get_i32(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_AFTER_S, &v);
     c->portal_after_ms = (uint32_t)v * 1000;
 
-    /* names: build locally, publish under the lock (readers copy under it) */
+    /* names: build locally, publish under the lock (readers copy under it).
+     * The hostname is espos_net's (net.hostname; wifi.hostname until 0.7):
+     * the status document keeps carrying it because the UI reads it there. */
     char h[33] = { 0 }, ap[33] = { 0 }, appsk[65] = { 0 };
-    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) == ESP_OK) {
+        strcpy(h, ns.hostname);
+    }
     espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_SSID, ap, sizeof(ap), NULL);
     espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PORTAL_PSK, appsk, sizeof(appsk), NULL);
     if (appsk[0] && strlen(appsk) < 8) {
@@ -149,12 +163,12 @@ static void load_cfg(espos_wifi_cfg_t *c)
     if (h[0]) {
         strcpy(s.hostname, h);
     } else {
-        snprintf(s.hostname, sizeof(s.hostname), "espos-%s", s.short_id);
+        snprintf(s.hostname, sizeof(s.hostname), "espos-%s", espos_net_short_id());
     }
     if (ap[0]) {
         strcpy(s.portal_ssid, ap);
     } else {
-        snprintf(s.portal_ssid, sizeof(s.portal_ssid), "espOS-%s", s.short_id);
+        snprintf(s.portal_ssid, sizeof(s.portal_ssid), "espOS-%s", espos_net_short_id());
     }
     strcpy(s.portal_psk, appsk);
     unlock();
@@ -215,6 +229,16 @@ static esp_err_t q_portal_stop(void *ctx)
     return ESP_OK;
 }
 
+/* Lock held: what espos_net should hear. Identical repeats are cheap no-ops
+ * there, so every status change may queue one; the drainer delivers it. */
+static void queue_net_report_locked(void)
+{
+    s.net_report.pending = true;
+    s.net_report.up = s.sm.st.state == ESPOS_WIFI_ST_CONNECTED;
+    s.net_report.ip = s.sm.st.ip;
+    s.net_report.rssi = s.sm.st.link.rssi;
+}
+
 /* status_changed from the SM (lock held): snapshot now, publish after unlock. */
 static void on_status_changed(void *ctx)
 {
@@ -224,6 +248,7 @@ static void on_status_changed(void *ctx)
         free(s.pending_status_json);
         s.pending_status_json = json;
     }
+    queue_net_report_locked();
 }
 
 /* Run queued driver actions in FIFO order, outside the SM lock. A single
@@ -241,7 +266,7 @@ static void drain(void)
         xSemaphoreGive(s.drain_lock);
         /* something may have been queued between our last look and the give */
         lock();
-        bool more = s.action_count > 0 || s.pending_status_json != NULL;
+        bool more = s.action_count > 0 || s.pending_status_json != NULL || s.net_report.pending;
         unlock();
         if (!more) {
             return;
@@ -254,6 +279,18 @@ static void drain_all_locked(void)
 {
     for (;;) {
         lock();
+        if (s.net_report.pending) {
+            /* espos_net first: the NETWORK_UP/DOWN it posts and the callbacks
+             * it runs must not queue behind a driver call that may block on
+             * the radio. */
+            bool up = s.net_report.up;
+            espos_wifi_ip_t ip = s.net_report.ip;
+            int8_t rssi = s.net_report.rssi;
+            s.net_report.pending = false;
+            unlock();
+            espos_net_report(ESPOS_NET_IF_WIFI_STA, up, ip.ip, ip.netmask, ip.gateway, rssi);
+            continue;
+        }
         if (s.action_count == 0) {
             char *json = s.pending_status_json;
             s.pending_status_json = NULL;
@@ -390,7 +427,9 @@ esp_err_t espos_wifi_refresh_rssi(void)
     }
     lock();
     s.sm.st.link.rssi = r;
+    queue_net_report_locked(); /* espos_net_status_t.rssi follows */
     unlock();
+    drain();
     return ESP_OK;
 }
 
@@ -624,6 +663,14 @@ esp_err_t espos_wifi_start(void)
         ESP_LOGE(TAG, "espos_wifi_start: call espos_httpd_start() first (or espos_start())");
         return ESP_ERR_INVALID_STATE;
     }
+    /* The device id, the hostname and the route this station reports into
+     * are espos_net's, as is the mDNS responder that used to be started here;
+     * the netif gets its hostname from espos_net the moment the port registers it. */
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) != ESP_OK) {
+        ESP_LOGE(TAG, "espos_wifi_start: call espos_net_start() first (or espos_start())");
+        return ESP_ERR_INVALID_STATE;
+    }
     s.drv = espos_wifi_driver();
     if (!s.lock) {
         s.lock = xSemaphoreCreateMutex();
@@ -652,17 +699,8 @@ esp_err_t espos_wifi_start(void)
      * it for a heartbeat. Failure here costs wedge detection, not WiFi,
      * so it is logged inside and never fails the start. */
     (void)espos_wifi_hosted_watchdog_start();
-    uint8_t mac[6] = { 0 };
-    if (s.drv->get_mac && s.drv->get_mac(mac) == ESP_OK) {
-        snprintf(s.short_id, sizeof(s.short_id), "%02x%02x", mac[4], mac[5]);
-    } else {
-        strcpy(s.short_id, "0000");
-    }
     espos_wifi_cfg_t cfg;
     load_cfg(&cfg);
-    if (s.drv->set_hostname) {
-        s.drv->set_hostname(s.hostname);
-    }
     if (s.drv->set_ps) {
         char ps[8] = "none";
         espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_PS_MODE, ps, sizeof(ps), NULL);
@@ -699,11 +737,6 @@ esp_err_t espos_wifi_start(void)
         ESP_LOGI(TAG, "no network configured: join \"%s\" and open http://%s", s.portal_ssid,
                  s.drv->portal_ip ? s.drv->portal_ip : "192.168.4.1");
     }
-    /* The responder needs the netif and event loop the driver just made and
-     * takes records before the station has an address (espos_mdns.h). A
-     * failure costs discoverability, not WiFi; NOT_SUPPORTED in builds
-     * without it. */
-    (void)espos_mdns_start();
     espos_wifi_dispatch(ESPOS_WIFI_EV_START, NULL);
     return ESP_OK;
 }

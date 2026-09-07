@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Generic settings editor rendered from the JSON Schema (GET /config/schema).
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { get, put, post, useStore, configChangeStore, errText, type ConfigDoc, type ConfigSchema, type JsonSchemaProp, type PutResult } from "../api";
+import { get, put, post, useStore, configChangeStore, errText, randomKey, type ConfigDoc, type ConfigSchema, type JsonSchemaProp, type PutResult } from "../api";
 import { Msg, useAsync } from "../app";
 
 const SENTINEL = "********";
@@ -129,7 +129,9 @@ function Field({ ns, k, p, value, dirty, error, onChange }: { ns: string; k: str
     ctl = <input id={id} type="number" value={value === null || value === undefined ? "" : String(value)} min={p.minimum} max={p.maximum} step={p.type === "integer" ? 1 : "any"}
       onInput={(e) => { const s = (e.target as HTMLInputElement).value; onChange(s === "" ? null : Number(s)); }} />;
   } else if (secret) {
-    ctl = <SecretInput id={id} set={value === SENTINEL} onChange={onChange} />;
+    // The API key gets a Generate button: a key nobody typed is a key nobody
+    // reused; it is shown once, in full, so it can be written down.
+    ctl = <SecretInput id={id} set={value === SENTINEL} generate={ns === "httpd" && k === "api_key"} onChange={onChange} />;
   } else {
     ctl = <input id={id} type="text" value={String(value ?? "")} maxLength={p.maxLength} pattern={p.pattern} placeholder={blob ? "base64" : ""} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />;
   }
@@ -154,22 +156,30 @@ function Field({ ns, k, p, value, dirty, error, onChange }: { ns: string; k: str
   );
 }
 
-function SecretInput({ id, set, onChange }: { id: string; set: boolean; onChange: (v: unknown) => void }) {
+function SecretInput({ id, set, generate, onChange }: { id: string; set: boolean; generate?: boolean; onChange: (v: unknown) => void }) {
   const [editing, setEditing] = useState(false);
   const [v, setV] = useState("");
+  const [shown, setShown] = useState("");   // a generated key, displayed until saved or edited
+  function gen() {
+    const k = randomKey(20);
+    setV(k); setShown(k); setEditing(true); onChange(k);
+  }
   if (!editing) {
     return (
       <>
         <span class="muted">{set ? "•••••••• (set)" : "not set"}</span>
         <button onClick={() => setEditing(true)}>{set ? "Change" : "Set"}</button>
+        {generate && <button onClick={gen} title="20 random characters, shown once">Generate</button>}
         {set && <button onClick={() => onChange("")}>Clear</button>}
       </>
     );
   }
   return (
     <>
-      <input id={id} type="password" value={v} autofocus onInput={(e) => { const s = (e.target as HTMLInputElement).value; setV(s); onChange(s); }} />
-      <button onClick={() => { setEditing(false); setV(""); onChange(SENTINEL); }}>Cancel</button>
+      <input id={id} type="password" value={v} autofocus onInput={(e) => { const s = (e.target as HTMLInputElement).value; setV(s); setShown(""); onChange(s); }} />
+      {generate && <button onClick={gen}>Generate</button>}
+      <button onClick={() => { setEditing(false); setV(""); setShown(""); onChange(SENTINEL); }}>Cancel</button>
+      {shown && <div class="keybox">New key: <code>{shown}</code> — write it down; it is shown only now. After Save every browser, the designer and any script need it.</div>}
     </>
   );
 }

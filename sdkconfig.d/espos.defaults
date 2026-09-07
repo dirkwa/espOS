@@ -56,6 +56,35 @@ CONFIG_SECURE_BOOT_SIGNING_KEY="secure_boot_signing_key.pem"
 # Plain-http image sources are acceptable because every image is signed.
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
+# ---- mbedTLS. The scarce pool on an ESP32 running a WiFi stack is contiguous
+# INTERNAL RAM, and a TLS session is the largest single thing that asks for it.
+# These four settings are about giving as much of it back as possible between
+# handshakes; espos_sk refuses a handshake below
+# CONFIG_ESPOS_SK_TLS_MIN_FREE_BLOCK_KB of it and says why (docs/signalk.md).
+#
+# Dynamic buffers allocate the record buffers when a handshake needs them and
+# free them when it does not, instead of holding SSL_IN_CONTENT_LEN for the
+# life of every open connection.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# The peer's certificate chain and the config data are only needed while the
+# handshake is deciding; keeping them costs several KB per connection for the
+# rest of its life.
+CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+# Nothing in espOS terminates TLS: espos_httpd is plain esp_http_server, and
+# every TLS user here (the SignalK client, the OTA image fetch) is a client.
+# Dropping the server half is flash for nothing.
+CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y
+# Left at 16384 deliberately: a SignalK subscription burst after a reconnect --
+# values and meta for many paths at once -- arrives as one large record, and a
+# smaller input buffer fails the connection rather than merely slowing it.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+
 # ---- Security (production): sdkconfig.d/release.defaults, selected with
 # espos_project_prologue(PROFILE release) or -DESPOS_PROFILE=release; see
 # docs/security.md.
+
+# ---- Clock: accept the NTP server the DHCP lease offers (time.from_dhcp).
+# Usually the router itself, so a boat with no internet route still gets a
+# clock from the network it is already on.
+CONFIG_LWIP_DHCP_GET_NTP_SRV=y

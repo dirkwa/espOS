@@ -12,15 +12,15 @@ extern "C" {
 
 /* Implemented by the driver port (port_idf.c on device, port_sim.c on the
  * host). The port fills the SM callbacks and reports events back through
- * espos_wifi_dispatch(). */
+ * espos_wifi_dispatch(). The device id and the hostname are espos_net's:
+ * the port hands its station netif to espos_net_register_if() and gets the
+ * name set there. */
 typedef struct {
     esp_err_t (*init)(void);                     /* netif/driver up, not connected */
     esp_err_t (*deinit)(void);
     const espos_wifi_port_t *sm_port;            /* connect/disconnect/portal/timer/now/random */
     int8_t (*rssi)(void);                        /* current STA RSSI, 0 if unknown */
     esp_err_t (*scan_start)(void);               /* results via espos_wifi_scan_done() */
-    esp_err_t (*get_mac)(uint8_t mac[6]);
-    esp_err_t (*set_hostname)(const char *hostname);
     esp_err_t (*set_ps)(const char *mode);       /* "none" | "min" | "max" */
     const char *portal_ip;                       /* e.g. "192.168.4.1" */
 } espos_wifi_driver_t;

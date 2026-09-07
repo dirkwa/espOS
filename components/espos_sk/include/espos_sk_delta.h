@@ -67,6 +67,30 @@ void espos_sk_delta_set_label(espos_sk_delta_t *d, const char *label);
 /** Change batching window / drain rate on a live engine. */
 void espos_sk_delta_set_timing(espos_sk_delta_t *d, uint32_t batch_ms, uint32_t drain_per_s);
 
+/**
+ * Give the engine a wall clock, and every message it hands out carries the
+ * time its values were actually MEASURED — `updates[].timestamp`, ISO 8601
+ * UTC with milliseconds.
+ *
+ * This matters most exactly where it is hardest: a message built while the
+ * server was unreachable sits in the ring for minutes or hours, and without a
+ * timestamp the server stamps it on arrival, so an outage's worth of data
+ * lands as one burst at reconnect. The engine records the monotonic instant
+ * each message was built and, at take() time, converts it with the clock's
+ * current offset — `wall_now - (mono_now - batch_ms)`. That is correct even
+ * when the clock was set AFTER the message was buffered, which is the normal
+ * case for a device that boots without a network.
+ *
+ * `wall_ms` returns unix milliseconds, or 0 while the device does not know the
+ * time; 0 means no timestamp is emitted at all, and the server falls back to
+ * stamping on arrival as it did before. Pass NULL to turn timestamps off.
+ * `arg` is handed back untouched. Called on the owner's task; the callback
+ * runs under whatever lock the owner holds around take(), so it must not
+ * block — espos_time_now_ms_or_zero is a lock-protected snapshot copy and is
+ * the intended argument.
+ */
+void espos_sk_delta_set_clock(espos_sk_delta_t *d, int64_t (*wall_ms)(void *arg), void *arg);
+
 /* Helpers: format values as JSON into buf. */
 int espos_sk_json_number(char *buf, size_t size, double v);
 int espos_sk_json_string(char *buf, size_t size, const char *s);

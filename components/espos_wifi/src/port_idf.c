@@ -13,13 +13,14 @@
 #include "freertos/timers.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
 #include "sdkconfig.h"
 
-#include "espos_event.h"
+#include "espos_cfg_keys.h"
+#include "espos_config.h"
+#include "espos_net.h"
 #include "espos_wifi_priv.h"
 
 static const char *TAG = "espos_wifi";
@@ -34,17 +35,6 @@ static bool s_portal_up;
 static int s_portal_clients;
 static bool s_inited;
 static char s_ssid[33];     /* of the current association, for the GOT_IP line */
-static bool s_net_up;       /* a NETWORK_UP was posted and no NETWORK_DOWN yet */
-
-/* Station connectivity as one edge per direction: a connect attempt that
- * fails before DHCP never had the network, so it posts nothing. */
-static void net_down(void)
-{
-    if (s_net_up) {
-        s_net_up = false;
-        (void)espos_event_post(ESPOS_EVENT_NETWORK_DOWN, NULL, 0);
-    }
-}
 
 esp_err_t espos_wifi_portal_dns_start(const char *ip);
 void espos_wifi_portal_dns_stop(void);
@@ -82,7 +72,6 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         }
         ESP_LOGW(TAG, "disconnected: %d (%s)", reason, espos_wifi_reason_str(reason));
         espos_wifi_dispatch(ESPOS_WIFI_EV_STA_DISCONNECTED, &reason);
-        net_down();
         break;
     }
     case WIFI_EVENT_SCAN_DONE: {
@@ -152,22 +141,77 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id, void *data
             hostname = "espos";
         }
         ESP_LOGI(TAG, "connected to \"%s\" as %s — web UI: http://%s.local", s_ssid, ip.ip, hostname);
-        /* The machine first, so a handler that asks espos_wifi_get_status()
-         * already sees CONNECTED; the post is queued behind this handler. */
+        /* The machine reports the new link to espos_net from its drainer,
+         * still inside this handler, so by the time NETWORK_UP is posted both
+         * espos_wifi_get_status() and espos_net_get_status() already say up. */
         espos_wifi_dispatch(ESPOS_WIFI_EV_GOT_IP, &ip);
-        espos_event_network_t ev = { 0 };
-        snprintf(ev.ip, sizeof(ev.ip), "%s", ip.ip);
-        snprintf(ev.hostname, sizeof(ev.hostname), "%s", hostname);
-        s_net_up = true;
-        (void)espos_event_post(ESPOS_EVENT_NETWORK_UP, &ev, sizeof(ev));
     } else if (id == IP_EVENT_STA_LOST_IP) {
         ESP_LOGW(TAG, "lost ip");
         espos_wifi_dispatch(ESPOS_WIFI_EV_LOST_IP, NULL);
-        net_down();
     }
 }
 
 /* ---------------------------------------------------------- SM port */
+
+static bool parse_ip4(const char *str, esp_ip4_addr_t *out)
+{
+    return str && str[0] && esp_netif_str_to_ip4(str, out) == ESP_OK;
+}
+
+/* wifi.ip_mode and friends, applied to the station netif before every
+ * connect so a change takes effect at the next (re)connection. Static
+ * addressing still raises IP_EVENT_STA_GOT_IP on association (esp_netif
+ * reports the configured address when its DHCP client is stopped), so the
+ * state machine sees exactly what it sees with DHCP. */
+static void apply_ip_mode(void)
+{
+    char mode[8] = "dhcp";
+    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_IP_MODE, mode, sizeof(mode), NULL);
+    char ip[16] = { 0 }, mask[16] = { 0 }, gw[16] = { 0 }, dns0[16] = { 0 }, dns1[16] = { 0 };
+    esp_netif_ip_info_t info = { 0 };
+    bool static_ok = false;
+    if (strcmp(mode, "static") == 0) {
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_IP, ip, sizeof(ip), NULL);
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_NETMASK, mask, sizeof(mask), NULL);
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_GATEWAY, gw, sizeof(gw), NULL);
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_DNS0, dns0, sizeof(dns0), NULL);
+        espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_DNS1, dns1, sizeof(dns1), NULL);
+        static_ok = parse_ip4(ip, &info.ip) && parse_ip4(mask, &info.netmask);
+        if (!static_ok) {
+            ESP_LOGW(TAG, "wifi.ip_mode is static but ip \"%s\" / netmask \"%s\" is not an address: using DHCP", ip, mask);
+        }
+        (void)parse_ip4(gw, &info.gw); /* optional; 0.0.0.0 = no gateway */
+    }
+    if (!static_ok) {
+        /* DHCP, or back to it: a start on a running client is ALREADY_STARTED, harmless */
+        esp_err_t err = esp_netif_dhcpc_start(s_sta_netif);
+        if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+            ESP_LOGW(TAG, "dhcpc_start: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+    esp_err_t err = esp_netif_dhcpc_stop(s_sta_netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGW(TAG, "dhcpc_stop: %s", esp_err_to_name(err));
+    }
+    err = esp_netif_set_ip_info(s_sta_netif, &info);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "set_ip_info: %s", esp_err_to_name(err));
+    }
+    /* Without a DHCP lease nobody hands out resolvers: dns0 falls back to the
+     * gateway, which on a boat is the router that resolves anyway. */
+    const char *dns[2] = { dns0[0] ? dns0 : gw, dns1 };
+    const esp_netif_dns_type_t types[2] = { ESP_NETIF_DNS_MAIN, ESP_NETIF_DNS_BACKUP };
+    for (int i = 0; i < 2; i++) {
+        esp_netif_dns_info_t d = { 0 };
+        if (parse_ip4(dns[i], &d.ip.u_addr.ip4)) {
+            d.ip.type = ESP_IPADDR_TYPE_V4;
+            (void)esp_netif_set_dns_info(s_sta_netif, types[i], &d);
+        }
+    }
+    ESP_LOGI(TAG, "static address %s/%s gateway %s dns %s%s%s", ip, mask, gw[0] ? gw : "none", dns[0][0] ? dns[0] : "none",
+             dns1[0] ? " " : "", dns1);
+}
 
 static esp_err_t p_connect(void *ctx, const espos_wifi_net_t *net)
 {
@@ -175,6 +219,7 @@ static esp_err_t p_connect(void *ctx, const espos_wifi_net_t *net)
     /* NB: s_disconnect_requested is deliberately left as is: the echo of a
      * disconnect issued just before this connect (same drain) still has to
      * be swallowed when it arrives during the new attempt. */
+    apply_ip_mode();
     wifi_config_t cfg = { 0 };
     /* wifi_sta_config_t: ssid[32] / password[64] need not be NUL-terminated
      * when full; strncpy pads shorter values with NUL. */
@@ -350,6 +395,9 @@ static esp_err_t d_init(void)
     if (!s_ap_netif) {
         s_ap_netif = esp_netif_create_default_wifi_ap();
     }
+    /* espos_net sets the hostname on it now (before the first DHCP request)
+     * and reads its link-local address for /net/status. */
+    (void)espos_net_register_if(ESPOS_NET_IF_WIFI_STA, s_sta_netif);
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init);
     if (err != ESP_OK) {
@@ -411,31 +459,6 @@ static esp_err_t d_scan_start(void)
     return err;
 }
 
-static esp_err_t d_get_mac(uint8_t mac[6])
-{
-    /* Ask the driver first: on hosted setups (ESP32-P4 + C6) the WiFi MAC
-     * lives on the co-processor and esp_read_mac() has nothing to read. */
-    if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
-        return ESP_OK;
-    }
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-        return ESP_OK;
-    }
-    return esp_read_mac(mac, ESP_MAC_BASE);
-}
-
-static esp_err_t d_set_hostname(const char *hostname)
-{
-    esp_err_t err = ESP_OK;
-    if (s_sta_netif) {
-        err = esp_netif_set_hostname(s_sta_netif, hostname);
-    }
-    if (s_ap_netif) {
-        esp_netif_set_hostname(s_ap_netif, hostname);
-    }
-    return err;
-}
-
 static esp_err_t d_set_ps(const char *mode)
 {
     wifi_ps_type_t ps = WIFI_PS_NONE;
@@ -453,8 +476,6 @@ static const espos_wifi_driver_t k_driver = {
     .sm_port = &k_sm_port,
     .rssi = d_rssi,
     .scan_start = d_scan_start,
-    .get_mac = d_get_mac,
-    .set_hostname = d_set_hostname,
     .set_ps = d_set_ps,
     .portal_ip = PORTAL_IP,
 };

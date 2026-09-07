@@ -2,8 +2,9 @@
  * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
  * SPDX-License-Identifier: Apache-2.0
  *
- * /api/v1/system/{info,reboot,factory-reset}. info carries the health
- * policy's reset record (last_reset) when the previous boot ended in one.
+ * /api/v1/system/{info,reboot,factory-reset} — protected — and the public
+ * /api/v1/system/ping. info carries the health policy's reset record
+ * (last_reset) when the previous boot ended in one.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -116,6 +117,42 @@ static void add_last_reset(cJSON *root)
     }
 }
 
+/**
+ * The wall clock, if this firmware has one. espos_time provides the strong
+ * definition (its src/log_wallclock.c); this weak one says "no clock", which
+ * is what a build without that component gets.
+ *
+ * A hook rather than a call: espos_time depends on espos_httpd for its own
+ * /time endpoints, so espos_httpd naming espos_time would close a cycle. The
+ * override direction costs nothing and keeps /system/info honest either way.
+ */
+__attribute__((weak)) bool espos_httpd_wallclock_hook(bool *synced, const char **source, int64_t *unix_ms)
+{
+    (void)synced;
+    (void)source;
+    (void)unix_ms;
+    return false;
+}
+
+/* "time": what the device believes the wall clock says and where it learned
+ * it. Always present, so a client never has to guess whether the firmware has
+ * the component; `source: "none"` and `now: 0` is the honest answer for a
+ * device that has not been told the time yet. */
+static void add_time(cJSON *root)
+{
+    bool synced = false;
+    const char *source = "none";
+    int64_t unix_ms = 0;
+    (void)espos_httpd_wallclock_hook(&synced, &source, &unix_ms);
+    cJSON *t = cJSON_AddObjectToObject(root, "time");
+    if (!t) {
+        return;
+    }
+    cJSON_AddBoolToObject(t, "synced", synced);
+    cJSON_AddStringToObject(t, "source", source);
+    cJSON_AddNumberToObject(t, "now", (double)unix_ms);
+}
+
 static esp_err_t info_get(httpd_req_t *req)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -138,7 +175,31 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddBoolToObject(j, "config_storage_reset", espos_config_storage_was_reset());
     cJSON_AddStringToObject(j, "schema_etag", espos_cfg_schema_etag);
     cJSON_AddBoolToObject(j, "ui_storage", espos_httpd_static_mounted());
+    add_time(j);
     add_last_reset(j);
+    char *body = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j);
+    if (!body) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "out of memory");
+    }
+    esp_err_t err = espos_httpd_send_json(req, NULL, body);
+    cJSON_free(body);
+    return err;
+}
+
+/* Liveness for anyone on the network — a fleet page, a discovery tool: who
+ * is this, which build, and does it want a key. Nothing here is a secret
+ * that mDNS does not already advertise. */
+static esp_err_t ping_get(httpd_req_t *req)
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON *j = cJSON_CreateObject();
+    if (!j) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "out of memory");
+    }
+    cJSON_AddStringToObject(j, "app", app->project_name);
+    cJSON_AddStringToObject(j, "version", app->version);
+    cJSON_AddBoolToObject(j, "auth", espos_httpd_auth_required());
     char *body = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if (!body) {
@@ -213,15 +274,19 @@ static esp_err_t factory_reset_post(httpd_req_t *req)
     return espos_httpd_send_json(req, "202 Accepted", "{\"status\":\"factory_reset\",\"rebooting\":true}");
 }
 
-esp_err_t espos_httpd_register_system_api(httpd_handle_t h)
+esp_err_t espos_httpd_register_system_api(void)
 {
-    static const httpd_uri_t uris[] = {
-        { .uri = "/api/v1/system/info", .method = HTTP_GET, .handler = info_get },
-        { .uri = "/api/v1/system/reboot", .method = HTTP_POST, .handler = reboot_post },
-        { .uri = "/api/v1/system/factory-reset", .method = HTTP_POST, .handler = factory_reset_post },
+    static const struct {
+        httpd_uri_t uri;
+        uint32_t flags;
+    } uris[] = {
+        { { .uri = "/api/v1/system/ping", .method = HTTP_GET, .handler = ping_get }, ESPOS_HTTPD_PUBLIC },
+        { { .uri = "/api/v1/system/info", .method = HTTP_GET, .handler = info_get }, ESPOS_HTTPD_PROTECTED },
+        { { .uri = "/api/v1/system/reboot", .method = HTTP_POST, .handler = reboot_post }, ESPOS_HTTPD_PROTECTED },
+        { { .uri = "/api/v1/system/factory-reset", .method = HTTP_POST, .handler = factory_reset_post }, ESPOS_HTTPD_PROTECTED },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        esp_err_t err = httpd_register_uri_handler(h, &uris[i]);
+        esp_err_t err = espos_httpd_register_ex(&uris[i].uri, uris[i].flags);
         if (err != ESP_OK) {
             return err;
         }

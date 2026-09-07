@@ -87,3 +87,12 @@ details summary { cursor: pointer; color: var(--muted); }
   .field .help, .field .err { grid-column: 1; }
   .kv .k { min-width: 7rem; }
 }
+/* Login page: one card in the middle, nothing else to click (pages/login.tsx). */
+main.login { max-width: 26rem; margin: 10vh auto; }
+main.login h1 { display: flex; gap: .4rem; align-items: baseline; }
+main.login form .row { flex-wrap: nowrap; }
+.logout { font-size: 12px; color: var(--muted); }
+.logout:hover { color: var(--fg); }
+/* A freshly generated key is shown once, in full, until Save (pages/config.tsx). */
+.keybox { flex-basis: 100%; padding: .5rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--warn) 18%, transparent); font-size: 14px; }
+.keybox code { font-size: 14px; user-select: all; }

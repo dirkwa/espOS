@@ -55,7 +55,8 @@ the server"), so the gateway has no HTTP code of its own and follows the
 selected server exactly: the token is a per-call snapshot of what `espos_sk`
 holds, a 401/403 on a POST is reported to the token machine rather than
 answered with an access request, and the scheme is `http`/`ws` or, when the
-firmware is built with `CONFIG_ESPOS_SK_TLS` and `sk.tls` is on,
+firmware talks to the server over TLS (`sk.scheme`, on by default when the
+server advertises it),
 `https`/`wss` — verified against the bundled Mozilla roots like the delta
 stream, so a self-signed server certificate is refused. The control socket is
 torn down and re-dialled when the server's host, port **or scheme** changes.

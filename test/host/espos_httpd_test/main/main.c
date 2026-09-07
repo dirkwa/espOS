@@ -22,6 +22,7 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_httpd.h"
+#include "espos_net.h"
 #include "espos_wifi.h"
 #include "espos_sk.h"
 #include "espos_ota.h"
@@ -309,6 +310,7 @@ void app_main(void)
     /* The harness overrides the configured port so the runner can pick one. */
     ESP_ERROR_CHECK(espos_config_set_i32(ESPOS_CFG_NS_HTTPD, ESPOS_CFG_HTTPD_PORT, port));
     ESP_ERROR_CHECK(espos_httpd_start());
+    ESP_ERROR_CHECK(espos_net_start());  /* the seam the simulated station reports into; hostname, id, /net */
     ESP_ERROR_CHECK(espos_wifi_start()); /* simulated driver on the host, see port_sim.c */
     ESP_ERROR_CHECK(espos_sk_start());   /* real HTTP; servers from ESPOS_SIM_SK_SERVERS */
     ESP_ERROR_CHECK(espos_ota_start());  /* sim port: downloads counted, no flash */

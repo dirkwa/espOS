@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Host stand-in for mDNS discovery: servers come from the environment,
- *   ESPOS_SIM_SK_SERVERS="host,port,self,name;host,port,self,name"
- * (self/name optional; URNs contain colons, hence commas). Empty or unset =
- * nothing discovered.
+ *   ESPOS_SIM_SK_SERVERS="host,port,self,name[,tls];host,port,self,name[,tls]"
+ * (self/name/tls optional; URNs contain colons, hence commas). A fifth field
+ * of "tls" or "1" is the entry advertising itself as _signalk-https._tcp,
+ * which is what sk.scheme = auto reads on a device. Empty or unset = nothing
+ * discovered.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +40,8 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
         char *host = strsep(&f, ",");
         char *port = f ? strsep(&f, ",") : NULL;
         char *self = f ? strsep(&f, ",") : NULL;
-        char *name = f;
+        char *name = f ? strsep(&f, ",") : NULL;
+        char *tls = f;
         if (!host || !port) {
             continue;
         }
@@ -47,6 +50,7 @@ size_t espos_sk_discovery_run(espos_sk_discovered_t *out, size_t max)
         if (self) {
             snprintf(d->self, sizeof(d->self), "%s", self);
         }
+        d->tls = tls && (strcmp(tls, "tls") == 0 || strcmp(tls, "1") == 0);
         snprintf(d->name, sizeof(d->name), "%s", name ? name : "sim");
         snprintf(d->roles, sizeof(d->roles), "master, main");
         snprintf(d->swname, sizeof(d->swname), "signalk-server");

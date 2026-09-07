@@ -190,14 +190,14 @@ static void notify(uint32_t next, void *arg)
     espos_httpd_sse_publish("logs", ev);
 }
 
-esp_err_t espos_httpd_register_logs_api(httpd_handle_t h)
+esp_err_t espos_httpd_register_logs_api(void)
 {
     static const httpd_uri_t uris[] = {
         { .uri = "/api/v1/logs", .method = HTTP_GET, .handler = logs_get },
         { .uri = "/api/v1/logs/level", .method = HTTP_PUT, .handler = level_put },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        esp_err_t err = httpd_register_uri_handler(h, &uris[i]);
+        esp_err_t err = espos_httpd_register_ex(&uris[i], ESPOS_HTTPD_PROTECTED);
         if (err != ESP_OK) {
             return err;
         }

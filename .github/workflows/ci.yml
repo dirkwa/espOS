@@ -53,6 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tools/check_kconfig_docs.py
+      - run: scripts/check_doxyfile_inputs.sh
       # Tutorials that grow past a screenful stop being tutorials.
       - name: tutorial and guide size caps
         run: |
@@ -144,7 +145,7 @@ jobs:
       - name: espressif/mdns is declared only where the responder lives
         run: |
           for m in components/espos_*/idf_component.yml; do
-            case "$m" in components/espos_wifi/*|components/espos_n2k/*) continue;; esac
+            case "$m" in components/espos_net/*|components/espos_n2k/*) continue;; esac
             ! grep -qE '^\s+espressif/mdns:' "$m" || { echo "$m: depend on espos_wifi instead"; exit 1; }
           done
 
@@ -273,6 +274,26 @@ jobs:
           esp_idf_version: ${{ steps.idf.outputs.version }}
           target: ${{ matrix.target }}
           command: scripts/build_example.sh ${{ matrix.example }} ${{ matrix.target }}
+
+  # Nothing in the core may link Wi-Fi: the H-series has none, and Ethernet or
+  # Thread transports must be able to stand in. The minimal example on esp32h2
+  # with espos_wifi excluded is the proof.
+  headless:
+    name: headless build esp32h2 (no espos_wifi)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: read pinned IDF version
+        id: idf
+        run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: esp32h2
+          command: scripts/build_example.sh components/espos_core/examples/minimal esp32h2
 
   host-tests:
     name: host tests (linux target)

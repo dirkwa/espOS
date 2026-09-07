@@ -24,7 +24,6 @@
 #include "esp_transport.h"
 #include "esp_transport_tcp.h"
 #if CONFIG_ESPOS_SK_TLS
-#include "esp_crt_bundle.h"
 #include "esp_transport_ssl.h"
 #endif
 #include "esp_transport_ws.h"
@@ -35,11 +34,15 @@
 #include "espos_event.h"
 #include "espos_health.h"
 #include "espos_httpd_sse.h"
+#include "espos_net.h"
 #include "espos_sk.h"
 #include "espos_sk_delta.h"
+#include "espos_time.h"
+
 #include "espos_sk_priv.h"
-#include "espos_wifi.h"
-#include "espos_wifi_sm.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "espos_sk_tls.h"
+#endif
 
 /* Steady-state RX buffer. Grows to CONFIG_ESPOS_SK_RX_FRAME_MAX for a big
  * frame, then shrinks straight back so a one-off burst is not a permanent
@@ -113,8 +116,14 @@ static void load_cfg(void)
     v = 300;
     espos_config_get_i32(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_STALL_S, &v);
     uint32_t stall = (uint32_t)v * 1000;
+    /* The source label is the device's hostname, espos_net's (net.hostname,
+     * default espos-<id>); one name on mDNS, in the access request and on
+     * every delta. */
     char h[33] = { 0 };
-    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, h, sizeof(h), NULL);
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) == ESP_OK) {
+        snprintf(h, sizeof(h), "%s", ns.hostname);
+    }
     lock();
     s.enabled = en;
     s.batch_ms = batch;
@@ -124,7 +133,7 @@ static void load_cfg(void)
     if (h[0]) {
         snprintf(s.label, sizeof(s.label), "%s", h);
     } else {
-        snprintf(s.label, sizeof(s.label), "espos-%s", espos_wifi_short_id());
+        snprintf(s.label, sizeof(s.label), "espos-%s", espos_net_short_id());
     }
     /* Buffer geometry changes rebuild the engine (buffered messages are lost). */
     if (!s.delta || msgs != s.buffer_msgs || bytes != s.buffer_bytes) {
@@ -139,6 +148,16 @@ static void load_cfg(void)
     } else {
         espos_sk_delta_set_label(s.delta, s.label);
         espos_sk_delta_set_timing(s.delta, batch, drain);
+    }
+    /* Stamp each value with the moment it was measured rather than the moment
+     * it reaches the server: a message buffered through an outage would
+     * otherwise land, an hour late, as if it had just happened. Re-applied on
+     * every config load so toggling sk.timestamps takes effect without a
+     * restart; the engine reads the clock itself when it drains. */
+    if (s.delta) {
+        bool ts = true;
+        espos_config_get_bool(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_TIMESTAMPS, &ts);
+        espos_sk_delta_set_clock(s.delta, ts ? espos_time_now_ms_or_zero : NULL, NULL);
     }
     unlock();
 }
@@ -416,12 +435,16 @@ static void publish_health(void)
     espos_sk_publish_number(p, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     snprintf(p, sizeof(p), "%slargestBlock", base);
     espos_sk_publish_number(p, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    espos_wifi_status_t ws;
-    if (espos_wifi_get_status(&ws) == ESP_OK) {
+    /* From the network seam, not the radio: rssi is 0 when the route is not
+     * WiFi, and the path keeps its name (wifiReconnects) so dashboards built
+     * on it keep working — it counts default-route re-establishments now,
+     * which on a WiFi-only device is the same number. */
+    espos_net_status_t ns;
+    if (espos_net_get_status(&ns) == ESP_OK) {
         snprintf(p, sizeof(p), "%srssi", base);
-        espos_sk_publish_number(p, ws.rssi);
+        espos_sk_publish_number(p, ns.rssi);
         snprintf(p, sizeof(p), "%swifiReconnects", base);
-        espos_sk_publish_number(p, ws.sm.connect_count > 0 ? ws.sm.connect_count - 1 : 0);
+        espos_sk_publish_number(p, ns.up_count > 0 ? ns.up_count - 1 : 0);
     }
     snprintf(p, sizeof(p), "%sskReconnects", base);
     espos_sk_publish_number(p, s.st.reconnects > 0 ? s.st.reconnects - 1 : 0);
@@ -494,6 +517,7 @@ static void ws_task(void *arg)
 {
     (void)arg;
     esp_transport_handle_t tcp = NULL, ws = NULL;
+    bool built_tls = false; /* which scheme the transport pair above was built for */
     bool connected = false;
     uint32_t next_health = 0;
     uint32_t down_since_ms = 0;
@@ -515,23 +539,23 @@ static void ws_task(void *arg)
             s.cfg_dirty = false;
             load_cfg();
         }
-        /* preconditions: enabled, wifi up, server + token */
+        /* preconditions: enabled, network up, server + token */
         espos_sk_server_t srv;
         char token[ESPOS_SK_TOKEN_MAX];
-        espos_wifi_status_t wst;
-        bool wifi_up = espos_wifi_get_status(&wst) == ESP_OK && wst.sm.state == ESPOS_WIFI_ST_CONNECTED;
+        bool net_up = espos_net_is_up();
         /* token "" is fine when the server runs without security (OPEN); the
          * token machine only exposes a server once it is usable */
         bool have = espos_sk_get_server(&srv) == ESP_OK && espos_sk_get_token(token, sizeof(token)) == ESP_OK &&
                     espos_sk_stream_allowed();
-        bool ready = s.enabled && wifi_up && have;
+        bool ready = s.enabled && net_up && have;
         check_stall(ready, connected, &down_since_ms);
         if (connected) {
-            bool changed = strcmp(srv.host, cur_srv.host) != 0 || srv.port != cur_srv.port || strcmp(token, cur_token) != 0;
+            bool changed = strcmp(srv.host, cur_srv.host) != 0 || srv.port != cur_srv.port ||
+                           srv.tls != cur_srv.tls || strcmp(token, cur_token) != 0;
             if (!ready || changed) {
-                ESP_LOGI(TAG, "closing stream (%s)", !s.enabled ? "disabled" : !wifi_up ? "wifi down"
-                                                                           : changed    ? "server/token changed"
-                                                                                        : "no server");
+                ESP_LOGI(TAG, "closing stream (%s)", !s.enabled ? "disabled" : !net_up ? "network down"
+                                                                           : changed   ? "server/token changed"
+                                                                                       : "no server");
                 esp_transport_close(ws);
                 connected = false;
                 set_stream_connected(false);
@@ -573,15 +597,33 @@ static void ws_task(void *arg)
                 continue;
             }
             /* connect */
-            if (!tcp) {
+            if (ws && built_tls != srv.tls) {
                 /* The underlying transport is the whole of the ws-vs-wss
-                 * difference: esp_transport_ws sits on either. Built once per
-                 * task, so a scheme change needs a reconnect -- which is why
-                 * sk.tls is restart_required. */
+                 * difference: esp_transport_ws sits on either, and neither can
+                 * be turned into the other. So a scheme change destroys the
+                 * pair and builds the right one -- which is what let sk.scheme
+                 * stop being restart_required, and what makes `auto` usable at
+                 * all: the scheme is now something discovery can change under
+                 * a running device. */
+                ESP_LOGI(TAG, "scheme changed to %s: rebuilding the transport", srv.tls ? "wss" : "ws");
+                esp_transport_destroy(ws); /* owns and destroys tcp with it */
+                ws = NULL;
+                tcp = NULL;
+            }
+            if (!tcp) {
 #if CONFIG_ESPOS_SK_TLS
                 if (srv.tls) {
                     tcp = esp_transport_ssl_init();
-                    esp_transport_ssl_crt_bundle_attach(tcp, esp_crt_bundle_attach);
+                    /* The trust store, not the Mozilla bundle -- the same
+                     * decision the HTTP legs make, through the same callback
+                     * and the same single anchor. */
+                    esp_transport_ssl_crt_bundle_attach(tcp, espos_sk_tls_attach);
+                    if (espos_sk_tls_trust_mode() != ESPOS_SK_TLS_TRUST_BUNDLE) {
+                        /* Already decided by fingerprint and SAN set; a boat
+                         * server is reached by IP as often as by name and the
+                         * CN check fails on that alone. */
+                        esp_transport_ssl_skip_common_name_check(tcp);
+                    }
                 } else {
                     tcp = esp_transport_tcp_init();
                 }
@@ -589,6 +631,7 @@ static void ws_task(void *arg)
                 tcp = esp_transport_tcp_init();
 #endif
                 ws = esp_transport_ws_init(tcp);
+                built_tls = srv.tls;
             }
             esp_transport_ws_set_path(ws, "/signalk/v1/stream?subscribe=none&sendMeta=all");
             if (token[0]) {
@@ -599,11 +642,55 @@ static void ws_task(void *arg)
             esp_transport_ws_set_headers(ws, headers[0] ? headers : NULL);
             ESP_LOGI(TAG, "connecting to %s://%s:%u/signalk/v1/stream (subscribe=none, sendMeta=all)",
                      srv.tls ? "wss" : "ws", srv.host, srv.port);
+#if CONFIG_ESPOS_SK_TLS
+            if (srv.tls) {
+                /* One handshake at a time, device-wide, and a pre-flight
+                 * memory check: the token machine's HTTP legs take the same
+                 * slot, and this is the reconnect loop that would otherwise
+                 * meet them head on. */
+                esp_err_t hs = espos_sk_tls_handshake_begin(CONFIG_ESPOS_SK_TLS_HANDSHAKE_TIMEOUT_MS);
+                if (hs != ESP_OK) {
+                    set_error(hs == ESP_ERR_NO_MEM ? "waiting for memory for a TLS handshake"
+                                                   : "waiting for the TLS handshake slot");
+                    s.retry_at_ms = now_ms() + 5000;
+                    publish_status();
+                    continue;
+                }
+            }
+#endif
             int rc = esp_transport_connect(ws, srv.host, srv.port, 8000);
+            int http = rc < 0 ? esp_transport_ws_get_upgrade_request_status(ws) : 101;
+#if CONFIG_ESPOS_SK_TLS
+            if (srv.tls) {
+                /* 101 is the only proof this device has that the other end is
+                 * a SignalK server rather than something that merely finished
+                 * a handshake -- so it is the only thing that commits an
+                 * anchor. A refused upgrade discards whatever was captured. */
+                if (rc >= 0) {
+                    espos_sk_tls_commit(srv.self[0] ? srv.self : NULL);
+                } else {
+                    espos_sk_tls_discard();
+                }
+                espos_sk_tls_handshake_end();
+            }
+#endif
             if (rc < 0) {
-                int http = esp_transport_ws_get_upgrade_request_status(ws);
                 esp_transport_close(ws);
-                char msg[64];
+                char msg[96];
+#if CONFIG_ESPOS_SK_TLS
+                if (srv.tls && http <= 0 && espos_sk_tls_last_error()[0]) {
+                    /* Not "connect failed": the token machine has a state for
+                     * this that keeps the token and retries on a flat minute
+                     * instead of an exponential backoff. */
+                    snprintf(msg, sizeof(msg), "%s", espos_sk_tls_last_error());
+                    espos_sk_report_cert_error(msg);
+                    ESP_LOGW(TAG, "%s", msg);
+                    set_error(msg);
+                    s.retry_at_ms = now_ms() + 30000;
+                    publish_status();
+                    continue;
+                }
+#endif
                 if (http == 401 || http == 403) {
                     snprintf(msg, sizeof(msg), "stream refused (HTTP %d): token rejected", http);
                     espos_sk_report_unauthorized();
@@ -614,7 +701,7 @@ static void ws_task(void *arg)
                 }
                 ESP_LOGW(TAG, "%s", msg);
                 set_error(msg);
-                uint32_t d = espos_wifi_backoff_ms(s.backoff_round, 60000, (uint32_t)rand());
+                uint32_t d = espos_net_backoff_ms(s.backoff_round, 60000, (uint32_t)rand());
                 if (s.backoff_round < 30) {
                     s.backoff_round++;
                 }

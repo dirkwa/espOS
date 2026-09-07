@@ -151,3 +151,146 @@ TEST_CASE("json helpers", "[delta]")
     espos_sk_json_string(b, sizeof(b), "he said \"hi\"\n");
     TEST_ASSERT_EQUAL_STRING("\"he said \\\"hi\\\"\\u000a\"", b);
 }
+
+/* ------------------------------------------------------- timestamps */
+
+/* A settable wall clock, the shape espos_sk_delta_set_clock() takes. `now` of
+ * 0 is the honest "this device does not know the time". */
+static int64_t s_wall_ms;
+
+static int64_t fake_wall(void *arg)
+{
+    (void)arg;
+    return s_wall_ms;
+}
+
+TEST_CASE("timestamps: none until a clock is set, then ISO 8601 UTC with ms", "[delta]")
+{
+    espos_sk_delta_t *d = mk(8, 0, 20);
+    /* No clock at all: the message goes out exactly as it did before, and the
+     * server stamps it on arrival. */
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "1", 1000));
+    char *m = espos_sk_delta_take(d, 1100, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NULL(strstr(m, "timestamp"));
+    free(m);
+
+    /* A clock that says "I do not know" is the same as no clock. */
+    espos_sk_delta_set_clock(d, fake_wall, NULL);
+    s_wall_ms = 0;
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "2", 2000));
+    m = espos_sk_delta_take(d, 2100, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NULL(strstr(m, "timestamp"));
+    free(m);
+
+    /* The batch closes 100 ms after the value is published, so the clock at
+     * take() time reads 100 ms later than the instant the value belongs to —
+     * and the stamp must be the earlier one. */
+    s_wall_ms = 1788775933456LL + 100; /* 2026-09-07T10:12:13.556Z now */
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "3", 3000));
+    m = espos_sk_delta_take(d, 3100, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:12:13.456Z\""));
+    /* It belongs to the update object, before the source, and the values are
+     * still there behind it. */
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"updates\":[{\"timestamp\":\"2026-09-07T10:12:13.456Z\",\"source\":"));
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"value\":3}"));
+    free(m);
+    espos_sk_delta_destroy(d);
+}
+
+TEST_CASE("timestamps: a message buffered offline keeps its own time after a late sync", "[delta]")
+{
+    espos_sk_delta_t *d = mk(8, 0, 100);
+    espos_sk_delta_set_clock(d, fake_wall, NULL);
+    s_wall_ms = 0; /* the device boots with no idea what time it is */
+
+    /* Three measurements, one second apart, while the server is unreachable. */
+    for (int i = 0; i < 3; i++) {
+        char v[8];
+        snprintf(v, sizeof(v), "%d", i);
+        TEST_ESP_OK(espos_sk_delta_publish(d, "environment.wind.speedApparent", v, 10000 + i * 1000));
+        TEST_ASSERT_NULL(espos_sk_delta_take(d, 10000 + i * 1000 + 100, false));
+    }
+    espos_sk_delta_stats_t st;
+    espos_sk_delta_stats(d, &st);
+    TEST_ASSERT_EQUAL(3, st.buffered);
+
+    /* An hour later the network comes back and SNTP sets the clock. The
+     * monotonic counter is at 3610000; the wall clock says 2026-09-07T11:00:00Z.
+     * The first message batched at mono 10000, i.e. 3600 s = one hour earlier,
+     * so it must be stamped 10:00:00 — NOT the time it is being sent. */
+    s_wall_ms = 1788778800000LL; /* 2026-09-07T11:00:00.000Z */
+    char *m = espos_sk_delta_take(d, 3610000, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"value\":0}"));
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:00:00.000Z\""));
+    free(m);
+
+    /* The second was measured one second after the first and is stamped so,
+     * even though it is drained 10 ms later in wall-clock terms. */
+    s_wall_ms += 10;
+    m = espos_sk_delta_take(d, 3610010, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"value\":1}"));
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:00:01.000Z\""));
+    free(m);
+
+    /* Monotonic order is preserved: the third is a further second on. */
+    s_wall_ms += 10;
+    m = espos_sk_delta_take(d, 3610020, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"value\":2}"));
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:00:02.000Z\""));
+    free(m);
+    espos_sk_delta_destroy(d);
+}
+
+TEST_CASE("timestamps: a requeued message is not stamped twice", "[delta]")
+{
+    espos_sk_delta_t *d = mk(8, 0, 20);
+    espos_sk_delta_set_clock(d, fake_wall, NULL);
+    s_wall_ms = 1788775933456LL + 100; /* the batch window closes 100 ms on */
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "1", 1000));
+    char *m = espos_sk_delta_take(d, 1100, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:12:13.456Z\""));
+    espos_sk_delta_requeue(d, m); /* the send failed */
+
+    /* Ten seconds later it goes out again. It carries the time it was
+     * MEASURED, once, not the time of either send attempt. */
+    s_wall_ms += 10000;
+    char *again = espos_sk_delta_take(d, 11100, true);
+    TEST_ASSERT_NOT_NULL(again);
+    TEST_ASSERT_NOT_NULL(strstr(again, "\"timestamp\":\"2026-09-07T10:12:13.456Z\""));
+    TEST_ASSERT_NULL(strstr(again, "\"timestamp\":\"2026-09-07T10:12:23.456Z\""));
+    /* Exactly one timestamp member in the document. */
+    const char *first = strstr(again, "\"timestamp\"");
+    TEST_ASSERT_NOT_NULL(first);
+    TEST_ASSERT_NULL(strstr(first + 1, "\"timestamp\""));
+    free(again);
+    espos_sk_delta_destroy(d);
+}
+
+TEST_CASE("timestamps: the clock can be turned off again, and the monotonic wrap is handled", "[delta]")
+{
+    espos_sk_delta_t *d = mk(8, 0, 20);
+    espos_sk_delta_set_clock(d, fake_wall, NULL);
+    s_wall_ms = 1788775933456LL;
+    /* Batched just before the 32-bit monotonic counter wraps, taken just
+     * after: the unsigned difference is 100 ms, not 4.29 billion. */
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "1", 0xffffff9cu)); /* -100 */
+    char *m = espos_sk_delta_take(d, 0u, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NOT_NULL(strstr(m, "\"timestamp\":\"2026-09-07T10:12:13.356Z\""));
+    free(m);
+
+    espos_sk_delta_set_clock(d, NULL, NULL);
+    TEST_ESP_OK(espos_sk_delta_publish(d, "a.b", "2", 1000));
+    m = espos_sk_delta_take(d, 1100, true);
+    TEST_ASSERT_NOT_NULL(m);
+    TEST_ASSERT_NULL(strstr(m, "timestamp"));
+    free(m);
+    espos_sk_delta_destroy(d);
+}

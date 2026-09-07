@@ -3,7 +3,7 @@
 ## espos_core component manifest: registry metadata for signalk-espos/espos_core.
 ## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
 version: "0.7.0"
-description: "One-call boot: espos_start() brings log, config, HTTP, WiFi and the optional stacks up in order"
+description: "One-call boot: espos_start() brings log, config, HTTP, the network seam, WiFi and the optional stacks up in order"
 url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_core"
 repository: "https://github.com/signalk-espOS/espOS.git"
 documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/concepts.md"
@@ -51,9 +51,17 @@ dependencies:
   signalk-espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
+  signalk-espos/espos_net:
+    version: "^0.7.0"
+    override_path: "../espos_net"
+  # WiFi on every chip with a radio or a co-processor; the 802.15.4-only
+  # H-series has neither and espos_wifi cannot build there (the CMakeLists
+  # applies the same rule to its REQUIRES).
   signalk-espos/espos_wifi:
     version: "^0.7.0"
     override_path: "../espos_wifi"
+    rules:
+      - if: "target not in [esp32h2, esp32h21, esp32h4]"
   signalk-espos/espos_event:
     version: "^0.7.0"
     override_path: "../espos_event"

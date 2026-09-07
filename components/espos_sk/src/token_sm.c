@@ -15,6 +15,15 @@
 #define ERR_MAX_MS    300000u
 #define DUP_RETRY_MS  60000u
 #define OPEN_CHECK_MS 60000u
+/* Flat, not exponential. A certificate problem is fixed from outside — the
+ * server renews, or an operator presses "trust the new certificate" — and the
+ * device should pick that up within a minute rather than an hour, which is
+ * where an exponential backoff lands after an afternoon of trying. */
+#define CERT_RETRY_MS 60000u
+/* How long to wait before asking a second time after a plaintext 401. Short:
+ * a real revocation should still be noticed within seconds, and the point of
+ * the pause is only to let a transient interceptor get out of the way. */
+#define PLAIN_RECHECK_MS 5000u
 
 static void notify(espos_sk_tok_sm_t *sm)
 {
@@ -117,6 +126,45 @@ static void enter_error(espos_sk_tok_sm_t *sm, const char *msg)
     notify(sm);
 }
 
+/* The transport refused the server. The token is kept on purpose: it is still
+ * a perfectly good credential for that server, and dropping it would mean a
+ * fresh approval in the admin UI every time a certificate is renewed. */
+static void enter_cert_error(espos_sk_tok_sm_t *sm, const char *reason)
+{
+    sm->st.state = ESPOS_SK_TOK_CERT_ERROR;
+    set_error(sm, reason && reason[0] ? reason : "the server's certificate is not the one this device trusts");
+    sm->st.cert_error_count++;
+    arm(sm, CERT_RETRY_MS);
+    notify(sm);
+}
+
+/* A 401/403 while our token was on the request. Over TLS nobody but the
+ * server can have answered, so one is conclusive; over plaintext anything on
+ * the path can produce one — a captive portal, a proxy, a router's login page
+ * — and clearing the token costs a trip to the server's admin UI. So the
+ * plaintext case wants a second opinion: keep the token, come back in 5 s with
+ * a verify leg, and only clear if that is refused too.
+ *
+ * Returns true when the token was cleared (the caller then re-requests). */
+static bool handle_unauthorized(espos_sk_tok_sm_t *sm)
+{
+    sm->st.unauthorized_count++;
+    if (!sm->st.server.tls) {
+        sm->plain_unauth_streak++;
+        if (sm->plain_unauth_streak < 2) {
+            set_error(sm, "unauthorized over plaintext; checking again before dropping the token");
+            arm(sm, PLAIN_RECHECK_MS);
+            notify(sm);
+            return false;
+        }
+    }
+    sm->plain_unauth_streak = 0;
+    clear_token(sm);
+    save(sm);
+    set_error(sm, "token rejected by the server; requesting access again");
+    return true;
+}
+
 /* Decide what to do for the current server given what we have stored. */
 static void evaluate(espos_sk_tok_sm_t *sm)
 {
@@ -150,6 +198,27 @@ static void evaluate(espos_sk_tok_sm_t *sm)
         bool applicable = sm->store.token_self[0] == '\0' || srv->self[0] == '\0' ||
                           strcmp(sm->store.token_self, srv->self) == 0;
         if (applicable) {
+            /* Over TLS, skip straight to APPROVED and let the WebSocket
+             * upgrade be the check. It carries the same token and answers
+             * 401 just as plainly, so the verify leg would only buy a second
+             * TLS handshake on every reconnect — the expensive part, in the
+             * memory pool that is scarcest. Over plaintext the leg is nearly
+             * free and still worth having.
+             *
+             * A token that has in fact been revoked is caught at the upgrade
+             * and comes back as EV_UNAUTHORIZED, so nothing is lost but a
+             * handshake. */
+            if (srv->tls) {
+                sm->st.state = ESPOS_SK_TOK_APPROVED;
+                if (!sm->st.approved_since_ms) {
+                    sm->st.approved_since_ms = now(sm);
+                }
+                sm->error_backoff_ms = ERR_MIN_MS;
+                set_error(sm, "");
+                arm(sm, sm->cfg.check_interval_ms);
+                notify(sm);
+                return;
+            }
             do_verify(sm, false);
             return;
         }
@@ -172,6 +241,7 @@ const char *espos_sk_tok_state_str(espos_sk_tok_state_t s)
     case ESPOS_SK_TOK_DENIED: return "denied";
     case ESPOS_SK_TOK_OPEN: return "open";
     case ESPOS_SK_TOK_ERROR: return "error";
+    case ESPOS_SK_TOK_CERT_ERROR: return "cert_error";
     }
     return "unknown";
 }
@@ -235,8 +305,14 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
 
     case ESPOS_SK_EV_SERVER: {
         const espos_sk_server_t *srv = arg;
+        /* The scheme is part of the address, not a detail of it: the same
+         * host and port over https is a different endpoint, with a different
+         * certificate to judge and a transport that has to be rebuilt. Left
+         * out of this comparison, a switch to or from TLS was accepted by the
+         * configuration and by select_server() and then silently dropped
+         * here, so the device kept talking the old scheme for ever. */
         bool same_addr = srv && sm->st.has_server && strcmp(srv->host, sm->st.server.host) == 0 &&
-                         srv->port == sm->st.server.port;
+                         srv->port == sm->st.server.port && srv->tls == sm->st.server.tls;
         bool self_compatible = srv && (srv->self[0] == '\0' || sm->st.server.self[0] == '\0' ||
                                        strcmp(srv->self, sm->st.server.self) == 0);
         if (same_addr && self_compatible) {
@@ -285,6 +361,10 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
         }
         sm->st.busy = false;
         sm->st.last_http_status = r->http_status;
+        if (r->cert_error) {
+            enter_cert_error(sm, r->cert_reason);
+            return;
+        }
         if (r->http_status == 202 && r->href[0]) {
             snprintf(sm->store.pending_href, sizeof(sm->store.pending_href), "%s", r->href);
             snprintf(sm->store.pending_host, sizeof(sm->store.pending_host), "%s", sm->st.server.host);
@@ -354,6 +434,10 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
         }
         sm->st.busy = false;
         sm->st.last_http_status = r->http_status;
+        if (r->cert_error) {
+            enter_cert_error(sm, r->cert_reason);
+            return;
+        }
         if ((r->http_status == 200 || r->http_status == 202) && r->state[0] == '\0') {
             enter_error(sm, "unexpected reply while polling (not a SignalK server?)");
             return;
@@ -425,7 +509,12 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
         sm->st.busy = false;
         sm->st.last_http_status = r->http_status;
         sm->st.last_check_ms = now(sm);
+        if (r->cert_error) {
+            enter_cert_error(sm, r->cert_reason);
+            return;
+        }
         if (r->http_status == 200) {
+            sm->plain_unauth_streak = 0; /* the server answers us: whatever the 401 was, it is over */
             if (sm->st.state == ESPOS_SK_TOK_OPEN) {
                 arm(sm, OPEN_CHECK_MS); /* still open */
                 notify(sm);
@@ -458,10 +547,13 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
                 do_request(sm);
                 return;
             }
-            sm->st.unauthorized_count++;
-            clear_token(sm);
-            save(sm);
-            set_error(sm, "token rejected by the server; requesting access again");
+            if (!handle_unauthorized(sm)) {
+                /* Plaintext, first refusal: keep the token, ask again in a
+                 * moment. Stay APPROVED meanwhile — the credential has not
+                 * been shown to be bad, and demoting the state would take the
+                 * stream down over what is very often a passing proxy. */
+                return;
+            }
             do_request(sm);
             return;
         }
@@ -486,6 +578,10 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
             do_poll(sm);
             break;
         case ESPOS_SK_TOK_APPROVED:
+        case ESPOS_SK_TOK_VERIFYING:
+            /* VERIFYING is armed only by the plaintext second-opinion pause:
+             * a first 401 during the boot check or a manual paste leaves the
+             * machine here with the token still stored, waiting to ask again. */
             do_verify(sm, true);
             break;
         case ESPOS_SK_TOK_OPEN:
@@ -495,7 +591,12 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
             do_request(sm);
             break;
         case ESPOS_SK_TOK_ERROR:
-            evaluate(sm); /* resume whatever is right for THIS server */
+        case ESPOS_SK_TOK_CERT_ERROR:
+            /* Same move for both: work out what this server needs now. From
+             * CERT_ERROR that re-runs the leg that failed, which is the only
+             * way to find out whether the certificate has been renewed or
+             * newly trusted — there is nothing to poll but the handshake. */
+            evaluate(sm);
             break;
         default:
             break;
@@ -544,11 +645,20 @@ void espos_sk_tok_event(espos_sk_tok_sm_t *sm, espos_sk_tok_event_t ev, const vo
 
     case ESPOS_SK_EV_UNAUTHORIZED:
         if (sm->st.state == ESPOS_SK_TOK_APPROVED && !sm->st.busy) {
-            sm->st.unauthorized_count++;
-            clear_token(sm);
-            save(sm);
-            set_error(sm, "token rejected by the server; requesting access again");
-            do_request(sm);
+            if (handle_unauthorized(sm)) {
+                do_request(sm);
+            }
+        }
+        return;
+
+    case ESPOS_SK_EV_CERT_ERROR:
+        /* Only from a state that was actually talking to the server. In
+         * REQUESTED or IDLE the failing leg reports through its own *_RESULT
+         * with cert_error set, and a second path in would double-count. */
+        if (sm->st.state == ESPOS_SK_TOK_APPROVED || sm->st.state == ESPOS_SK_TOK_OPEN ||
+            sm->st.state == ESPOS_SK_TOK_VERIFYING) {
+            sm->st.busy = false;
+            enter_cert_error(sm, (const char *)arg);
         }
         return;
     }

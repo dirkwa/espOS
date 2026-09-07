@@ -6,6 +6,8 @@
 #include <string.h>
 #include <strings.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #if !CONFIG_IDF_TARGET_LINUX
@@ -24,9 +26,26 @@
 static const char *TAG = "espos_httpd";
 static httpd_handle_t s_server;
 
+/* One entry per registered handler. esp_http_server is handed a trampoline
+ * with the entry as its user_ctx; the trampoline runs the auth check and
+ * then the real handler with the real user_ctx. The table never shrinks:
+ * espOS has no unregister, and an entry must outlive the server that points
+ * at it. Sized like the server's own handler table, so whichever fills first
+ * refuses the same registration. */
+typedef struct {
+    esp_err_t (*handler)(httpd_req_t *r);
+    void *user_ctx;
+    uint32_t flags;
+} route_t;
+
+static route_t s_routes[CONFIG_ESPOS_HTTPD_MAX_URI_HANDLERS];
+static size_t s_route_count;
+static SemaphoreHandle_t s_route_lock;
+
 static void config_changed(const char *ns, const char *key, void *arg)
 {
     (void)arg;
+    espos_httpd_auth_config_changed(ns, key);
     char body[80];
     snprintf(body, sizeof(body), "{\"ns\":\"%s\",\"key\":\"%s\"}", ns, key);
     espos_httpd_sse_publish("config", body);
@@ -37,12 +56,48 @@ httpd_handle_t espos_httpd_handle(void)
     return s_server;
 }
 
-esp_err_t espos_httpd_register(const httpd_uri_t *uri)
+static esp_err_t trampoline(httpd_req_t *req)
 {
-    if (!s_server) {
+    const route_t *r = req->user_ctx;
+    req->user_ctx = r->user_ctx; /* the handler sees what it registered */
+    if (!(r->flags & ESPOS_HTTPD_PUBLIC) && !espos_httpd_auth_enforce(req)) {
+        return ESP_OK; /* the 401/403/429 has been sent */
+    }
+    return r->handler(req);
+}
+
+esp_err_t espos_httpd_register_ex(const httpd_uri_t *uri, uint32_t flags)
+{
+    if (!s_server || !s_route_lock) {
         return ESP_ERR_INVALID_STATE;
     }
-    return httpd_register_uri_handler(s_server, uri);
+    if (!uri || !uri->uri || !uri->handler) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(s_route_lock, portMAX_DELAY);
+    esp_err_t err;
+    if (s_route_count >= CONFIG_ESPOS_HTTPD_MAX_URI_HANDLERS) {
+        err = ESP_ERR_HTTPD_HANDLERS_FULL;
+    } else {
+        route_t *r = &s_routes[s_route_count];
+        r->handler = uri->handler;
+        r->user_ctx = uri->user_ctx;
+        r->flags = flags;
+        httpd_uri_t wrapped = *uri; /* keeps the WebSocket fields, if any */
+        wrapped.handler = trampoline;
+        wrapped.user_ctx = r;
+        err = httpd_register_uri_handler(s_server, &wrapped);
+        if (err == ESP_OK) {
+            s_route_count++;
+        }
+    }
+    xSemaphoreGive(s_route_lock);
+    return err;
+}
+
+esp_err_t espos_httpd_register(const httpd_uri_t *uri)
+{
+    return espos_httpd_register_ex(uri, ESPOS_HTTPD_PROTECTED);
 }
 
 /* Map esp_http_server's own error responses onto the JSON error contract. */
@@ -181,13 +236,26 @@ esp_err_t espos_httpd_start(void)
     for (int e = 0; e < HTTPD_ERR_CODE_MAX; e++) {
         httpd_register_err_handler(s_server, (httpd_err_code_t)e, json_err_handler);
     }
-    ESP_ERROR_CHECK(espos_httpd_register_config_api(s_server));
-    ESP_ERROR_CHECK(espos_httpd_register_system_api(s_server));
-    ESP_ERROR_CHECK(espos_httpd_register_logs_api(s_server));
-    ESP_ERROR_CHECK(espos_httpd_register_coredump_api(s_server));
-    ESP_ERROR_CHECK(espos_httpd_register_static(s_server));
-    ESP_ERROR_CHECK(espos_httpd_register_sse(s_server));
-    /* config changes are pushed to UIs as "config" events */
+    if (!s_route_lock) {
+        s_route_lock = xSemaphoreCreateMutex();
+        if (!s_route_lock) {
+            httpd_stop(s_server);
+            s_server = NULL;
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    s_route_count = 0;
+    /* The key and session lifetime must be known before the first protected
+     * handler exists, or a request in the gap would see an open device. */
+    ESP_ERROR_CHECK(espos_httpd_auth_init());
+    ESP_ERROR_CHECK(espos_httpd_register_config_api());
+    ESP_ERROR_CHECK(espos_httpd_register_system_api());
+    ESP_ERROR_CHECK(espos_httpd_register_logs_api());
+    ESP_ERROR_CHECK(espos_httpd_register_coredump_api());
+    ESP_ERROR_CHECK(espos_httpd_register_static());
+    ESP_ERROR_CHECK(espos_httpd_register_sse());
+    ESP_ERROR_CHECK(espos_httpd_register_auth_api());
+    /* config changes are pushed to UIs as "config" events (and reload the key) */
     (void)espos_config_subscribe(config_changed, NULL);
     ESP_LOGI(TAG, "listening on port %ld", (long)port);
     (void)espos_event_post(ESPOS_EVENT_HTTPD_STARTED, NULL, 0);
@@ -203,6 +271,7 @@ esp_err_t espos_httpd_stop(void)
     espos_httpd_sse_shutdown();
     esp_err_t err = httpd_stop(s_server);
     s_server = NULL;
+    s_route_count = 0; /* the server's handler table is gone with it */
     return err;
 }
 

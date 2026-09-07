@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "preact/hooks";
-import { get, put, post, useStore, skStore, skServersStore, skWsStore, fmtDuration, fmtBytes, errText, type SkServersDoc, type ConfigDoc, type PutResult } from "../api";
+import { get, put, post, del, useStore, skStore, skServersStore, skWsStore, skTlsStore, fmtDuration, fmtBytes, errText, type SkServersDoc, type SkTls, type ConfigDoc, type PutResult } from "../api";
 import { Badge, Row, Msg } from "../app";
 
 const TOKEN_HELP: Record<string, string> = {
@@ -13,7 +13,11 @@ const TOKEN_HELP: Record<string, string> = {
   denied: "The request was denied. Fix it on the server, then request again.",
   open: "The server has security disabled: no token needed.",
   error: "The last request failed; the device retries with backoff.",
+  cert_error: "The server's certificate is not the one this device trusts. The access token is kept — it is the connection that is refused, not the credential. If the certificate was legitimately replaced, compare the fingerprints below and trust the new one.",
 };
+
+/** Short enough to read at a glance, long enough to tell two apart. */
+const shortFp = (fp: string) => (fp ? fp.replace(/(.{4})/g, "$1 ").trim().slice(0, 24) + "…" : "–");
 
 export function SignalKPage() {
   const sk = useStore(skStore);
@@ -26,12 +30,21 @@ export function SignalKPage() {
   const [manual, setManual] = useState({ host: "", port: 80 });
   const [busy, setBusy] = useState("");
 
+  const tls = useStore(skTlsStore);
+  // A build without CONFIG_ESPOS_SK_TLS answers 404 here and has no trust to
+  // show; the section simply does not appear.
+  const loadTls = () => get<SkTls>("/sk/tls").then((d) => skTlsStore.set(d), () => undefined);
+
   const load = () => get<ConfigDoc>("/config?ns=sk").then((d) => {
     const c = d["sk"] ?? {};
     setCfg(c);
     setManual({ host: (c["server_host"] as string) || "", port: (c["server_port"] as number) || 80 });
   }, (e: unknown) => setMsg(errText(e)));
-  useEffect(() => { void load(); void get<SkServersDoc>("/sk/servers").then((d) => skServersStore.set(d), () => undefined); }, []);
+  useEffect(() => {
+    void load();
+    void loadTls();
+    void get<SkServersDoc>("/sk/servers").then((d) => skServersStore.set(d), () => undefined);
+  }, []);
 
   async function act(name: string, fn: () => Promise<unknown>, done: string) {
     setBusy(name); setMsg(""); setOk("");
@@ -40,7 +53,8 @@ export function SignalKPage() {
   const save = (patch: Record<string, unknown>, done: string) => act("save", async () => { const r = await put<PutResult>("/config", { sk: patch }); if (!r.changed.length) done = "No change."; await load(); }, done);
 
   const st = sk?.token.state ?? "";
-  const kind = st === "approved" || st === "open" ? "ok" : st === "denied" || st === "error" ? "bad" : "warn";
+  const kind = st === "approved" || st === "open" ? "ok"
+    : st === "denied" || st === "error" || st === "cert_error" ? "bad" : "warn";
   const selfSel = (cfg?.["server_self"] as string) || "";
   const hostSel = (cfg?.["server_host"] as string) || "";
 
@@ -55,7 +69,7 @@ export function SignalKPage() {
           {sk && (
             <>
               <p class="small">{TOKEN_HELP[st] ?? ""}</p>
-              <Row k="Server">{sk.server.source === "none" ? <span class="muted">none</span> : <>{sk.server.name || sk.server.host} <span class="muted">· {sk.server.host}:{sk.server.port} · {sk.server.source}{sk.server.swvers ? ` · ${sk.server.swname} ${sk.server.swvers}` : ""}</span></>}</Row>
+              <Row k="Server">{sk.server.source === "none" ? <span class="muted">none</span> : <>{sk.server.name || sk.server.host} <span class="muted">· {sk.server.scheme ?? "http"}://{sk.server.host}:{sk.server.port} · {sk.server.source}{sk.server.swvers ? ` · ${sk.server.swname} ${sk.server.swvers}` : ""}</span></>}</Row>
               <Row k="Device">{sk.description} <span class="muted">· {sk.permissions}</span></Row>
               <Row k="Client id"><span class="mono small">{sk.client_id}</span></Row>
               {st === "pending" && <Row k="Pending for">{fmtDuration(sk.token.pending_s)}</Row>}
@@ -73,6 +87,68 @@ export function SignalKPage() {
             </>
           )}
         </section>
+
+        {tls && (
+          <section class="card">
+            <h2>Connection security <Badge kind={st === "cert_error" ? "bad" : tls.pinned ? "ok" : "muted"}>
+              {st === "cert_error" ? "not trusted" : tls.pinned ? "pinned" : "nothing pinned"}
+            </Badge></h2>
+            <Row k="Scheme">
+              <select value={(cfg?.["scheme"] as string) || "auto"}
+                      onChange={(e) => void save({ scheme: (e.target as HTMLSelectElement).value }, "Scheme saved.")}>
+                <option value="auto">auto — ask the server</option>
+                <option value="http">http — never TLS</option>
+                <option value="https">https — always TLS</option>
+              </select>
+              <span class="muted small"> Currently {sk?.server.scheme ?? "–"}.</span>
+            </Row>
+            <Row k="Trust">
+              <select value={(cfg?.["tls_trust"] as string) || "tofu"}
+                      onChange={(e) => void save({ tls_trust: (e.target as HTMLSelectElement).value }, "Trust setting saved.")}>
+                <option value="tofu">first use — pin what this server shows</option>
+                <option value="ca">own CA — hold it to the certificate below</option>
+                <option value="bundle">public roots only</option>
+              </select>
+            </Row>
+            {tls.pinned
+              ? <>
+                  <Row k="Pinned">{tls.pinned.kind === "ca" ? "issuing CA" : "this certificate"}
+                    {tls.pinned.cn ? <span class="muted"> · {tls.pinned.cn}</span> : null}</Row>
+                  <Row k="Fingerprint"><span class="mono small">{shortFp(tls.pinned.fingerprint)}</span></Row>
+                  {tls.pinned.san && <Row k="Names"><span class="mono small">{tls.pinned.san}</span></Row>}
+                </>
+              : <p class="muted small">Nothing is pinned yet. The first connection that works records what
+                  the server presented, and every later one has to match it.</p>}
+            {st === "cert_error" && (
+              <>
+                <Msg text={sk?.token.last_error ?? ""} />
+                {tls.presented && <>
+                  <Row k="Now showing">{tls.presented.cn || <span class="muted">no name</span>}</Row>
+                  <Row k="Its fingerprint"><span class="mono small">{shortFp(tls.presented.fingerprint)}</span></Row>
+                </>}
+                <p class="muted small">
+                  If you replaced the server's certificate yourself, this is expected and the button below
+                  accepts the new one. If you did not, something else is answering as your server and you
+                  should find out what before trusting it.
+                </p>
+                <div class="row">
+                  <button class="danger" disabled={!!busy}
+                          onClick={() => { if (confirm("Trust the certificate the server is showing now? Do this only if you know why it changed.")) void act("trust", () => del("/sk/tls").then(loadTls), "Trusting the new certificate."); }}>
+                    Trust the new certificate
+                  </button>
+                </div>
+              </>
+            )}
+            {st !== "cert_error" && tls.pinned && (
+              <div class="row" style="margin-top:.5rem">
+                <button disabled={!!busy}
+                        onClick={() => { if (confirm("Forget the pinned certificate? The next connection pins whatever the server presents.")) void act("trust", () => del("/sk/tls").then(loadTls), "Pinned certificate forgotten."); }}>
+                  Forget pinned certificate
+                </button>
+              </div>
+            )}
+          </section>
+        )}
 
         <section class="card">
           <h2>Delta stream {ws && <Badge kind={ws.connected ? "ok" : ws.enabled ? "warn" : "muted"}>{ws.connected ? "connected" : ws.enabled ? "offline" : "disabled"}</Badge>}</h2>
@@ -118,7 +194,7 @@ export function SignalKPage() {
               {(servers?.servers ?? []).map((s) => (
                 <tr key={s.self + s.host} class={s.selected ? "sel" : ""}>
                   <td>{s.name}{s.roles?.includes("master") ? "" : <span class="muted small"> ({s.roles})</span>}<div class="mono small muted">{s.self}</div></td>
-                  <td>{s.host}:{s.port}</td>
+                  <td>{s.scheme === "https" ? <b>https</b> : "http"}://{s.host}:{s.port}</td>
                   <td>{s.swname} {s.swvers}</td>
                   <td>{s.selected && selfSel === s.self ? <button onClick={() => void save({ server_self: null }, "Back to automatic selection.")}>Unpin</button>
                     : <button onClick={() => void save({ server_self: s.self, server_host: null }, `Pinned ${s.name}.`)}>Use</button>}</td>

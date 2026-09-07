@@ -9,10 +9,15 @@
 
 #include "cJSON.h"
 
+#include "espos_cfg_keys.h"
+#include "espos_config.h"
 #include "espos_httpd.h"
 #include "espos_httpd_sse.h"
 #include "espos_sk.h"
 #include "espos_sk_priv.h"
+#if CONFIG_ESPOS_SK_TLS
+#include "espos_sk_tls.h"
+#endif
 
 static esp_err_t send_doc(httpd_req_t *req, esp_err_t (*fn)(char **))
 {
@@ -192,6 +197,89 @@ static esp_err_t put_last_get(httpd_req_t *req)
     return espos_httpd_send_json(req, NULL, s_last_put[0] ? s_last_put : "null");
 }
 
+/* ------------------------------------------------------------ TLS trust */
+
+#if CONFIG_ESPOS_SK_TLS
+
+/* GET /api/v1/sk/tls — what is pinned, what the server last presented, and
+ * why the two did not match if they did not. The pair is what makes a
+ * cert_error actionable: an operator who can compare the fingerprints knows
+ * whether this is their own renewal or something else answering. */
+static esp_err_t tls_get(httpd_req_t *req)
+{
+    char *json = espos_sk_tls_json();
+    if (!json) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "no_mem", "");
+    }
+    esp_err_t err = espos_httpd_send_json(req, NULL, json);
+    free(json);
+    return err;
+}
+
+/* DELETE /api/v1/sk/tls — forget the anchor. The deliberate "yes, the
+ * certificate really did change and I know why" that a pinned device needs
+ * after a legitimate renewal it could not follow on its own. */
+static esp_err_t tls_delete(httpd_req_t *req)
+{
+    esp_err_t err = espos_sk_tls_reset_now();
+    if (err != ESP_OK) {
+        return espos_httpd_send_error(req, "503 Service Unavailable", "busy", esp_err_to_name(err));
+    }
+    return espos_httpd_send_json(req, "202 Accepted", "{\"status\":\"reset\"}");
+}
+
+/* PUT /api/v1/sk/tls/ca {"pem": "-----BEGIN CERTIFICATE-----…"} — the
+ * operator's own CA, for a fleet whose certificates are issued centrally.
+ * Validated here rather than on the next handshake, so a paste with a missing
+ * line comes back as a 400 the person can act on instead of a device that
+ * quietly stops connecting. Stored in the config blob, so it survives a
+ * reboot and travels with a configuration export. */
+static esp_err_t tls_ca_put(httpd_req_t *req)
+{
+    if (!espos_httpd_require_json(req)) {
+        return ESP_OK;
+    }
+    char *body = NULL;
+    size_t len = 0;
+    if (espos_httpd_read_body(req, &body, &len) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    cJSON *j = cJSON_ParseWithLength(body, len);
+    free(body);
+    const cJSON *pem = j ? cJSON_GetObjectItem(j, "pem") : NULL;
+    if (!cJSON_IsString(pem) || !pem->valuestring || !pem->valuestring[0]) {
+        cJSON_Delete(j);
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", "expected {\"pem\": \"-----BEGIN CERTIFICATE-----…\"}");
+    }
+    size_t n = strlen(pem->valuestring);
+    if (n + 1 > CONFIG_ESPOS_SK_TLS_CA_MAX) {
+        cJSON_Delete(j);
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", "certificate too large (ESPOS_SK_TLS_CA_MAX)");
+    }
+    mbedtls_x509_crt probe;
+    mbedtls_x509_crt_init(&probe);
+    esp_err_t ok = espos_sk_tls_parse_ca(pem->valuestring, &probe);
+    mbedtls_x509_crt_free(&probe);
+    if (ok != ESP_OK) {
+        cJSON_Delete(j);
+        return espos_httpd_send_error(req, "400 Bad Request", "validation", "not a PEM certificate");
+    }
+    /* Through the config store, not straight into sk_tls: the subscriber
+     * there is what applies it, and one path in means the key and the
+     * endpoint can never disagree about what is in force. */
+    esp_err_t err = espos_config_set_blob(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_CA_PEM, pem->valuestring, n);
+    if (err == ESP_OK) {
+        err = espos_config_set_str(ESPOS_CFG_NS_SK, ESPOS_CFG_SK_TLS_TRUST, "ca");
+    }
+    cJSON_Delete(j);
+    if (err != ESP_OK) {
+        return espos_httpd_send_error(req, "500 Internal Server Error", "store_failed", esp_err_to_name(err));
+    }
+    return espos_httpd_send_json(req, NULL, "{\"status\":\"stored\",\"trust\":\"ca\"}");
+}
+
+#endif /* CONFIG_ESPOS_SK_TLS */
+
 static void sse_hello(int client, void *arg)
 {
     (void)arg;
@@ -204,6 +292,13 @@ static void sse_hello(int client, void *arg)
         espos_httpd_sse_send(client, "sk_servers", json);
         free(json);
     }
+#if CONFIG_ESPOS_SK_TLS
+    json = espos_sk_tls_json();
+    if (json) {
+        espos_httpd_sse_send(client, "sk_tls", json);
+        free(json);
+    }
+#endif
 }
 
 esp_err_t espos_sk_register_api(void)
@@ -218,6 +313,11 @@ esp_err_t espos_sk_register_api(void)
         { .uri = "/api/v1/sk/publish", .method = HTTP_POST, .handler = publish_post },
         { .uri = "/api/v1/sk/put", .method = HTTP_POST, .handler = put_post },
         { .uri = "/api/v1/sk/put", .method = HTTP_GET, .handler = put_last_get },
+#if CONFIG_ESPOS_SK_TLS
+        { .uri = "/api/v1/sk/tls", .method = HTTP_GET, .handler = tls_get },
+        { .uri = "/api/v1/sk/tls", .method = HTTP_DELETE, .handler = tls_delete },
+        { .uri = "/api/v1/sk/tls/ca", .method = HTTP_PUT, .handler = tls_ca_put },
+#endif
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         esp_err_t err = espos_httpd_register(&uris[i]);

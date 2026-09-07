@@ -78,6 +78,104 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Added
 
+- time: new `espos_time` component — the device's wall clock, learned from
+  SNTP, a manual `PUT /api/v1/time`, `navigation.datetime` on the SignalK
+  stream, or an instant carried through a deep sleep in RTC memory, ranked in
+  that order so a coarse source never walks back one that is better. SNTP is
+  armed at start and begins polling on the first `NETWORK_UP`, whichever
+  transport produces it. `espos_time_now_ms()` returns 0 while unsynced rather
+  than a plausible-looking 1970, so a missing time reads as missing.
+  `GET`/`PUT /api/v1/time`, a `time` object in `/system/info`, a Clock line on
+  the status page, config `time.*`, and `ESPOS_EVENT_TIME_SYNCED`
+  ([docs/time.md](docs/time.md)).
+- sk: deltas carry the time their values were **measured**
+  (`updates[].timestamp`, config `sk.timestamps`, default on). The engine
+  records a monotonic stamp per queued message and converts it at send time, so
+  a message buffered through an outage keeps its own time even when the clock
+  was only set afterwards — previously the server stamped it on arrival and an
+  hour of data landed as one burst at reconnect.
+- log: `CONFIG_ESPOS_LOG_WALLCLOCK` (default on) adds the UTC time to stored
+  log lines beside the existing milliseconds-since-boot. Console output and
+  lines logged before the clock is set are unchanged.
+- sk: TLS to real boat servers. A trust store next to the token (NVS
+  `skstate`) pins what the server presents on the first connection that works
+  and holds it to that afterwards, the way ssh does — so signalk-server's own
+  self-signed certificate, and any private CA, now work instead of being
+  refused. A CA anchor binds the issuing CA *and* the leaf's SAN set, so a
+  renewal by the same CA for the same names is accepted with nobody pressing
+  anything; a bare self-signed certificate is pinned as itself and a
+  replacement needs one deliberate "trust the new certificate". There is no
+  accept-anything mode. `GET`/`DELETE /api/v1/sk/tls`,
+  `PUT /api/v1/sk/tls/ca`, SSE `sk_tls`.
+- sk: token state `cert_error` — the certificate is not the trusted one. The
+  token is kept (it is the transport that is wrong, not the credential), the
+  retry is a flat 60 s rather than an exponential backoff, and the stream stays
+  down rather than falling back to plaintext. Health condition `skCertificate`.
+  One TLS handshake at a time device-wide, with a pre-flight check on
+  contiguous internal RAM (`tlsMemory` WARN when it defers).
+- `espos_net`: the interface-agnostic network seam — default route (Ethernet
+  before WiFi before Thread), `espos_net_get_status/is_up/subscribe/short_id/
+  backoff_ms`, transports plug in through `espos_net_register_if/report`;
+  `GET /api/v1/net/status` and the `net` SSE event; `net.hostname`; the mDNS
+  responder moved here unchanged. `espos_sk` and `espos_ota` depend on
+  `espos_net`, not on `espos_wifi`; a headless esp32h2 build (no WiFi at all)
+  is a CI gate. `docs/net.md`.
+- wifi: static IP (`wifi.ip_mode`, `ip`, `netmask`, `gateway`, `dns0`,
+  `dns1`), applied before every connect.
+- httpd: REST authentication (closes #2). `httpd.api_key` (secret; empty =
+  open, the default) guards every endpoint registered through
+  `espos_httpd_register()`: `Authorization: Bearer <key>` for machine clients,
+  or the `espos_sid` cookie from `POST /api/v1/auth/login` (`/logout`,
+  `/status`) for browsers; cookie writes need a matching `Origin`; five wrong
+  keys in 60 s → 429 for 30 s; the setup-portal network is exempt (lockout
+  recovery). New `espos_httpd_register_ex(uri, ESPOS_HTTPD_PUBLIC|PROTECTED)`,
+  `espos_httpd_request_authenticated()`, `espos_httpd_auth_policy.h`; public
+  `GET /api/v1/system/ping`; `GET /system/info` is now protected. Kconfig
+  `ESPOS_HTTPD_AUTH_REQUIRED`, `ESPOS_HTTPD_MAX_SESSIONS`, `ESPOS_HTTPD_TLS`
+  (reserved). **Consumers:** an application's endpoints become protected
+  automatically; an endpoint that must stay open registers with
+  `ESPOS_HTTPD_PUBLIC`; the cockpit's own :8081 server is unaffected.
+- ui: login page, Log out, a Generate button for `httpd.api_key` (shown once),
+  an Access card on Status; the mock serves `/auth/*` and `/system/ping`.
+
+### Changed
+
+- sk: **`sk.tls` (bool) is replaced by `sk.scheme` (auto | http | https,
+  default `auto`)**; the descriptor is at version 2 and a migration maps
+  `tls = true` to `"https"` and anything else to `"auto"`. **Consumers:** a
+  config export or an automation that writes `sk.tls` must write `sk.scheme`
+  instead. `auto` reads the scheme off the server's own mDNS advertisement, or
+  for a manual host off one unauthenticated redirect probe. The setting is no
+  longer `restart_required`.
+- sk: **`CONFIG_ESPOS_SK_TLS` now defaults to `y`.** Measured on esp32c6:
+  about 10 KB with `espos_ota` in the build (mbedTLS and the bundle are
+  already there for the https image source), about 78 KB without it. New
+  setting `sk.tls_trust` (tofu | ca | bundle, **default `tofu`**); `bundle` is
+  the previous behaviour, and `sk.ca_pem` supplies the CA for `ca` mode so a
+  fleet can connect verified on the first try.
+- sk: over plaintext a single 401 no longer clears the access token. Anything
+  on the path can answer one — a captive portal, a proxy, a router's login
+  page — and replacing a token costs a trip to the server's admin UI, so the
+  first refusal buys a re-check 5 s later and only two in a row clear it. Over
+  TLS one is still conclusive. On a TLS server the token machine also skips
+  the VERIFYING leg, which only bought a second handshake per reconnect.
+- **Consumers, reflash required:** `partitions/4mb.csv` moves 256 KB from
+  `storage` into the two app slots (`ota_0`/`ota_1` 1600K → 1728K, `storage`
+  640K → 384K). A full build — WiFi, TLS-capable crypto, mDNS, LittleFS and
+  the web UI — had reached 92 % of the old slot, leaving no room for the next
+  feature or for an OTA image briefly larger than the running one; the UI
+  bundle is 22 KB, so 384 KB is still seventeen times what it needs. A device
+  on the old table keeps working, but takes the new layout only through a
+  USB flash, not over the air.
+- **Consumers:** `espos_wifi_start()` requires `espos_net_start()` first
+  (`espos_start()` handles it: httpd → net → wifi → …). `espos_wifi_short_id()`
+  and `espos_wifi_backoff_ms()` are deprecated, removed in 0.9 — use
+  `espos_net_*`. `wifi.hostname` → `net.hostname` (migrated once at boot).
+  `CONFIG_ESPOS_WIFI_MDNS[_MAX_SERVICES]` → `CONFIG_ESPOS_NET_MDNS[_MAX_SERVICES]`.
+  The device id is the base MAC on every transport; on the ESP32-P4 the
+  default hostname, portal SSID and Signal K source label change once — set
+  `net.hostname` to keep a name. Delete `build/sdkconfig` once after the bump.
+
 - examples: eleven buildable example projects under `components/<c>/examples/`,
   indexed in `examples/README.md`, each a complete IDF project on the shared
   prologue (≤ 120 lines of C) naming the SensESP example it replaces. Core:
@@ -191,6 +289,10 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
   CMakeLists already required. `docs/releasing.md` gains "Registry publishing".
 
 ### Fixed
+
+- sk: a change of scheme was accepted by the configuration and then silently
+  dropped by the token machine, whose "same server" test compared only host
+  and port. A device switched between http and https kept using the old one.
 
 - config: `espos_gen_config.py` emits valid empty tables and an empty schema
   when no descriptor is registered (was a build error for a consumer that

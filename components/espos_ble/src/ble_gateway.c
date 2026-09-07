@@ -33,7 +33,7 @@
 #include "ble_types.h"
 #include "cJSON.h"
 #if CONFIG_ESPOS_SK_TLS
-#include "esp_crt_bundle.h"
+#include "espos_sk_tls_policy.h"
 #endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -639,9 +639,11 @@ static void ws_connect(void)
         .reconnect_timeout_ms = 5000,
         .network_timeout_ms = 10000,
 #if CONFIG_ESPOS_SK_TLS
-        /* wss verifies against the same bundled roots as the delta stream and
-         * the HTTP helper (sk_http.c): a self-signed server is refused. */
-        .crt_bundle_attach = srv.tls ? esp_crt_bundle_attach : NULL,
+        /* wss trusts exactly what the delta stream trusts: the shared hook
+         * carries the pinned anchor, so the boat's own self-signed server is
+         * accepted here too instead of on every socket but this one. */
+        .crt_bundle_attach = srv.tls ? espos_sk_tls_attach : NULL,
+        .skip_cert_common_name_check = srv.tls && espos_sk_tls_trust_mode() != ESPOS_SK_TLS_TRUST_BUNDLE,
 #endif
     };
     g.ws = esp_websocket_client_init(&cfg);

@@ -141,7 +141,10 @@ uint32_t espos_wifi_sm_backoff_remaining_ms(const espos_wifi_sm_t *sm);
 const char *espos_wifi_state_str(espos_wifi_state_t s);
 /* Human explanation for a disconnect reason (esp_wifi codes and ours). */
 const char *espos_wifi_reason_str(int reason);
-/* Backoff delay for a given round: 1 s · 2^round, capped, ±25 % jitter. Exposed for tests. */
+/* Deprecated: espos_net_backoff_ms() (espos_net.h) is the same curve — 1 s ·
+ * 2^round, capped, ±25 % jitter, floor 250 ms — for every retry loop in espOS.
+ * Kept as a standalone copy so the state machine has no dependency and builds
+ * on its own in test/host/espos_wifi_test; removed in 0.9. */
 uint32_t espos_wifi_backoff_ms(uint32_t round, uint32_t cap_ms, uint32_t rnd);
 
 #ifdef __cplusplus

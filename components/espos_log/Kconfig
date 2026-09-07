@@ -16,4 +16,23 @@ menu "espOS log ring"
             Longer lines are truncated when stored (console output is
             unaffected).
 
+    config ESPOS_LOG_WALLCLOCK
+        bool "Stamp stored lines with the wall clock once it is known"
+        default y
+        help
+            The IDF log prefix carries milliseconds since boot, which is what
+            you want for "how long after startup did this happen" and useless
+            for lining a device's log up against a server's. With this on,
+            once espos_time has a clock every line stored in the ring carries
+            both — the monotonic value stays exactly where it was and the UTC
+            time is added beside it:
+
+                I (18452|2026-09-07T10:12:13.456Z) espos_sk: stream connected
+
+            Lines logged before the clock is set are unchanged, so a boot log
+            reads as it always did, and so is the console output: only what
+            /api/v1/logs serves is stamped. A firmware built without
+            espos_time keeps the monotonic-only prefix whatever this is set
+            to, because there is no clock to ask.
+
 endmenu

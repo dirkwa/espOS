@@ -1,0 +1,23 @@
+{
+  "namespace": "time",
+  "version": 1,
+  "title": "Clock",
+  "description": "Where the device learns what time it is. Everything espOS publishes is UTC; the timezone below is for displays only.",
+  "keys": [
+    {"name": "sntp", "type": "bool", "default": true, "title": "Set the clock from NTP", "restart_required": true,
+     "description": "Ask an NTP server for the time once the network is up. Off = the clock comes only from the SignalK stream or a manual set, which is what a device on a boat network with no internet route wants."},
+    {"name": "server0", "type": "string", "default": "pool.ntp.org", "maxLength": 63, "title": "NTP server",
+     "restart_required": true,
+     "description": "Host name or IP. Empty and with DHCP off, nothing is asked."},
+    {"name": "server1", "type": "string", "default": "", "maxLength": 63, "title": "Second NTP server",
+     "restart_required": true,
+     "description": "Optional fallback, used when the first does not answer."},
+    {"name": "from_dhcp", "type": "bool", "default": true, "title": "Use the NTP server DHCP offers",
+     "restart_required": true,
+     "description": "Many routers hand out an NTP server with the lease, and it is usually the router itself — reachable even when the boat has no internet. A DHCP-supplied server replaces the list above and is refreshed on every new lease."},
+    {"name": "sk_fallback", "type": "bool", "default": true, "title": "Fall back to the SignalK clock",
+     "description": "While the clock is unset, take the time from navigation.datetime on the SignalK stream. The server usually has GPS time, so a device with no internet route still gets a usable clock. Dropped as soon as NTP succeeds."},
+    {"name": "tz", "type": "string", "default": "UTC0", "maxLength": 39, "title": "Timezone (POSIX TZ)",
+     "description": "For displays only — nothing espOS sends is ever in local time. POSIX form, e.g. UTC0, CET-1CEST,M3.5.0,M10.5.0/3 for central Europe. Note the POSIX sign convention: the offset is west-positive, so CET (UTC+1) is written -1."}
+  ]
+}

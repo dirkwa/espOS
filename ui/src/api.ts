@@ -1,10 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 // SPDX-License-Identifier: Apache-2.0
 // The one place that knows the REST contract (docs/rest-api.md): typed fetch
-// helpers, the SSE connection and a tiny subscribable store per event.
+// helpers, the SSE connection, a tiny subscribable store per event, and the
+// authentication state the shell decides the login page from.
 import { useEffect, useState } from "preact/hooks";
 
-export const BASE = "/api/v1";
+// Relative by default: the bundle is served by the device it talks to. A
+// build for another origin sets VITE_ESPOS_BASE to an absolute URL.
+export const BASE: string = (import.meta.env["VITE_ESPOS_BASE"] as string | undefined) ?? "/api/v1";
+const ABSOLUTE = /^https?:\/\//i.test(BASE);
+// The login cookie is SameSite=Strict and the device grants no CORS, so a
+// page that is not served by the device — an absolute BASE, or the Vite dev
+// server proxying to a device or the mock (Origin never equals Host through a
+// proxy, and the device refuses cookie writes whose Origin differs) — keeps
+// the key in sessionStorage and sends it as a Bearer header instead. The
+// built bundle on a device uses the cookie only.
+const DEV_KEY_MODE = ABSOLUTE || !!import.meta.env.DEV;
+const KEY_STORAGE = "espos.apiKey";
 
 export interface ApiError { error: string; message: string; path?: string }
 export class ApiFailure extends Error {
@@ -13,20 +25,38 @@ export class ApiFailure extends Error {
   }
 }
 
+function devKey(): string | null {
+  if (!DEV_KEY_MODE) return null;
+  try { return sessionStorage.getItem(KEY_STORAGE); } catch { return null; }
+}
+function setDevKey(key: string | null) {
+  try { if (key) sessionStorage.setItem(KEY_STORAGE, key); else sessionStorage.removeItem(KEY_STORAGE); } catch { /* storage blocked: the key lives for this page only */ }
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, headers: {} };
+  const headers: Record<string, string> = {};
+  const init: RequestInit = { method, headers, credentials: "same-origin" };
   if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json" };
+    headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   } else if (method !== "GET") {
-    init.headers = { "Content-Type": "application/json" };
+    headers["Content-Type"] = "application/json";
     init.body = "{}";
   }
+  const key = devKey();
+  if (key) headers["Authorization"] = `Bearer ${key}`;
   const r = await fetch(BASE + path, init);
   const text = await r.text();
   let js: unknown = null;
   try { js = text ? JSON.parse(text) : null; } catch { js = null; }
-  if (!r.ok) throw new ApiFailure(r.status, js as ApiError | null);
+  if (!r.ok) {
+    const err = js as ApiError | null;
+    // The session ended (expiry, a reboot, a new key): back to the login
+    // page. The auth endpoints report their own 401s to whoever called them.
+    if (r.status === 401 && !path.startsWith("/auth/")) { setDevKey(null); authStore.set("login"); }
+    if (r.status === 403 && err?.error === "auth_unconfigured") authStore.set("unconfigured");
+    throw new ApiFailure(r.status, err);
+  }
   return js as T;
 }
 export const get = <T,>(path: string) => call<T>("GET", path);
@@ -44,7 +74,16 @@ export interface WifiStatus {
 }
 export interface ScanResult { ssid: string; bssid: string; rssi: number; channel: number; auth: string }
 export interface ScanDoc { scanning: boolean; age_s: number | null; results: ScanResult[] }
-export interface SkServer { host: string; port: number; self: string; name: string; roles?: string; swname?: string; swvers?: string; seen_s?: number; selected?: boolean }
+export interface SkServer { host: string; port: number; self: string; name: string; roles?: string; swname?: string; swvers?: string; scheme?: "http" | "https"; seen_s?: number; selected?: boolean }
+/** GET /sk/tls — what certificate is trusted, and what the server last showed.
+ * `pinned` is null before anything is anchored; `presented` before the first
+ * handshake. Absent (404) in a build without CONFIG_ESPOS_SK_TLS. */
+export interface SkTls {
+  trust: "tofu" | "ca" | "bundle";
+  pinned: { kind: "ca" | "leaf"; cn: string; san: string; fingerprint: string; since: number } | null;
+  last_error: string;
+  presented: { cn: string; fingerprint: string } | null;
+}
 export interface SkServersDoc { servers: SkServer[]; last_s: number | null }
 export interface SkWs {
   enabled: boolean; connected: boolean; connected_s?: number; reconnects: number; sent: number; send_errors: number;
@@ -62,8 +101,8 @@ export interface BleStatus {
 export interface SkStatus {
   token: { state: string; has_token: boolean; busy: boolean; approved_s?: number; pending_s?: number; pending_href?: string;
     next_action_s?: number; last_check_s?: number; last_http_status: number; last_error: string;
-    counts: { requests: number; approved: number; denied: number; unauthorized: number } };
-  server: { host?: string; port?: number; self?: string; source: "discovered" | "manual" | "pinned" | "none"; name?: string; swname?: string; swvers?: string };
+    counts: { requests: number; approved: number; denied: number; unauthorized: number; cert_errors?: number } };
+  server: { host?: string; port?: number; self?: string; source: "discovered" | "manual" | "pinned" | "none"; scheme?: "http" | "https"; name?: string; swname?: string; swvers?: string };
   ws?: SkWs; client_id: string; description: string; permissions: string;
   discovery: { enabled: boolean; count: number; last_s: number | null };
 }
@@ -71,6 +110,16 @@ export interface SystemInfo {
   app: string; version: string; idf_version: string; chip: string; chip_revision: number; cores: number;
   uptime_s: number; free_heap: number; min_free_heap: number; reset_reason: string; config_storage_reset: boolean;
   schema_etag: string; ui_storage?: boolean;
+}
+export interface PingDoc { app: string; version: string; auth: boolean }
+export interface AuthStatus {
+  /** protected endpoints need a credential: a key is set, or the build requires one */
+  required: boolean;
+  /** httpd.api_key is set */
+  configured: boolean;
+  /** this request carried a valid credential (or came from the setup portal) */
+  authenticated: boolean;
+  method: "none" | "bearer" | "cookie" | "portal";
 }
 export interface LogsDoc { first: number; next: number; dropped: number; size: number; used: number; gap: boolean; from: number; lines: string[] }
 export interface Coredump {
@@ -111,11 +160,21 @@ export const scanStore = new Store<ScanDoc>();
 export const skStore = new Store<SkStatus>();
 export const skServersStore = new Store<SkServersDoc>();
 export const skWsStore = new Store<SkWs>();
+export const skTlsStore = new Store<SkTls>();
 export const logsSeqStore = new Store<number>();
 export const otaStore = new Store<OtaStatus>();
 export const bleStore = new Store<BleStatus>();
 export const configChangeStore = new Store<{ ns: string; key: string; n: number }>();
 export const linkStore = new Store<"connecting" | "open" | "lost">();
+
+// ---- authentication (docs/security.md)
+//   open          no key configured: the API answers everyone, no login page
+//   ok            a key is set and this browser holds a credential
+//   login         a key is set and this browser has none (or it expired)
+//   unconfigured  the build requires a key and none is set: nothing works from
+//                 here; the key is set from the setup portal
+export type AuthState = "open" | "ok" | "login" | "unconfigured";
+export const authStore = new Store<AuthState>();
 
 export function useStore<T>(s: Store<T>): T | undefined {
   const [, tick] = useState(0);
@@ -123,12 +182,48 @@ export function useStore<T>(s: Store<T>): T | undefined {
   return s.value;
 }
 
+/** Ask the device where we stand, once at startup and whenever the stream dies. */
+export async function bootstrapAuth(): Promise<void> {
+  try {
+    const st = await get<AuthStatus>("/auth/status");
+    authStore.set(!st.required ? "open" : st.authenticated ? "ok" : st.configured ? "login" : "unconfigured");
+  } catch (e) {
+    // A firmware without /auth/status has no authentication either; anything
+    // else (device unreachable) is the stream's problem, not the login page's.
+    if (e instanceof ApiFailure && e.status === 404) authStore.set("open");
+    else if (authStore.value === undefined) authStore.set("open");
+  }
+}
+
+/** Exchange the key for a session. Throws ApiFailure (401 wrong, 429 throttled). */
+export async function login(key: string): Promise<void> {
+  if (DEV_KEY_MODE) setDevKey(key);
+  try {
+    // The cookie is what EventSource can send; the Bearer (dev mode) is what
+    // gets writes past the Origin check behind a proxy. Both, then.
+    await post("/auth/login", { key });
+  } catch (e) {
+    setDevKey(null);
+    throw e;
+  }
+  resetEvents();
+  authStore.set("ok");
+}
+
+export async function logout(): Promise<void> {
+  try { await post("/auth/logout"); } catch { /* the session may already be gone; the outcome is the same */ }
+  setDevKey(null);
+  closeEvents();
+  authStore.set("login");
+}
+
 let es: EventSource | null = null;
 let changes = 0;
+let retry: ReturnType<typeof setTimeout> | null = null;
 export function connectEvents() {
   if (es) return;
   linkStore.set("connecting");
-  es = new EventSource(BASE + "/events");
+  es = new EventSource(BASE + "/events", { withCredentials: ABSOLUTE });
   const on = <T,>(name: string, store: Store<T>, map?: (d: T) => void) =>
     es!.addEventListener(name, (e) => {
       const d = JSON.parse((e as MessageEvent).data) as T;
@@ -136,12 +231,26 @@ export function connectEvents() {
       map?.(d);
     });
   es.onopen = () => linkStore.set("open");
-  es.onerror = () => linkStore.set("lost");     // EventSource reconnects by itself (retry: 3000)
+  es.onerror = () => {
+    linkStore.set("lost");
+    // A dropped connection reconnects by itself (retry: 3000). A refused one
+    // — 401 after the session expired or the device rebooted — does not: the
+    // browser closes the stream for good. Find out which, then reopen.
+    if (es && es.readyState === EventSource.CLOSED) {
+      es = null;
+      if (retry) clearTimeout(retry);
+      retry = setTimeout(() => {
+        retry = null;
+        void bootstrapAuth().then(() => { const a = authStore.value; if (a === "ok" || a === "open") connectEvents(); });
+      }, 3000);
+    }
+  };
   on("wifi", wifiStore);
   on("wifi_scan", scanStore);
   on("sk", skStore, (d) => { if (d.ws) skWsStore.set(d.ws); });
   on("sk_servers", skServersStore);
   on("sk_ws", skWsStore);
+  on("sk_tls", skTlsStore);
   on("ota", otaStore);
   on("ble", bleStore);
   es.addEventListener("logs", (e) => logsSeqStore.set((JSON.parse((e as MessageEvent).data) as { next: number }).next));
@@ -149,6 +258,16 @@ export function connectEvents() {
     const d = JSON.parse((e as MessageEvent).data) as { ns: string; key: string };
     configChangeStore.set({ ...d, n: ++changes });
   });
+}
+function closeEvents() {
+  if (retry) { clearTimeout(retry); retry = null; }
+  es?.close();
+  es = null;
+}
+/** Drop the stream and open a fresh one — after a login, so it carries the new cookie. */
+export function resetEvents() {
+  closeEvents();
+  connectEvents();
 }
 
 // ---- helpers
@@ -167,4 +286,11 @@ export function fmtBytes(n: number): string {
 export function errText(e: unknown): string {
   if (e instanceof ApiFailure) return e.body ? `${e.body.message}${e.body.path ? ` (${e.body.path})` : ""}` : `HTTP ${e.status}`;
   return e instanceof Error ? e.message : String(e);
+}
+/** A random API key: 20 characters from an alphabet without look-alikes (~114 bits). */
+export function randomKey(n = 20): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const buf = new Uint32Array(n);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (x) => alphabet[x % alphabet.length]!).join("");
 }

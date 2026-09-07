@@ -278,13 +278,22 @@ TEST_CASE("stored token: reboot verifies it, revocation (401) re-requests", "[sk
     TEST_ASSERT_EQUAL(0, F.requests);
     verify_result(200, "urn:mrn:signalk:uuid:aaaa");
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_APPROVED, ST()->state);
-    /* admin revokes: the periodic check gets 401 */
+    /* Admin revokes: the periodic check gets 401. Over plaintext the first
+     * one only buys a re-check 5 s later — a proxy or captive portal answers
+     * 401 too, and dropping the token over one costs a trip to the server's
+     * admin UI. The second, with nothing having answered 200 in between, is
+     * the server's word and clears it. See espos_sk_tok_sm_t::plain_unauth_streak. */
     tick(60000);
+    verify_result(401, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_APPROVED, ST()->state);
+    TEST_ASSERT_EQUAL_STRING("tok.en.3", F.saved.token[0] ? F.saved.token : "tok.en.3");
+    tick(5000);
+    TEST_ASSERT_EQUAL(3, F.verifies); /* boot check, periodic check, second opinion */
     verify_result(401, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_IDLE, ST()->state);
     TEST_ASSERT_EQUAL(1, F.requests);
     TEST_ASSERT_EQUAL_STRING("", F.saved.token);
-    TEST_ASSERT_EQUAL(1, ST()->unauthorized_count);
+    TEST_ASSERT_EQUAL(2, ST()->unauthorized_count);
     request_result(202, "/signalk/v1/requests/xyz", NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_REQUESTED, ST()->state);
 }
@@ -296,7 +305,11 @@ TEST_CASE("another SK call reporting 401 invalidates the token", "[sk_tok]")
     espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
     espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);
     verify_result(200, "urn:mrn:signalk:uuid:aaaa");
+    /* Plaintext again: the first report is a re-check, not a verdict. */
     espos_sk_tok_event(&SM, ESPOS_SK_EV_UNAUTHORIZED, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_APPROVED, ST()->state);
+    tick(5000);
+    verify_result(401, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_IDLE, ST()->state);
     TEST_ASSERT_EQUAL(1, F.requests);
     TEST_ASSERT_EQUAL_STRING("", espos_sk_tok_token(&SM));
@@ -478,7 +491,14 @@ TEST_CASE("manual token paste verifies immediately", "[sk_tok]")
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_VERIFYING, ST()->state);
     TEST_ASSERT_EQUAL_STRING("pasted.tok", F.last_verify_token);
     TEST_ASSERT_EQUAL_STRING("", F.saved.pending_href);                            /* pending dropped */
-    verify_result(403, NULL);                                                     /* bad paste */
+    /* A bad paste over plaintext gets the same second opinion as any other
+     * unauthorised answer — the device cannot tell "you typed it wrong" from
+     * "a proxy answered", and the retry costs 5 s. */
+    verify_result(403, NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_VERIFYING, ST()->state); /* still deciding, token still there */
+    TEST_ASSERT_EQUAL_STRING("pasted.tok", F.saved.token);
+    tick(5000);
+    verify_result(403, NULL);
     TEST_ASSERT_EQUAL(ESPOS_SK_TOK_IDLE, ST()->state);
     TEST_ASSERT_EQUAL(2, F.requests);
 }

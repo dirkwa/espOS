@@ -105,6 +105,29 @@ dependencies:
       path: components/espos_log
       type: local
     version: 0.7.0
+  signalk-espos/espos_net:
+    dependencies:
+    - name: idf
+      version: '>=6.0.0,<6.1.0'
+    - name: signalk-espos/espos_config
+      override_path: ../espos_config
+      version: ^0.7.0
+    - name: signalk-espos/espos_httpd
+      override_path: ../espos_httpd
+      version: ^0.7.0
+    - name: signalk-espos/espos_event
+      override_path: ../espos_event
+      version: ^0.7.0
+    - name: espressif/cjson
+      version: ==1.7.19~2
+    - name: espressif/mdns
+      rules:
+      - if: target != linux
+      version: ==1.11.3
+    source:
+      path: components/espos_net
+      type: local
+    version: 0.7.0
   signalk-espos/espos_sk:
     dependencies:
     - name: idf
@@ -115,8 +138,8 @@ dependencies:
     - name: signalk-espos/espos_httpd
       override_path: ../espos_httpd
       version: ^0.7.0
-    - name: signalk-espos/espos_wifi
-      override_path: ../espos_wifi
+    - name: signalk-espos/espos_net
+      override_path: ../espos_net
       version: ^0.7.0
     - name: signalk-espos/espos_health
       override_path: ../espos_health
@@ -137,12 +160,11 @@ dependencies:
     - name: signalk-espos/espos_httpd
       override_path: ../espos_httpd
       version: ^0.7.0
+    - name: signalk-espos/espos_net
+      override_path: ../espos_net
+      version: ^0.7.0
     - name: espressif/cjson
       version: ==1.7.19~2
-    - name: espressif/mdns
-      rules:
-      - if: target != linux
-      version: ==1.11.3
     - name: espressif/esp_hosted
       rules:
       - if: target == esp32p4
@@ -167,8 +189,9 @@ direct_dependencies:
 - signalk-espos/espos_health
 - signalk-espos/espos_httpd
 - signalk-espos/espos_log
+- signalk-espos/espos_net
 - signalk-espos/espos_sk
 - signalk-espos/espos_wifi
-manifest_hash: 073667ac745dd5fd2a4577cef440d2e5e5713b719f9a647cc5814ae0c80ec7d2
+manifest_hash: 04aa6216518beb5db1e1726f94ca2b0e0614c786bd06ede3202dc547b36fc66b
 target: esp32c6
 version: 3.0.0

@@ -3,10 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * espos_wifi — station connection manager with an explicit status model,
- * multi-network priority list, exponential backoff, and a SoftAP
- * provisioning portal. Configuration lives in the "wifi" namespace of
- * espos_config; status is exposed at GET /api/v1/wifi/status and pushed on
- * the SSE stream as "wifi" events.
+ * multi-network priority list, exponential backoff, static or DHCP
+ * addressing, and a SoftAP provisioning portal. Configuration lives in the
+ * "wifi" namespace of espos_config; status is exposed at GET /api/v1/wifi/status
+ * and pushed on the SSE stream as "wifi" events.
+ *
+ * The station is one transport of espos_net (espos_net.h): it reports its
+ * link there, and "is the network up" is espos_net_is_up(), not this
+ * component's state — a firmware with an Ethernet port or without WiFi at
+ * all answers the same question the same way. The device id, the hostname
+ * (net.hostname) and the mDNS responder (espos_mdns.h) are espos_net's too;
+ * the wrappers below stay for one release.
  */
 #pragma once
 
@@ -27,8 +34,11 @@ extern "C" {
 esp_err_t espos_wifi_start(void);
 esp_err_t espos_wifi_stop(void);
 
-/** Snapshot of the current status (thread-safe copy). rssi is refreshed
- * from the driver when connected. */
+/** Snapshot of the WiFi-specific status (thread-safe copy): state machine,
+ * link, portal, counters. rssi is the value captured at association and
+ * refreshed by espos_wifi_refresh_rssi(). For "is the network up" use
+ * espos_net_is_up() / espos_net_get_status(): a firmware may carry its route
+ * on another interface, and those answer for whichever it is. */
 typedef struct {
     espos_wifi_sm_status_t sm;
     int8_t rssi;
@@ -74,7 +84,8 @@ typedef struct {
 /** JSON: {"scanning":bool,"age_s":n,"results":[{"ssid","bssid","rssi","channel","auth"}]} */
 esp_err_t espos_wifi_scan_json(char **out_json);
 
-/** Device-unique short id, "1a2b" (last two MAC bytes), for default names. */
+/** Deprecated: espos_net_short_id() (same value; removed in 0.9). The id is
+ * the base MAC's, the same on every transport. */
 const char *espos_wifi_short_id(void);
 
 /* Co-processor link watchdog (esp_hosted builds only; a no-op elsewhere).

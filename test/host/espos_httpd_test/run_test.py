@@ -5,11 +5,13 @@
 Drives build/espos_httpd_test.elf through the REST API contract in docs/rest-api.md.
 Standard library only. Exit code 0 == all checks passed.
 """
+import base64
 import gzip
 import http.client
 import itertools
 import json
 import os
+import re
 import select
 import shutil
 import socket
@@ -192,6 +194,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(js["app"], "espos_httpd_test")
         self.assertIsInstance(js["uptime_s"], int)
         self.assertFalse(js["config_storage_reset"])
+        # "time" is always present, whether or not the firmware has espos_time.
+        # This harness does not link it, so it exercises the weak default: the
+        # honest "this device has not been told the time" a client must handle.
+        self.assertIn("time", js)
+        self.assertEqual(set(js["time"]), {"synced", "source", "now"})
+        self.assertFalse(js["time"]["synced"])
+        self.assertEqual(js["time"]["source"], "none")
+        self.assertEqual(js["time"]["now"], 0)
         # schema_etag matches the ETag header served with the schema
         _, hd2, _, _ = req("GET", "/api/v1/config/schema")
         self.assertEqual(hd2.get("ETag"), '"%s"' % js["schema_etag"])
@@ -396,6 +406,328 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(st, 200)
 
 
+# ------------------------------------------------------------ authentication
+
+
+class AuthTests(unittest.TestCase):
+    """REST authentication (docs/security.md, docs/rest-api.md "Authentication"):
+    open until httpd.api_key is set, then Bearer or the espos_sid cookie from
+    POST /auth/login; cookie writes need a matching Origin; a new key ends every
+    session; logout; the session table's eviction. The linux harness has no
+    soft-AP, so the portal exemption never applies here. The failure throttle
+    has a harness of its own (AuthThrottleTests): its lockout is global and
+    would colour every test after it."""
+
+    KEY = "correct-horse-battery"
+    BEARER = {"Authorization": "Bearer " + KEY}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Harness(fresh=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    @staticmethod
+    def origin():
+        return f"http://127.0.0.1:{PORT}"
+
+    def login(self, key=None):
+        st, hd, _, js = req("POST", "/api/v1/auth/login", {"key": self.KEY if key is None else key})
+        return st, hd, js
+
+    @staticmethod
+    def cookie_of(headers):
+        return {"Cookie": headers["Set-Cookie"].split(";")[0]}
+
+    def test_01_open_by_default(self):
+        st, _, _, js = req("GET", "/api/v1/auth/status")
+        self.assertEqual(st, 200)
+        self.assertEqual(js, {"required": False, "configured": False, "authenticated": False, "method": "none"})
+        st, _, _, _ = req("GET", "/api/v1/config")
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/system/ping")
+        self.assertEqual(st, 200)
+        self.assertEqual(js["app"], "espos_httpd_test")
+        self.assertIn("version", js)
+        self.assertFalse(js["auth"])
+        # a stray Bearer on an open device is not judged
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer whatever"})
+        self.assertEqual(st, 200)
+        # login makes no sense while open
+        st, _, _, js = req("POST", "/api/v1/auth/login", {"key": "x"})
+        self.assertEqual(st, 409)
+        self.assertEqual(js["error"], "auth_open")
+        # the key is a secret with the usual sentinel behaviour; the lifetime has its default
+        _, _, _, cfg = req("GET", "/api/v1/config?ns=httpd")
+        self.assertEqual(cfg["httpd"]["api_key"], "")
+        self.assertEqual(cfg["httpd"]["session_ttl_s"], 86400)
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"api_key": "x" * 65}})
+        self.assertEqual(st, 400)
+        self.assertEqual(js["path"], "httpd.api_key")
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"session_ttl_s": 59}})
+        self.assertEqual(st, 400)
+
+    def test_02_setting_a_key_closes_the_api(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"api_key": self.KEY}})
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js["changed"], ["httpd.api_key"])
+        self.assertFalse(js["restart_required"])
+        # everything registered through espos_httpd_register(): espOS's own
+        # endpoints, another component's (wifi) and the harness's own probe
+        for path in ("/api/v1/config", "/api/v1/config/schema", "/api/v1/system/info", "/api/v1/logs",
+                     "/api/v1/system/coredump", "/api/v1/wifi/status", "/__harness/sk/rx"):
+            st, hd, _, js = req("GET", path)
+            self.assertEqual((path, st), (path, 401))
+            self.assertEqual(js["error"], "unauthorized")
+            self.assertTrue(hd.get("WWW-Authenticate", "").startswith("Bearer"), hd)
+            self.assertEqual(hd.get("Content-Type"), "application/json")
+        st, _, _, _ = req("PUT", "/api/v1/config", {"app": {"label": "nope"}})
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("POST", "/api/v1/system/reboot")
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("DELETE", "/api/v1/system/coredump")
+        self.assertEqual(st, 401)
+        # the check comes before the handler: no content-type guard, no body parsing
+        st, _, _, js = req("PUT", "/api/v1/config", "{not json", content_type=None)
+        self.assertEqual(st, 401)
+        # public: the UI (and its SPA fallback), liveness, the auth endpoints
+        st, _, raw, _ = req("GET", "/")
+        self.assertEqual(st, 200)
+        self.assertIn(b"espOS", raw)
+        st, _, _, _ = req("GET", "/wifi")
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/system/ping")
+        self.assertEqual(st, 200)
+        self.assertTrue(js["auth"])
+        st, _, _, js = req("GET", "/api/v1/auth/status")
+        self.assertEqual(js, {"required": True, "configured": True, "authenticated": False, "method": "none"})
+        # the stream is protected too
+        sse = SseReader()
+        self.assertIn("401", sse.status)
+        sse.close()
+        # an unknown API path is still 404, not 401 (nothing there to protect)
+        st, _, _, js = req("GET", "/api/v1/nope")
+        self.assertEqual(st, 404)
+        # and the key still reads back as the sentinel, never itself
+        st, _, _, cfg = req("GET", "/api/v1/config?ns=httpd", headers=self.BEARER)
+        self.assertEqual(cfg["httpd"]["api_key"], SENTINEL)
+
+    def test_03_bearer(self):
+        st, _, _, js = req("GET", "/api/v1/config", headers=self.BEARER)
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/auth/status", headers=self.BEARER)
+        self.assertEqual((js["authenticated"], js["method"]), (True, "bearer"))
+        # a state change with Bearer needs no Origin: it is not a browser credential
+        st, _, _, js = req("PUT", "/api/v1/config", {"app": {"label": "bearer"}}, headers=self.BEARER)
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js["changed"], ["app.label"])
+        # the content-type guard still applies behind the check
+        st, _, _, js = req("PUT", "/api/v1/config", "{}", headers=self.BEARER, content_type=None)
+        self.assertEqual(st, 415)
+        # case of the scheme word does not matter; anything else is not a bearer
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "bearer " + self.KEY})
+        self.assertEqual(st, 200)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer nope"})
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer " + self.KEY + "x"})
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Basic Y29ycmVjdA=="})
+        self.assertEqual(st, 401)
+        sse = SseReader(headers=self.BEARER)
+        self.assertIn("200", sse.status)
+        sse.close()
+        st, _, _, js = req("GET", "/__harness/sk/rx", headers=self.BEARER)
+        self.assertEqual(st, 200)
+
+    def test_04_login_cookie(self):
+        st, _, js = self.login("wrong")
+        self.assertEqual(st, 401)
+        self.assertEqual(js["error"], "unauthorized")
+        st, _, _, js = req("POST", "/api/v1/auth/login", {"nope": 1})
+        self.assertEqual(st, 400)
+        self.assertEqual(js["error"], "validation")
+        st, _, _, js = req("POST", "/api/v1/auth/login", {"key": self.KEY}, content_type=None)
+        self.assertEqual(st, 415)
+        st, hd, js = self.login()
+        self.assertEqual(st, 204, js)
+        self.assertEqual(hd.get("Cache-Control"), "no-store")
+        m = re.fullmatch(r"espos_sid=([0-9a-f]{32}); HttpOnly; SameSite=Strict; Path=/; Max-Age=86400", hd.get("Set-Cookie", ""))
+        self.assertIsNotNone(m, hd.get("Set-Cookie"))
+        type(self).cookie = self.cookie_of(hd)
+        st, _, _, _ = req("GET", "/api/v1/config", headers=self.cookie)
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/auth/status", headers=self.cookie)
+        self.assertEqual((js["authenticated"], js["method"]), (True, "cookie"))
+        # a harness endpoint registered with plain espos_httpd_register(): protected, and the cookie opens it
+        st, _, _, _ = req("GET", "/__harness/sk/rx", headers=self.cookie)
+        self.assertEqual(st, 200)
+        # EventSource sends the cookie by itself; the stream must take it
+        sse = SseReader(headers=self.cookie)
+        self.assertIn("200", sse.status)
+        first = list(itertools.islice(sse.events(timeout=3), 2))
+        self.assertEqual(first[0][0], "retry")
+        self.assertEqual(len(first), 2, "a snapshot event must follow the hello")   # which one comes first is the components' business
+        sse.close()
+        # a made-up id, a stale one, other cookies around ours
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Cookie": "espos_sid=" + "0" * 32})
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Cookie": "other=1; " + self.cookie["Cookie"] + "; theme=dark"})
+        self.assertEqual(st, 200)
+        # a session lifetime change applies to the next login only
+        st, _, _, _ = req("PUT", "/api/v1/config", {"httpd": {"session_ttl_s": 600}}, headers=self.BEARER)
+        self.assertEqual(st, 200)
+        st, hd, _ = self.login()
+        self.assertIn("Max-Age=600", hd["Set-Cookie"])
+        req("PUT", "/api/v1/config", {"httpd": {"session_ttl_s": None}}, headers=self.BEARER)
+
+    def test_05_cookie_writes_need_a_matching_origin(self):
+        c = self.cookie
+        # no Origin, no Referer: a browser would have sent one
+        st, _, _, js = req("PUT", "/api/v1/config", {"app": {"label": "x"}}, headers=c)
+        self.assertEqual(st, 403)
+        self.assertEqual(js["error"], "forbidden")
+        for bad in ("http://evil.example", "http://127.0.0.1:1", "null", "http://127.0.0.1"):
+            st, _, _, js = req("PUT", "/api/v1/config", {"app": {"label": "x"}}, headers={**c, "Origin": bad})
+            self.assertEqual((bad, st), (bad, 403))
+        st, _, _, js = req("POST", "/api/v1/system/reboot", headers={**c, "Origin": "http://evil.example"})
+        self.assertEqual(st, 403)
+        st, _, _, js = req("DELETE", "/api/v1/system/coredump", headers={**c, "Origin": "http://evil.example"})
+        self.assertEqual(st, 403)
+        # the label is untouched by all of that
+        _, _, _, cfg = req("GET", "/api/v1/config?ns=app", headers=c)
+        self.assertEqual(cfg["app"]["label"], "bearer")
+        st, _, _, js = req("PUT", "/api/v1/config", {"app": {"label": "cookie"}}, headers={**c, "Origin": self.origin()})
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js["changed"], ["app.label"])
+        # Referer serves when there is no Origin
+        st, _, _, js = req("PUT", "/api/v1/config", {"app": {"label": "referer"}}, headers={**c, "Referer": self.origin() + "/config#app"})
+        self.assertEqual(st, 200, js)
+        # reads never need it
+        st, _, _, _ = req("GET", "/api/v1/config", headers=c)
+        self.assertEqual(st, 200)
+        req("PUT", "/api/v1/config", {"app": {"label": None}}, headers={**c, "Origin": self.origin()})
+
+    def test_06_changing_the_key_logs_everyone_out(self):
+        c = {**self.cookie, "Origin": self.origin()}
+        new = self.KEY + "-2"
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"api_key": new}}, headers=c)
+        self.assertEqual(st, 200, js)
+        st, _, _, _ = req("GET", "/api/v1/config", headers=self.cookie)
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("GET", "/api/v1/config", headers=self.BEARER)
+        self.assertEqual(st, 401)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer " + new})
+        self.assertEqual(st, 200)
+        # writing the sentinel leaves the key (and the sessions) alone
+        st, hd, _ = self.login(new)
+        self.assertEqual(st, 204)
+        c2 = self.cookie_of(hd)
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"api_key": SENTINEL}}, headers={"Authorization": "Bearer " + new})
+        self.assertEqual(st, 200)
+        self.assertEqual(js["changed"], [])
+        st, _, _, _ = req("GET", "/api/v1/config", headers=c2)
+        self.assertEqual(st, 200)
+        # back to the first key, via Bearer
+        st, _, _, _ = req("PUT", "/api/v1/config", {"httpd": {"api_key": self.KEY}}, headers={"Authorization": "Bearer " + new})
+        self.assertEqual(st, 200)
+        st, _, _, _ = req("GET", "/api/v1/config", headers=c2)
+        self.assertEqual(st, 401)
+        st, hd, _ = self.login()
+        self.assertEqual(st, 204)
+        type(self).cookie = self.cookie_of(hd)
+
+    def test_07_logout(self):
+        st, hd, _, _ = req("POST", "/api/v1/auth/logout", headers=self.cookie)
+        self.assertEqual(st, 204)
+        self.assertIn("espos_sid=;", hd.get("Set-Cookie", ""))
+        self.assertIn("Max-Age=0", hd.get("Set-Cookie", ""))
+        st, _, _, _ = req("GET", "/api/v1/config", headers=self.cookie)
+        self.assertEqual(st, 401)
+        # idempotent, and fine without any cookie at all
+        st, _, _, _ = req("POST", "/api/v1/auth/logout", headers=self.cookie)
+        self.assertEqual(st, 204)
+        st, _, _, _ = req("POST", "/api/v1/auth/logout")
+        self.assertEqual(st, 204)
+        st, _, _, _ = req("POST", "/api/v1/auth/logout", content_type=None)
+        self.assertEqual(st, 415)
+
+    def test_08_session_table_evicts_the_oldest(self):
+        # CONFIG_ESPOS_HTTPD_MAX_SESSIONS (4) logins plus one: the first dies, the rest live
+        cookies = []
+        for _ in range(5):
+            st, hd, _ = self.login()
+            self.assertEqual(st, 204)
+            cookies.append(self.cookie_of(hd))
+        self.assertEqual(len({c["Cookie"] for c in cookies}), 5)
+        st, _, _, _ = req("GET", "/api/v1/config", headers=cookies[0])
+        self.assertEqual(st, 401)
+        for c in cookies[1:]:
+            st, _, _, _ = req("GET", "/api/v1/config", headers=c)
+            self.assertEqual(st, 200)
+
+    def test_09_clearing_the_key_reopens(self):
+        st, _, _, js = req("PUT", "/api/v1/config", {"httpd": {"api_key": None}}, headers=self.BEARER)
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js["changed"], ["httpd.api_key"])
+        st, _, _, _ = req("GET", "/api/v1/config")
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/auth/status")
+        self.assertEqual(js, {"required": False, "configured": False, "authenticated": False, "method": "none"})
+        st, _, _, js = req("GET", "/api/v1/system/ping")
+        self.assertFalse(js["auth"])
+
+
+class AuthThrottleTests(unittest.TestCase):
+    """Five wrong keys within a minute lock every key check out for 30 s; live
+    cookies keep working. Its own harness: the lockout is global."""
+
+    KEY = "correct-horse-battery"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.h = Harness(fresh=True)
+        st, _, _, _ = req("PUT", "/api/v1/config", {"httpd": {"api_key": cls.KEY}})
+        assert st == 200
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+
+    def test_failures_throttle(self):
+        st, hd, _, _ = req("POST", "/api/v1/auth/login", {"key": self.KEY})
+        self.assertEqual(st, 204)
+        cookie = {"Cookie": hd["Set-Cookie"].split(";")[0]}
+        # one wrong Bearer and four wrong logins: each a plain 401
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer wrong-0"})
+        self.assertEqual(st, 401)
+        for i in range(1, 5):
+            st, _, _, js = req("POST", "/api/v1/auth/login", {"key": f"wrong-{i}"})
+            self.assertEqual((i, st), (i, 401))
+            self.assertEqual(js["error"], "unauthorized")
+        # the sixth key check, right or wrong, is refused with 429 for a while
+        st, hd, _, js = req("POST", "/api/v1/auth/login", {"key": "wrong-5"})
+        self.assertEqual(st, 429)
+        self.assertEqual(js["error"], "too_many_attempts")
+        self.assertTrue(1 <= int(hd.get("Retry-After", "0")) <= 30, hd)
+        st, _, _, _ = req("POST", "/api/v1/auth/login", {"key": self.KEY})
+        self.assertEqual(st, 429)
+        st, _, _, _ = req("GET", "/api/v1/config", headers={"Authorization": "Bearer " + self.KEY})
+        self.assertEqual(st, 429)
+        # no credential at all is still a 401, not a 429
+        st, _, _, _ = req("GET", "/api/v1/config")
+        self.assertEqual(st, 401)
+        # a live session is not a key check
+        st, _, _, _ = req("GET", "/api/v1/config", headers=cookie)
+        self.assertEqual(st, 200)
+        st, _, _, js = req("GET", "/api/v1/auth/status", headers=cookie)
+        self.assertEqual(js["method"], "cookie")
+        # public endpoints are untouched by the lockout
+        st, _, _, _ = req("GET", "/api/v1/system/ping")
+        self.assertEqual(st, 200)
+
+
 # ------------------------------------------------------------ SignalK mock
 
 import http.server
@@ -434,8 +766,21 @@ class MockSignalK:
             upd["meta"] = [{"path": p, "value": v} for p, v in meta.items()]
         self.push({"context": context or ("vessels." + self.self_urn), "updates": [upd]})
 
-    def __init__(self, self_urn="urn:mrn:signalk:uuid:0e6d1a1a-1111-4111-8111-000000000099"):
+    def __init__(self, self_urn="urn:mrn:signalk:uuid:0e6d1a1a-1111-4111-8111-000000000099",
+                 redirect_to=None, unauth_once=False):
+        # redirect_to: answer every request with 302 to this URL — the shape
+        #   signalk-server takes when ssl is on and something still knocks on
+        #   the plain port, which is what sk.scheme = auto probes for.
+        # unauth_once: refuse exactly the first stream upgrade with 401, then
+        #   behave. The plaintext second-opinion rule says the device must keep
+        #   its token through that.
+        #
+        # No TLS mode: the IDF linux target has no mbedTLS entropy source, so
+        # a handshake cannot complete here at all. See the note above SkTlsTests.
         self.self_urn = self_urn
+        self.redirect_to = redirect_to
+        self.unauth_once = unauth_once
+        self.ws_unauth_count = 0
         self.security = True
         self.device_requests = True
         self.requests = {}      # requestId -> dict(clientId, state, permission, token)
@@ -473,6 +818,9 @@ class MockSignalK:
             def _ws(self):
                 import base64, hashlib, struct
                 mock.ws_auth = self.headers.get("Authorization")
+                if mock.unauth_once and mock.ws_unauth_count == 0:
+                    mock.ws_unauth_count += 1
+                    return self._send(401, raw=b"Unauthorized", ctype="text/plain")
                 if not mock.ws_accept:
                     return self._send(503, raw=b"no", ctype="text/plain")
                 key = self.headers.get("Sec-WebSocket-Key", "")
@@ -572,6 +920,16 @@ class MockSignalK:
 
             def do_GET(self):
                 mock.log.append(("GET", self.path, self.headers.get("Authorization")))
+                if mock.redirect_to and not self.path.startswith("/__test/"):
+                    # What signalk-server does to a plain request once ssl is
+                    # on. The probe must read the scheme out of this and must
+                    # not have sent a token to get it. /__test/ stays reachable
+                    # so the runner can still read the request log back.
+                    self.send_response(302)
+                    self.send_header("Location", mock.redirect_to + self.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if self.path.startswith("/signalk/v1/stream"):
                     return self._ws()
                 if self.path.startswith("/signalk/v1/api/vessels/self/") and self.path.endswith("/meta"):
@@ -689,9 +1047,10 @@ class MockSignalK:
 class SseReader:
     """Minimal text/event-stream client on a raw socket (stdlib only)."""
 
-    def __init__(self, path="/api/v1/events", timeout=5.0):
+    def __init__(self, path="/api/v1/events", timeout=5.0, headers=None):
         self.sock = socket.create_connection(("127.0.0.1", PORT), timeout=timeout)
-        self.sock.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n".encode())
+        extra = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+        self.sock.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n{extra}\r\n".encode())
         self.buf = b""
         # headers
         while b"\r\n\r\n" not in self.buf:
@@ -814,11 +1173,12 @@ class WifiTests(unittest.TestCase):
         sse = SseReader()
         self.assertIn("200", sse.status)
         self.assertEqual(sse.headers.get("Content-Type"), "text/event-stream")
-        # hello: retry + a wifi snapshot
-        first = list(itertools.islice(sse.events(timeout=3), 2))
-        self.assertEqual(first[0][0], "retry")
-        self.assertEqual(first[1][0], "wifi")
-        self.assertEqual(json.loads(first[1][1])["state"], "unconfigured")
+        # hello: retry, then every component's snapshot (in whatever order they connected)
+        hello = list(itertools.islice(sse.events(timeout=3), 4))
+        self.assertEqual(hello[0][0], "retry")
+        snap = [json.loads(d) for e, d in hello if e == "wifi"]
+        self.assertTrue(snap, [e for e, _ in hello])
+        self.assertEqual(snap[0]["state"], "unconfigured")
 
         st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
         self.assertEqual(st, 200)
@@ -857,11 +1217,11 @@ class WifiTests(unittest.TestCase):
         # a 4th stream evicts the oldest instead of failing
         r4 = SseReader()
         self.assertIn("200", r4.status)
-        first = list(itertools.islice(r4.events(timeout=3), 2))
-        self.assertEqual(first[1][0], "wifi")
+        hello = list(itertools.islice(r4.events(timeout=3), 4))
+        self.assertIn("wifi", [e for e, _ in hello])
         # the oldest reader now sees EOF (its socket was shut down)
         got = list(readers[0].events(timeout=2))
-        self.assertTrue(all(e in ("retry", "wifi", "sk", "sk_servers", "sk_ws", "ota", "logs", "comment") for e, _ in got), got)
+        self.assertTrue(all(e in ("retry", "net", "wifi", "sk", "sk_servers", "sk_ws", "sk_tls", "ota", "logs", "comment") for e, _ in got), got)
         readers[0].sock.settimeout(1.0)
         try:
             eof = readers[0].sock.recv(10) == b""
@@ -1195,11 +1555,19 @@ class SkInboundTests(unittest.TestCase):
         return wait_for(lambda: (lambda r: r if r["count"] >= n else None)(self.rx()), timeout=timeout)
 
     def test_01_subscribe_sends_frame_and_receives_values_and_meta(self):
+        # The firmware holds subscriptions of its own (the clock fallback), so
+        # count from where this test starts rather than from zero.
+        _, _, _, sk0 = req("GET", "/api/v1/sk/status")
+        subs_before = sk0["ws"]["in"]["subs"]
         st, _, _, js = req("POST", "/__harness/sk/sub", {"pattern": "navigation.*", "period_ms": 500})
         self.assertEqual(st, 200)
         h = js["handle"]
         self.assertGreater(h, 0)
-        sub = wait_for(lambda: self.mock.subs[-1] if self.mock.subs else None, timeout=5)
+        # Not subs[-1]: the firmware subscribes on its own behalf too (the clock
+        # fallback follows navigation.datetime until the time is known), so pick
+        # the frame that carries the pattern this test asked for.
+        sub = wait_for(lambda: next((s for s in self.mock.subs
+                                     if any(x["path"] == "navigation.*" for x in s["subscribe"])), None), timeout=5)
         self.assertIsNotNone(sub, "device must send a subscribe frame")
         self.assertEqual(sub["context"], "vessels.self")
         self.assertEqual(sub["subscribe"][0]["path"], "navigation.*")
@@ -1223,7 +1591,7 @@ class SkInboundTests(unittest.TestCase):
         pos = [i for i in r["items"] if i["path"] == "navigation.position"][0]
         self.assertEqual(pos["value"], {"latitude": 54.1, "longitude": 10.2})
         st, _, _, sk = req("GET", "/api/v1/sk/status")
-        self.assertEqual(sk["ws"]["in"]["subs"], 1)
+        self.assertEqual(sk["ws"]["in"]["subs"], subs_before + 1)
         self.assertGreaterEqual(sk["ws"]["in"]["received"], 3)
         self.assertGreaterEqual(sk["ws"]["in"]["frames"], 2)             # hello + delta at least
         type(self).h1 = h
@@ -1246,7 +1614,8 @@ class SkInboundTests(unittest.TestCase):
             timeout=5)
         self.assertIsNotNone(new_subs, self.mock.subs[n_before:])
         # incremental frames carry only the new patterns
-        self.assertEqual(sorted(x["path"] for x in new_subs), ["environment.mode", "notifications.*"])
+        paths = sorted(x["path"] for x in new_subs if x["path"] != "navigation.datetime")
+        self.assertEqual(paths, ["environment.mode", "notifications.*"])
         self.assertTrue(all(x["period"] == 1000 for x in new_subs), new_subs)   # default period
         self.mock.push_delta({"notifications.mob": {"state": "emergency", "message": "MOB"},
                               "notifications.anchor.dragging": {"state": "alarm"},
@@ -1310,6 +1679,10 @@ class SkInboundTests(unittest.TestCase):
         self.assertIsNotNone(d)
 
     def test_06_unsubscribe_and_resubscribe_after_reconnect(self):
+        # Subscriptions the firmware makes on its own behalf (the clock
+        # fallback) are not this test's business, but they are counted.
+        own_subs = sum(1 for s in self.mock.subs for x in s["subscribe"] if x["path"] == "navigation.datetime")
+        own_subs = 1 if own_subs else 0
         st, _, _, js = req("POST", "/__harness/sk/sub", {"unsubscribe": self.h1})
         self.assertEqual(js["result"], "ESP_OK")
         un = wait_for(lambda: self.mock.unsubs[-1] if self.mock.unsubs else None, timeout=5)
@@ -1324,9 +1697,13 @@ class SkInboundTests(unittest.TestCase):
         self.assertIsNotNone(js, sk_status())
         sub = wait_for(lambda: self.mock.subs[-1] if len(self.mock.subs) > n_before else None, timeout=5)
         self.assertIsNotNone(sub)
-        self.assertEqual(sorted(x["path"] for x in sub["subscribe"]), ["environment.mode", "notifications.*"])
+        # The firmware's own subscription (the clock fallback) is resent too;
+        # what this test is about is that the app's survived the reconnect.
+        paths = sorted(x["path"] for x in sub["subscribe"] if x["path"] != "navigation.datetime")
+        self.assertEqual(paths, ["environment.mode", "notifications.*"])
         st, _, _, sk = req("GET", "/api/v1/sk/status")
-        self.assertEqual(sk["ws"]["in"]["subs"], 2)
+        # The two this test registered, plus whatever the firmware holds itself.
+        self.assertEqual(sk["ws"]["in"]["subs"], len(paths) + own_subs)
 
     def test_07_large_frame_is_reassembled(self):
         req("DELETE", "/__harness/sk/rx")
@@ -1432,9 +1809,12 @@ class SkTests(unittest.TestCase):
     def test_03_revoke_is_detected_and_re_requested(self):
         cid = sk_status()["client_id"]
         self.mock.ctl("revoke", cid)
-        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=25)   # check_s = 10
+        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=30)   # check_s = 10
         self.assertIsNotNone(js, sk_status())
-        self.assertEqual(js["token"]["counts"]["unauthorized"], 1)
+        # The mock is plaintext, where a single 401 buys a second opinion 5 s
+        # later rather than clearing the token (a captive portal or a proxy
+        # answers 401 too). Two in a row do clear it, so the count is 2.
+        self.assertEqual(js["token"]["counts"]["unauthorized"], 2)
         self.assertFalse(js["token"]["has_token"])
 
     def test_04_deny_then_user_retry(self):
@@ -1478,7 +1858,8 @@ class SkTests(unittest.TestCase):
 
     def test_07_forget_and_sse_events(self):
         sse = SseReader()
-        hello = list(itertools.islice(sse.events(timeout=3), 4))
+        # every component's snapshot follows the hello; take enough of them
+        hello = list(itertools.islice(sse.events(timeout=3), 8))
         kinds = [e for e, _ in hello]
         self.assertIn("sk", kinds)
         self.assertIn("sk_servers", kinds)
@@ -1656,10 +2037,324 @@ class SkTests(unittest.TestCase):
         js = self.http("get", "/signalk/v1/api/self")
         self.assertEqual(js["err"], "ESP_OK")
         self.assertEqual(js["status"], 401)
+        # First report: the token is kept and a verify leg is scheduled 5 s
+        # out (plaintext second-opinion rule). That leg gets 401 too, and the
+        # second one clears it.
         js = wait_sk(lambda j: j["token"]["counts"]["unauthorized"] == before + 1, timeout=10)
         self.assertIsNotNone(js, sk_status())
-        self.assertFalse(js["token"]["has_token"])
+        self.assertTrue(js["token"]["has_token"])
+        js = wait_sk(lambda j: not j["token"]["has_token"], timeout=15)
+        self.assertIsNotNone(js, sk_status())
+        self.assertEqual(js["token"]["counts"]["unauthorized"], before + 2)
         self.assertIn(js["token"]["state"], ("requesting", "pending"))
+
+
+# --------------------------------------------------------------- TLS trust
+#
+# WHAT IS *NOT* HERE, AND WHY: a real TLS handshake.
+#
+# The IDF linux target has no entropy source for mbedTLS.
+# components/mbedtls/CMakeLists.txt compiles port/esp_hardware.c — the file
+# that defines mbedtls_hardware_poll() on top of esp_fill_random() — only
+# `if(NOT ${IDF_TARGET} STREQUAL "linux")`, so on the host HMAC_DRBG has
+# nothing to seed from and every handshake dies before a certificate is ever
+# exchanged:
+#
+#   E esp-tls-mbedtls: mbedtls_ssl_handshake returned -0x0089
+#   I esp-tls-mbedtls: HMAC_DRBG - The entropy source failed
+#
+# That is upstream and has nothing to do with the trust store; espos_sk and
+# esp-tls do link and run on the host with CONFIG_ESPOS_SK_TLS=y, and the
+# attach hook is reached (the device logs the skip_common_name warning and
+# raises tlsMemory: normal before the handshake fails). So:
+#
+#   * the trust DECISION — every branch of the table, the SAN normalisation,
+#     the truncation rule, and the token machine's cert_error states — is
+#     covered by Unity in test/host/espos_sk_test/main/test_tls_policy.c, where
+#     it needs no certificate at all because it is pure C.
+#   * what is covered HERE is everything around it that a real HTTP request
+#     can reach: the /sk/tls endpoints and their validation, the config keys
+#     and the migration, the scheme probe's plaintext half, and the
+#     plaintext-401 rule.
+#   * the parts that need a certificate on the wire — first-use pinning, a
+#     changed certificate becoming cert_error, a CA-signed renewal being
+#     accepted — are the manual recipe in docs/signalk.md, against a real
+#     signalk-server with `ssl: true`.
+
+
+def sk_tls():
+    st, _, _, js = req("GET", "/api/v1/sk/tls")
+    if st == 404:
+        return None   # built without CONFIG_ESPOS_SK_TLS
+    assert st == 200, js
+    return js
+
+
+# A CA certificate, fixed rather than generated: PUT /sk/tls/ca has to parse a
+# real one to answer 200, and a constant keeps the runner free of openssl.
+# Generated once with:
+#   openssl req -x509 -newkey rsa:2048 -keyout /dev/null -nodes \
+#       -subj /CN=espOS\ test\ CA -addext basicConstraints=critical,CA:TRUE \
+#       -days 36500 -out ca.crt
+CA_PEM = """-----BEGIN CERTIFICATE-----
+MIIDEzCCAfugAwIBAgIUKwJri355/enabspihVq3MRsLIiMwDQYJKoZIhvcNAQEL
+BQAwGDEWMBQGA1UEAwwNZXNwT1MgdGVzdCBDQTAgFw0yNjA5MDcxNzIwMzBaGA8y
+MTI2MDgxNDE3MjAzMFowGDEWMBQGA1UEAwwNZXNwT1MgdGVzdCBDQTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAO2x+3o0+yr/Wtmb8fYS3VDGC2rgdXbz
+epmWpEM0GkxPBzxambDJRdNnfh/j6v2kPHX+F9IZJzzNawQ7tuAqa/NY3qIDQ5Jw
+FAWk31GSl/LTR9gykognj+rySojljN5rnCqRxZvJlB7Fe42vT6jQ4UVW29TiwNwN
+ohRNE1pVWj/nXm6o4vGFd5zxqCKQ6RoyxG3hPujTMXWXpSQLdNlYAkSZS/0bVWC1
+asuHUYXMhhjvcSF2qSF5nwfiWNaIh/9V8AODzAkZ45VP9NjwmpZ11FL8wU30PcOr
+RJCzzeG8hBRpi3UZ3G3DbNSPRnYHIuHKE3mwUW7lX/A+/iSvOqctWqECAwEAAaNT
+MFEwHQYDVR0OBBYEFFPCYVAHALNtfIyR3y5KN1KVRAeTMB8GA1UdIwQYMBaAFFPC
+YVAHALNtfIyR3y5KN1KVRAeTMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
+BQADggEBAAiTluz/OqEr9gXioaRtySIIsEb0obC9H7YyWlzjz7aczvi9w6o/Azlz
+EvevNXvh+vaJI083z1gN3xlO/5jtcGIccypRYpbAv7DhGVuNv3v6gM91ReKSJZFR
+1JpqHh3Rku204v+x8notJ8Y8qqCatryJb+UVO8N1cYDWwmw/lTVELdJbTNm8R2gk
+z3HfGbbkn4NvMPD2ekfkBnQeZSR7sx+8MajqChy8bawd3ceWWVtIWJ7QfEx6pNGV
+ixT7/+WSDT5wgkFM1ast97FmvwF525Req6J+2cjxo0fiuBBQJAdl6uKnDK8stZvx
+v6fQ7NmTKeKYacOxyMfC3SE00rf728k=
+-----END CERTIFICATE-----
+"""
+
+
+class SkTlsTests(unittest.TestCase):
+    """The /sk/tls endpoints, the config keys behind them, and the scheme
+    probe — everything the trust store exposes that does not need a handshake
+    (see the note above)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockSignalK()
+        servers = f"127.0.0.1,{cls.mock.port},{cls.mock.self_urn},mockboat"
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_SK_SERVERS": servers})
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.mock.stop()
+
+    def test_01_the_document_starts_empty_and_says_tofu(self):
+        js = sk_tls()
+        if js is None:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        self.assertEqual(js["trust"], "tofu")      # the default: not "bundle"
+        self.assertIsNone(js["pinned"])            # nothing pinned before a connection
+        self.assertIsNone(js["presented"])
+        self.assertEqual(js["last_error"], "")
+
+    def test_02_trust_and_scheme_are_config_keys_with_the_documented_enums(self):
+        st, _, _, schema = req("GET", "/api/v1/config/schema")
+        self.assertEqual(st, 200)
+        sk = schema["properties"]["sk"]["properties"]
+        # sk.tls (bool) is gone; sk.scheme (enum) replaced it.
+        self.assertNotIn("tls", sk)
+        self.assertEqual(sk["scheme"]["enum"], ["auto", "http", "https"])
+        self.assertEqual(sk["scheme"]["default"], "auto")
+        self.assertEqual(sk["tls_trust"]["enum"], ["tofu", "ca", "bundle"])
+        self.assertEqual(sk["tls_trust"]["default"], "tofu")
+        # The descriptor version was bumped for the rename.
+        self.assertGreaterEqual(schema["properties"]["sk"]["x-espos-version"], 2)
+        # ca_pem is a blob, capped, and travels base64 like any blob.
+        self.assertEqual(sk["ca_pem"]["x-espos-type"], "blob")
+        self.assertEqual(sk["ca_pem"]["x-espos-maxBytes"], 2048)
+
+        st, _, _, js = req("PUT", "/api/v1/config", {"sk": {"scheme": "nonsense"}})
+        self.assertEqual(st, 400, js)
+        st, _, _, js = req("PUT", "/api/v1/config", {"sk": {"tls_trust": "anything"}})
+        self.assertEqual(st, 400, js)   # there is no accept-anything mode
+        st, _, _, js = req("PUT", "/api/v1/config", {"sk": {"scheme": "https", "tls_trust": "bundle"}})
+        self.assertEqual(st, 200, js)
+        st, _, _, js = req("GET", "/api/v1/config?ns=sk")
+        self.assertEqual(js["sk"]["scheme"], "https")
+        self.assertEqual(js["sk"]["tls_trust"], "bundle")
+        # Neither needs a reboot any more: the stream rebuilds its transport.
+        st, _, _, js = req("PUT", "/api/v1/config", {"sk": {"scheme": "auto", "tls_trust": "tofu"}})
+        self.assertFalse(js["restart_required"], js)
+
+    def test_03_put_ca_validates_the_pem_before_storing_it(self):
+        if sk_tls() is None:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        for bad in ("hello", "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n"):
+            st, _, _, js = req("PUT", "/api/v1/sk/tls/ca", {"pem": bad})
+            self.assertEqual(st, 400, js)
+            self.assertEqual(js["error"], "validation", js)
+        st, _, _, js = req("PUT", "/api/v1/sk/tls/ca", {"nope": 1})
+        self.assertEqual(st, 400, js)
+        st, _, _, js = req("PUT", "/api/v1/sk/tls/ca", {"pem": "x" * 4000})
+        self.assertEqual(st, 400, js)          # over ESPOS_SK_TLS_CA_MAX
+        st, _, _, js = req("PUT", "/api/v1/sk/tls/ca", {"pem": "x"}, content_type=None)
+        self.assertEqual(st, 415, js)
+        # A rejected PEM changed nothing.
+        st, _, _, js = req("GET", "/api/v1/config?ns=sk")
+        self.assertEqual(js["sk"]["tls_trust"], "tofu")
+
+        # A real certificate: on a device this is accepted, stored and
+        # switches the mode — the fleet path, where the CA is pre-seeded so
+        # the first connection is verified with nothing to capture.
+        #
+        # On THIS host it is rejected with mbedtls_x509_crt_parse -0x3b00
+        # (PK_INVALID_PUBKEY), for the same reason the handshake cannot run:
+        # the linux target has no startup framework, so the
+        # ESP_SYSTEM_INIT_FN that calls psa_crypto_init()
+        # (components/mbedtls/port/esp_psa_crypto_init.c) never runs, and
+        # mbedTLS 4 routes RSA key parsing through PSA. Assert the endpoint's
+        # *contract* either way rather than skipping the case outright: a 200
+        # must store and switch, a 400 must change nothing.
+        st, _, _, js = req("PUT", "/api/v1/sk/tls/ca", {"pem": CA_PEM})
+        st2, _, _, cfg = req("GET", "/api/v1/config?ns=sk")
+        if st == 200:
+            self.assertEqual(js["trust"], "ca")
+            self.assertEqual(cfg["sk"]["tls_trust"], "ca")
+            # The blob comes back base64 and round-trips to what went in.
+            self.assertEqual(base64.b64decode(cfg["sk"]["ca_pem"]).decode(), CA_PEM)
+            # And the CA became the anchor immediately, with no handshake.
+            js = wait_for(lambda: (lambda d: d if d and d["pinned"] else None)(sk_tls()), timeout=10)
+            self.assertIsNotNone(js, sk_tls())
+            self.assertEqual(js["pinned"]["kind"], "ca")
+            self.assertEqual(len(js["pinned"]["fingerprint"]), 64)
+            req("PUT", "/api/v1/config", {"sk": {"tls_trust": "tofu"}})
+        else:
+            self.assertEqual(st, 400, js)
+            self.assertEqual(cfg["sk"]["tls_trust"], "tofu")   # nothing changed
+            self.assertEqual(cfg["sk"]["ca_pem"], "")
+
+    def test_04_delete_resets_the_anchor(self):
+        if sk_tls() is None:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        st, _, _, js = req("DELETE", "/api/v1/sk/tls")
+        self.assertEqual(st, 202, js)
+        self.assertEqual(js["status"], "reset")
+        js = wait_for(lambda: (lambda d: d if d and d["pinned"] is None else None)(sk_tls()), timeout=5)
+        self.assertIsNotNone(js, sk_tls())
+
+    def test_05_the_status_document_carries_the_scheme_in_use(self):
+        st, _, _, cfg = req("GET", "/api/v1/config?ns=sk")
+        js = wait_sk(lambda j: j["server"]["source"] == "discovered"
+                     and j["server"].get("scheme") == "http", timeout=25)
+        self.assertIsNotNone(js, (cfg["sk"]["scheme"], sk_status()))
+        # sk.scheme is auto and the sim advertised the plaintext service type,
+        # so the answer is http and no probe was needed.
+        self.assertIn("cert_errors", js["token"]["counts"])
+        st, _, _, srv = req("GET", "/api/v1/sk/servers")
+        self.assertEqual(srv["servers"][0]["scheme"], "http")
+
+    def test_07_a_manual_host_is_probed_and_the_probe_carries_no_token(self):
+        # sk.scheme = auto with a manual host: one GET of the plain port,
+        # unauthenticated (SensESP #1057 — the address has not been
+        # established as our server yet, so it must not see the token).
+        if sk_tls() is None:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        n0 = len([e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1] == "/signalk"])
+        req("PUT", "/api/v1/config", {"sk": {"server_host": "127.0.0.1",
+                                             "server_port": self.mock.port, "scheme": "auto"}})
+        # A plain server that does not redirect stays plain.
+        js = wait_sk(lambda j: j["server"].get("source") == "manual"
+                     and j["server"].get("scheme") == "http", timeout=20)
+        self.assertIsNotNone(js, sk_status())
+        probes = [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1] == "/signalk"]
+        self.assertGreater(len(probes), n0, "the manual host was never probed")
+        self.assertIsNone(probes[-1][2], probes[-1])
+        req("PUT", "/api/v1/config", {"sk": {"server_host": None}})
+
+
+class SkSchemeAdvertisedTests(unittest.TestCase):
+    """A discovered server that advertised _signalk-https._tcp: sk.scheme =
+    auto reads the scheme off the advertisement, with no probe at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockSignalK()
+        # The sim's fifth field is the https service type, which is how
+        # signalk-server says its `ssl` setting is on.
+        cls.h = Harness(fresh=True, extra_env={
+            "ESPOS_SIM_SK_SERVERS": f"127.0.0.1,{cls.mock.port},{cls.mock.self_urn},secureboat,tls"})
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.mock.stop()
+
+    def test_01_the_advertisement_decides_and_nothing_is_probed(self):
+        st, _, _, _ = req("GET", "/api/v1/sk/tls")
+        if st == 404:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        js = wait_sk(lambda j: j["server"].get("scheme") == "https", timeout=30)
+        self.assertIsNotNone(js, sk_status())
+        st, _, _, srv = req("GET", "/api/v1/sk/servers")
+        self.assertEqual(srv["servers"][0]["scheme"], "https")
+        # The server said so, so nothing was asked of it to find out.
+        self.assertEqual([e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1] == "/signalk"], [])
+
+
+class SkSchemeRedirectTests(unittest.TestCase):
+    """The probe's other answer: a plain port that redirects to https."""
+
+    @classmethod
+    def setUpClass(cls):
+        # 44300 is never listened on here; what matters is that the device
+        # reads the scheme AND the port out of the Location header.
+        cls.plain = MockSignalK(redirect_to="https://127.0.0.1:44300")
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_SK_SERVERS": ""})
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"}})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.plain.stop()
+
+    def test_01_a_302_to_https_selects_https_and_the_port_from_the_location(self):
+        st, _, _, js = req("GET", "/api/v1/sk/tls")
+        if st == 404:
+            self.skipTest("built without CONFIG_ESPOS_SK_TLS")
+        req("PUT", "/api/v1/config", {"sk": {"server_host": "127.0.0.1",
+                                             "server_port": self.plain.port, "scheme": "auto"}})
+        js = wait_sk(lambda j: j["server"].get("scheme") == "https", timeout=30)
+        self.assertIsNotNone(js, sk_status())
+        # signalk-server with ssl on commonly listens for TLS on another port,
+        # so following the Location's host:port is the only way to land on it.
+        self.assertEqual(js["server"]["port"], 44300)
+        probes = [e for e in self.plain.ctl("log")[1] if e[0] == "GET"]
+        self.assertTrue(probes, "the plain port was never probed")
+        self.assertTrue(all(e[2] is None for e in probes), probes)
+
+
+class SkPlaintextUnauthTests(unittest.TestCase):
+    """Over plaintext a single 401 must not cost the token: anything on the
+    path can produce one, and replacing a token costs an admin approval."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockSignalK(unauth_once=True)
+        servers = f"127.0.0.1,{cls.mock.port},{cls.mock.self_urn},mockboat"
+        cls.h = Harness(fresh=True, extra_env={"ESPOS_SIM_SK_SERVERS": servers})
+        req("PUT", "/api/v1/config", {"wifi": {"ssid0": "Boat", "psk0": "secret12"},
+                                      "sk": {"check_s": 3600}})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.h.stop()
+        cls.mock.stop()
+
+    def test_01_one_stream_401_keeps_the_token_and_the_device_recovers(self):
+        js = wait_sk(lambda j: j["token"]["state"] == "pending", timeout=25)
+        self.assertIsNotNone(js, sk_status())
+        self.mock.ctl("approve", js["client_id"])
+        js = wait_sk(lambda j: j["token"]["state"] == "approved", timeout=20)
+        self.assertIsNotNone(js, sk_status())
+        # The stream's first upgrade is refused with 401 — the shape a captive
+        # portal or a proxy takes. The device asks again rather than throwing
+        # away a token that costs an admin approval to replace.
+        ok = wait_for(lambda: (self.mock.ws_unauth_count > 0) or None, timeout=30)
+        self.assertTrue(ok, "the stream never attempted an upgrade")
+        time.sleep(2)
+        self.assertTrue(sk_status()["token"]["has_token"])
+        # ... and it connects by itself once the 401 stops.
+        js = wait_sk(lambda j: j["ws"]["connected"], timeout=90)
+        self.assertIsNotNone(js, sk_status())
+        self.assertTrue(js["token"]["has_token"])
 
 
 if __name__ == "__main__":

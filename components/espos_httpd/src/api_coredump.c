@@ -158,7 +158,7 @@ static esp_err_t crash_post(httpd_req_t *req)
 }
 #endif
 
-esp_err_t espos_httpd_register_coredump_api(httpd_handle_t h)
+esp_err_t espos_httpd_register_coredump_api(void)
 {
     static const httpd_uri_t uris[] = {
         { .uri = "/api/v1/system/coredump", .method = HTTP_GET, .handler = coredump_get },
@@ -169,7 +169,7 @@ esp_err_t espos_httpd_register_coredump_api(httpd_handle_t h)
 #endif
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        esp_err_t err = httpd_register_uri_handler(h, &uris[i]);
+        esp_err_t err = espos_httpd_register_ex(&uris[i], ESPOS_HTTPD_PROTECTED);
         if (err != ESP_OK) {
             return err;
         }
