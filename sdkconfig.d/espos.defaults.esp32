@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
 # ESP32 (original): RSA app signing (Secure Boot V2 scheme) needs chip
 # revision >= 3.0; every module sold since 2020 (WROOM-32E/UE, WROVER-E) is.
 CONFIG_ESP32_REV_MIN_3=y

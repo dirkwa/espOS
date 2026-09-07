@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# espOS base defaults, shared by every firmware built on espOS.
+#
+# espos_project_prologue() (cmake/espos_project.cmake) puts this file first on
+# SDKCONFIG_DEFAULTS; ESP-IDF appends espos.defaults.<target> by itself. After
+# it come the optional profile (release.defaults / debug.defaults), the
+# project's own sdkconfig.defaults(.<target>), sdkconfig.local and last the
+# partition-table fragment the prologue generates. Later files win, so a
+# consumer overrides a value here by restating it in its own defaults -- it
+# never has to copy this file.
+
+# ---- Flash size. The partition table itself (CONFIG_PARTITION_TABLE_CUSTOM*)
+# is chosen by the prologue's PARTITIONS argument, which also sets the size
+# for the bundled partitions/<n>mb.csv tables; this is the fallback for a
+# project that brings its own table and does not say otherwise.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# ---- Task stacks: WiFi/IP events and FreeRTOS timers run the state machine,
+# JSON building and SSE sends; the IDF defaults (2304 / 2048) are too tight.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
+# ---- Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- HTTP server
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
+
+# ---- Core dump to flash (surfaced by the UI in M5). IDF 6 is ELF+SHA256 only.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# ---- Task watchdog. A task that espos_health_watch_task() subscribed and that
+# stops calling espos_health_kick() for 30 s panics: that is a core dump (above)
+# and a reboot, and before an OTA image has confirmed itself the reboot rolls
+# back to the previous image. IDF's 5 s default is too tight for a loop that
+# legitimately blocks on a slow HTTP round trip; 30 s still beats a device
+# that sits wedged until someone drives to it. The idle tasks stay watched.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# ---- OTA (M6): rollback on failed boot, signed images verified on update.
+# The signing key is `secure_boot_signing_key.pem` in the project root
+# (git-ignored; a development key is generated on first build — see
+# docs/ota.md, keep the real one safe). Its public part is compiled into
+# the app; images signed by anything else are rejected by esp_ota_end().
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="secure_boot_signing_key.pem"
+# Plain-http image sources are acceptable because every image is signed.
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# ---- Security (production): sdkconfig.d/release.defaults, selected with
+# espos_project_prologue(PROFILE release) or -DESPOS_PROFILE=release; see
+# docs/security.md.

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# espOS release profile: espos_project_prologue(PROFILE release) or
+# idf.py -DESPOS_PROFILE=release. Applied after espos.defaults and before the
+# project's own sdkconfig.defaults, so a project can still override any line.
+#
+# What it adds is the secrets-at-rest half of docs/security.md. Everything
+# else about a release (signed images, rollback, the signing key) is already
+# on in espos.defaults for development builds too, because those need to be
+# identical to what ships apart from encryption.
+#
+# READ BEFORE USING: flash encryption is a one-way door on the device. The
+# first boot of an image built with this profile burns eFuses; in RELEASE
+# mode the encryption key can never be read back and plain `idf.py flash`
+# stops working (use `idf.py encrypted-flash`, and only signed OTA
+# thereafter). Development boards stay on the default profile so USB
+# flashing keeps working. Host tests ignore this file: nvs_flash on the
+# linux target has no encryption.
+
+# Encrypt the flash contents; the bootloader generates the key on first
+# boot and burns it into eFuse.
+CONFIG_SECURE_FLASH_ENC_ENABLED=y
+# RELEASE, not DEVELOPMENT: development mode leaves the key readable and
+# keeps UART re-flashing of plaintext enabled, which defeats the purpose on
+# a shipped device.
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
+# NVS (WiFi password, SignalK token) is encrypted with keys kept in the
+# `nvs_keys` partition, itself flagged `encrypted` in every bundled table.
+# IDF turns this on by itself once flash encryption is enabled; stated so
+# the intent survives a change to that default.
+CONFIG_NVS_ENCRYPTION=y

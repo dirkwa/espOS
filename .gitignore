@@ -2,14 +2,20 @@ build/
 build-*/
 sdkconfig
 sdkconfig.old
+sdkconfig.local
+sdkconfig.local.*
 managed_components/
-dependencies.lock
 __pycache__/
 *.pyc
 test/host/*/build/
 test/host/*/sdkconfig
 test/host/*/sdkconfig.old
 test/host/*/managed_components/
+# The root dependencies.lock is committed: espOS builds as an application
+# (main/), and an application pins its registry dependencies exactly through
+# its lock, so CI builds the same binary a developer just did. Libraries
+# (the components' idf_component.yml) use version ranges instead. The
+# host-test projects are throwaway applications; their locks stay out.
 test/host/*/dependencies.lock
 ui/node_modules/
 ui/dist/
@@ -22,10 +28,11 @@ provisioning/
 secrets/
 *.secret
 
-# UI build output and dependencies (built in CI / locally: `npm ci && npm run build` in ui/)
+# UI dependencies and Vite's intermediate output. ui/dist-gz/ (the gzipped
+# bundle the firmware flashes) is COMMITTED: `npm run build` in ui/ regenerates
+# it, and CI fails when a UI change forgot to commit the result.
 ui/node_modules/
 ui/dist/
-ui/dist-gz/
 
 # App-signing key (development key is generated on first build; a real one is a secret)
 secure_boot_signing_key.pem

@@ -1,0 +1,13 @@
+# espOS partition table, 8 MB flash. Same layout as 4mb.csv: two 3 MB app
+# slots (a native-radio target with Bluedroid links ~2 MB), the rest to the
+# LittleFS storage partition that holds the gzipped web UI and whatever the
+# firmware keeps next to it; 64 KB stay free at the end.
+# Name,     Type, SubType,  Offset,  Size,   Flags
+nvs,        data, nvs,      ,        24K,
+otadata,    data, ota,      ,        8K,
+phy_init,   data, phy,      ,        4K,
+nvs_keys,   data, nvs_keys, ,        4K,    encrypted
+coredump,   data, coredump, ,        64K,
+ota_0,      app,  ota_0,    ,        3M,
+ota_1,      app,  ota_1,    ,        3M,
+storage,    data, littlefs, ,        1792K,

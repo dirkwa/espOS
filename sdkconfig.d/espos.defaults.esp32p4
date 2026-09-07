@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
 # ESP32-P4: WiFi via ESP32-C6 co-processor over SDIO (esp_hosted +
 # esp_wifi_remote). Pinout below is the Waveshare ESP32-P4-WIFI6-Touch-LCD
 # family (7B / 4B): SDIO slot 1, CLK 18, CMD 19, D0..D3 14..17, C6 reset on
@@ -34,8 +37,9 @@ CONFIG_ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP=y
 # would otherwise flip it silently and wedge the transport.
 CONFIG_CACHE_L2_CACHE_LINE_64B=y
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
-# The Waveshare panels ship 16 MB flash; the shared partitions.csv assumes 4 MB
-# and still fits — keep it until a P4-specific table is needed.
+# The Waveshare panels ship 16 MB flash; the default partitions/4mb.csv still
+# fits. A project that wants the whole chip passes
+# PARTITIONS "${ESPOS_DIR}/partitions/16mb.csv" to espos_project_prologue().
 # The Waveshare panels carry ESP32-P4 rev v1.x silicon; IDF 6 defaults to
 # the v3.x mass-production revision. Allow the older revision.
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y

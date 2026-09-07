@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# espOS debug profile: espos_project_prologue(PROFILE debug) or
+# idf.py -DESPOS_PROFILE=debug. Applied after espos.defaults and before the
+# project's own sdkconfig.defaults.
+#
+# Costs RAM and cycles; never ship it. Each line answers a question that has
+# had to be answered by hand on a device: who corrupted the heap, which task
+# leaked, whose stack overflowed, and does the core-dump path actually work.
+
+# Heap: canaries on both sides of every block, checked on free and by
+# heap_caps_check_integrity(); an overrun is caught where it happens instead
+# of three allocations later.
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+# Per-task allocation accounting (heap_caps_get_per_task_info) for finding
+# the task behind a slow leak.
+CONFIG_HEAP_TASK_TRACKING=y
+# Compiler stack protector on every function with a local array, not only
+# the ones with char arrays.
+CONFIG_COMPILER_STACK_CHECK_MODE_STRONG=y
+# POST /api/v1/system/crash: a deliberate panic to exercise core dumps end
+# to end (docs/rest-api.md). Off in every other profile.
+CONFIG_ESPOS_HTTPD_DEBUG_CRASH=y

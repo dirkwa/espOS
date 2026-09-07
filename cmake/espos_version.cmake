@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Work out what version this build is, and put it where IDF will use it.
 #
@@ -11,11 +12,24 @@
 #
 # So: `git describe` when the checkout has tags, version.txt when it has not
 # (a tarball, or a repo whose release has not been tagged yet). That is also
-# the shape docs/api.md has always documented — "0.1.0-3-gabc1234".
+# the shape docs/rest-api.md has always documented — "0.1.0-3-gabc1234".
 #
 # Include before project(); IDF honours a PROJECT_VER set beforehand.
 
 include_guard(GLOBAL)
+
+# ESP-IDF version policy, enforced by _espos_check_idf_version() in
+# espos_project.cmake. .idf-version is the exact release CI builds and the
+# docs say to install; it is the only one that is known to work. Any other
+# release in [ESPOS_IDF_MIN, ESPOS_IDF_MAX_EXCL) is the same major.minor the
+# components are written against, so it builds -- with a single warning that
+# names the tested release, because a problem reported from such a build has
+# to say so. Outside the range is a hard stop: another minor moves component
+# APIs (esp_hosted, the TWAI driver, the linux target) under the code, and
+# -DESPOS_ALLOW_IDF_MISMATCH=1 is the deliberate way past it, not a habit.
+# Bump ESPOS_IDF_MAX_EXCL together with the pin, never ahead of it.
+set(ESPOS_IDF_MIN "6.0.0")
+set(ESPOS_IDF_MAX_EXCL "6.1.0")
 
 macro(espos_project_version)
     # The project being built, which for a firmware is its own repository and

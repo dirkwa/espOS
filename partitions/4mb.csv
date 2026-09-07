@@ -1,4 +1,7 @@
-# espOS partition table (4 MB flash). Offsets are computed by gen_esp32part.
+# espOS partition table, 4 MB flash -- the default. Offsets are left to
+# gen_esp32part (app slots align to 64 KB); 64 KB stay free at the end.
+# Selected by espos_project_prologue(PARTITIONS ...); 8mb.csv and 16mb.csv
+# are the same layout with bigger app slots and storage.
 # Name,     Type, SubType,  Offset,  Size,   Flags
 nvs,        data, nvs,      ,        24K,
 otadata,    data, ota,      ,        8K,
