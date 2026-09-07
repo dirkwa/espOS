@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * What espos_ota needs from the platform; port_idf.c on chips, port_sim.c
  * on the linux target (no flash, downloads are only counted).

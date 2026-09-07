@@ -1,0 +1,21 @@
+# REUSE (https://reuse.software) metadata for files that cannot carry an SPDX
+# header themselves: data, config, docs, lock files, UI assets. Source files
+# carry their own SPDX-FileCopyrightText / SPDX-License-Identifier lines.
+version = 1
+SPDX-PackageName = "espOS"
+SPDX-PackageSupplier = "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/dirkwa/espOS"
+
+[[annotations]]
+path = [
+  "**/*.json", "**/*.md", "**/*.yml", "**/*.yaml", "**/*.csv", "**/*.txt",
+  "**/*.lock", "**/*.html", "**/*.svg", "**/*.png", "**/*.ico",
+  "**/Kconfig", "**/Kconfig.projbuild", "**/sdkconfig.defaults*", "**/sdkconfig*",
+  ".idf-version", ".editorconfig", ".gitignore", ".gitmodules", "version.txt",
+  ".github/**", "ui/index.html", "ui/public/**", "ui/tsconfig*.json", "ui/src/vite-env.d.ts", "ui/dist-gz/**",
+  "components/**/www/**", "components/**/config/**", "main/config/**",
+  "test/host/**/config/**", "test/host/**/*.txt", "docs/**", "partitions*.csv", "REUSE.toml", "NOTICE",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Dirk Wahrheit"
+SPDX-License-Identifier = "Apache-2.0"

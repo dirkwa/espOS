@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Compile the protocol sources directly rather than depending on espos_voice:
 # the component needs esp-sr and an AudioDriver, and registers as an empty

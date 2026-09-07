@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # Wyoming-protocol voice satellite: a TCP server that lets a
 # signalk-wyoming / Home Assistant orchestrator play TTS to, and stream

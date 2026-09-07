@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 # Host unit tests for the candump codec.
 #   idf.py --preview set-target linux && idf.py build && ./build/espos_n2k_test.elf
 cmake_minimum_required(VERSION 3.22)

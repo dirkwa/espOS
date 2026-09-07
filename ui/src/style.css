@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 :root {
   --bg: #f6f7f9; --fg: #1d2129; --muted: #667085; --card: #fff; --line: #e3e6ea;
   --accent: #0b6bcb; --ok: #2f9e44; --warn: #d9a400; --bad: #d64545; --code: #eef1f4;

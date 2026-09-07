@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
 #
 # NMEA 2000 over TWAI: receiver, transmitter, and a candump-format TCP
 # server so the bus is reachable from a laptop (`candump`, canboatjs, a

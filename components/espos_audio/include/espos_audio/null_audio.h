@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * AudioDriver that does nothing: keeps the chime/voice controls compiling
  * and honest ("no audio") until the ES7210/ES8311 HAL is ported (phase 2).
