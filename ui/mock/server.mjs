@@ -4,7 +4,8 @@
 // espOS API mock for UI development: implements docs/rest-api.md well enough to
 // exercise every page without a device — config with schema validation of
 // the basics, a simulated WiFi state machine, SignalK discovery/token flow,
-// a log ring, SSE. Zero dependencies (node:http only).
+// a log ring, SSE, and the REST authentication (Bearer or the espos_sid
+// cookie, once httpd.api_key is set). Zero dependencies (node:http only).
 //
 //   node mock/server.mjs [port]      (vite dev starts it automatically)
 //
@@ -12,6 +13,7 @@
 // available (components/espos_config/tools/espos_gen_config.py); otherwise mock/schema.json is used.
 import http from "node:http";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -246,6 +248,53 @@ export function startMock(port = 8484) {
     }, 400);
   }
 
+  // ---- authentication (docs/rest-api.md "Authentication", docs/security.md)
+  // Open until httpd.api_key is set; then Bearer or the espos_sid cookie from
+  // POST /auth/login. The Origin check on cookie writes accepts a localhost
+  // origin of any port on top of the exact match: the Vite dev server proxies
+  // the UI (origin localhost:5173) to this mock (host 127.0.0.1:8484), so the
+  // strict rule the device applies would refuse every save in development.
+  const auth = { sessions: new Map(), fails: 0, failFirst: 0, lockedUntil: 0 };
+  const apiKey = () => String(effective().httpd?.api_key ?? "");
+  const authRequired = () => apiKey() !== "";
+  const cookies = (req) => Object.fromEntries((req.headers.cookie ?? "").split(";").map((c) => c.trim().split("=", 2)).filter((kv) => kv.length === 2));
+  const throttled = () => Date.now() < auth.lockedUntil;
+  function checkKey(k) {
+    if (throttled()) return "throttled";
+    if (k === apiKey()) { auth.fails = 0; return "ok"; }
+    const now = Date.now();
+    if (!auth.fails || now - auth.failFirst >= 60000) { auth.fails = 0; auth.failFirst = now; }
+    if (++auth.fails >= 5) { auth.lockedUntil = now + 30000; auth.fails = 0; logAndMark("W", "espos_auth", "too many failed keys: refusing key checks for 30 s"); }
+    return "bad";
+  }
+  const originOk = (req) => {
+    const o = req.headers.origin ?? req.headers.referer;
+    if (!o) return false;
+    try { const a = new URL(o).host; return a === (req.headers.host ?? "") || /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(a); } catch { return false; }
+  };
+  const throttle429 = (res) => { res.setHeader("Retry-After", String(Math.max(1, Math.ceil((auth.lockedUntil - Date.now()) / 1000)))); return err(res, 429, "too_many_attempts", "too many failed keys; wait before trying again"); };
+  // The method the request authenticated with ("none" when it did not), or
+  // false when a refusal has been sent (never for a public endpoint).
+  function authenticate(req, res, isPublic) {
+    const stateChanging = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+    let method = "none", verdict = "allow";
+    const bearer = req.headers.authorization;
+    if (!authRequired()) verdict = "allow";
+    else if (bearer && /^bearer /i.test(bearer)) {
+      const r = checkKey(bearer.slice(7).trim());
+      if (r === "ok") method = "bearer"; else verdict = r === "throttled" ? "throttled" : "unauthorized";
+    } else {
+      const s = auth.sessions.get(cookies(req).espos_sid);
+      if (s && s.expires > Date.now()) { method = "cookie"; if (stateChanging && !originOk(req)) verdict = "origin"; }
+      else verdict = "unauthorized";
+    }
+    if (isPublic || verdict === "allow") return method;
+    if (verdict === "unauthorized") { res.setHeader("WWW-Authenticate", 'Bearer realm="espOS"'); err(res, 401, "unauthorized", "authentication required: Authorization: Bearer <key>, or log in at /api/v1/auth/login"); }
+    else if (verdict === "origin") err(res, 403, "forbidden", "cross-site request: Origin does not match Host");
+    else throttle429(res);
+    return false;
+  }
+
   // ---- HTTP
   const json = (res, status, body, headers = {}) => {
     const data = JSON.stringify(body);
@@ -281,6 +330,34 @@ export function startMock(port = 8484) {
     if (!p.startsWith("/api/v1/")) return err(res, 404, "not_found", "no such resource");
     const r = p.slice("/api/v1".length);
     try {
+      const isPublic = r.startsWith("/auth/") || r === "/system/ping";
+      const method = authenticate(req, res, isPublic);
+      if (method === false) return;
+      // ---- auth
+      if (r === "/auth/status" && m === "GET") return json(res, 200, { required: authRequired(), configured: authRequired(), authenticated: method !== "none", method });
+      if (r === "/auth/login" && m === "POST") {
+        if (!needJson(req, res)) return;
+        if (!authRequired()) return err(res, 409, "auth_open", "no API key is configured; the API is open");
+        let doc; try { doc = JSON.parse(await body(req)); } catch { doc = null; }
+        if (!doc || typeof doc.key !== "string") return err(res, 400, "validation", "expected {\"key\": \"...\"}");
+        const rr = checkKey(doc.key);
+        if (rr === "throttled") return throttle429(res);
+        if (rr === "bad") { logAndMark("W", "espos_auth", "login refused: wrong key"); return err(res, 401, "unauthorized", "wrong key"); }
+        const sid = randomUUID().replace(/-/g, "");
+        const ttl = Number(effective().httpd.session_ttl_s ?? 86400);
+        if (auth.sessions.size >= 4) auth.sessions.delete(auth.sessions.keys().next().value);   // oldest first, like the device's LRU
+        auth.sessions.set(sid, { expires: Date.now() + ttl * 1000 });
+        logAndMark("I", "espos_auth", `login: session opened (${ttl} s)`);
+        res.writeHead(204, { "Set-Cookie": `espos_sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${ttl}`, "Cache-Control": "no-store" });
+        return res.end();
+      }
+      if (r === "/auth/logout" && m === "POST") {
+        if (!needJson(req, res)) return;
+        if (auth.sessions.delete(cookies(req).espos_sid)) logAndMark("I", "espos_auth", "logout: session closed");
+        res.writeHead(204, { "Set-Cookie": "espos_sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0", "Cache-Control": "no-store" });
+        return res.end();
+      }
+      if (r === "/system/ping" && m === "GET") return json(res, 200, { app: "espos", version: "0.5.0-mock", auth: authRequired() });
       // ---- system
       if (r === "/system/info" && m === "GET") {
         return json(res, 200, { app: "espos", version: "0.5.0-mock", idf_version: "v6.0.2", chip: "esp32c6", chip_revision: 1, cores: 1,
@@ -327,6 +404,7 @@ export function startMock(port = 8484) {
             logAndMark("I", "espos_config", `changed ${ns}.${k}`);
           }
         }
+        if (changed.includes("httpd.api_key")) { auth.sessions.clear(); logAndMark(authRequired() ? "I" : "W", "espos_auth", authRequired() ? "API key set: protected endpoints need Bearer or a login" : "no API key set: the REST API is open to the network"); }
         if (changed.some((c) => c.startsWith("wifi."))) wifiEval();
         if (changed.some((c) => c.startsWith("sk."))) { if (!effective().sk.ws_enabled) wsConnect(); else if (sk.token.has_token) wsConnect(); }
         return json(res, 200, { changed, restart_required: restart });

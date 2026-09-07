@@ -242,7 +242,7 @@ static esp_err_t events_get(httpd_req_t *req)
     return ESP_OK;
 }
 
-esp_err_t espos_httpd_register_sse(httpd_handle_t h)
+esp_err_t espos_httpd_register_sse(void)
 {
     if (!s.lock) {
         s.lock = xSemaphoreCreateMutex();
@@ -253,7 +253,7 @@ esp_err_t espos_httpd_register_sse(httpd_handle_t h)
             s.clients[i].fd = -1;
         }
     }
-    s.server = h;
+    s.server = espos_httpd_handle();
     if (!s.ping) {
         s.ping = xTimerCreate("sse_ping", pdMS_TO_TICKS(CONFIG_ESPOS_HTTPD_SSE_PING_S * 1000), pdTRUE, NULL, ping_cb);
         if (!s.ping) {
@@ -261,8 +261,10 @@ esp_err_t espos_httpd_register_sse(httpd_handle_t h)
         }
     }
     xTimerStart(s.ping, 0);
+    /* Protected: the stream carries every status document. A browser's
+     * EventSource sends the session cookie by itself. */
     static const httpd_uri_t uri = { .uri = "/api/v1/events", .method = HTTP_GET, .handler = events_get };
-    return httpd_register_uri_handler(h, &uri);
+    return espos_httpd_register_ex(&uri, ESPOS_HTTPD_PROTECTED);
 }
 
 void espos_httpd_sse_shutdown(void)

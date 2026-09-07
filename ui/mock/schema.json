@@ -67,6 +67,13 @@
           "x-espos-type": "blob",
           "x-espos-maxBytes": 64,
           "default": ""
+        },
+        "watch_path": {
+          "title": "Watch path",
+          "description": "A SignalK path or family (e.g. navigation.position, notifications.*) the example app subscribes to and logs. Empty = off.",
+          "type": "string",
+          "default": "",
+          "maxLength": 95
         }
       },
       "additionalProperties": false,
@@ -75,7 +82,7 @@
     "httpd": {
       "type": "object",
       "title": "HTTP server",
-      "x-espos-version": 1,
+      "x-espos-version": 2,
       "properties": {
         "port": {
           "title": "TCP port",
@@ -85,6 +92,25 @@
           "minimum": 1,
           "maximum": 65535,
           "x-espos-restartRequired": true
+        },
+        "api_key": {
+          "title": "API key",
+          "description": "Shared secret for the web UI and the REST API, sent as Authorization: Bearer or exchanged for a login cookie. Empty = no authentication, the API is open to anyone on the network. 8–64 characters; the Config page can generate one. Changing it logs every browser out.",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "writeOnly": true,
+          "format": "password",
+          "x-espos-secret": true
+        },
+        "session_ttl_s": {
+          "title": "Login session lifetime",
+          "description": "How long a browser login (the espos_sid cookie) stays valid. Sessions live in RAM; a reboot ends them all.",
+          "type": "integer",
+          "default": 86400,
+          "minimum": 60,
+          "maximum": 2592000,
+          "x-espos-unit": "s"
         }
       },
       "additionalProperties": false,
@@ -155,7 +181,7 @@
       "properties": {
         "discovery": {
           "title": "Discover servers via mDNS",
-          "description": "Browse _signalk-http._tcp on the local network. Off = only the manual server below.",
+          "description": "Browse _signalk-http._tcp on the local network. Off = only the manual server below. Setting a manual host also stops discovery: an explicit address means that address, so nothing keeps browsing.",
           "type": "boolean",
           "default": true
         },
@@ -166,9 +192,15 @@
           "default": "",
           "maxLength": 127
         },
+        "server_pin": {
+          "title": "Stay on the chosen server",
+          "description": "Never re-elect a different server once one is in use. The device keeps waiting for it to come back instead of moving to another discovered server. Off = pick a new server if the current one stops answering.",
+          "type": "boolean",
+          "default": false
+        },
         "server_host": {
           "title": "Manual server host",
-          "description": "Host name or IP when mDNS is blocked. Empty = use discovery.",
+          "description": "Host name or IP when mDNS is blocked. Empty = use discovery. When set, this address is used exclusively and mDNS discovery stops.",
           "type": "string",
           "default": "",
           "maxLength": 63
@@ -179,6 +211,13 @@
           "default": 80,
           "minimum": 1,
           "maximum": 65535
+        },
+        "tls": {
+          "title": "Use TLS (https/wss)",
+          "description": "Talk to the server over https and wss instead of http and ws. Requires a firmware built with ESPOS_SK_TLS; without it this setting is inert and the device logs that it is. The server certificate is validated against the bundled Mozilla roots, so a self-signed certificate will be refused.",
+          "type": "boolean",
+          "default": false,
+          "x-espos-restartRequired": true
         },
         "description": {
           "title": "Access request description",
@@ -267,7 +306,7 @@
         },
         "stall_s": {
           "title": "Stream stall before restart",
-          "description": "Restart the device when WiFi is up but the SignalK stream, which worked once this boot, has been down this long. 0 is not allowed; raise it on a boat whose server is often off.",
+          "description": "WiFi reports connected and the stream has worked since boot, yet it has been down this long: the device raises skLinkStalled as a fatal health condition and the health watchdog restarts it, because a wedged radio link is the one network fault a restart fixes. Generous on purpose so a server restart never reboots the device; raise it if your server takes longer to come back.",
           "type": "integer",
           "default": 300,
           "minimum": 60,
@@ -281,7 +320,7 @@
     "wifi": {
       "type": "object",
       "title": "WiFi",
-      "x-espos-version": 1,
+      "x-espos-version": 2,
       "properties": {
         "sta_enabled": {
           "title": "Station enabled",
@@ -290,8 +329,8 @@
           "default": true
         },
         "hostname": {
-          "title": "Hostname",
-          "description": "DHCP/mDNS hostname. Empty = espos-<last 4 hex of MAC>.",
+          "title": "Hostname (moved to Network)",
+          "description": "Superseded by net.hostname. A value here is moved there at the next boot and this key is cleared; set the hostname under Network.",
           "type": "string",
           "default": "",
           "maxLength": 32,
@@ -392,6 +431,63 @@
           "maxLength": 17,
           "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^$"
         },
+        "ip_mode": {
+          "title": "Addressing",
+          "description": "dhcp = take an address from the router. static = use the address below; applied before every connection, so a change takes effect at the next (re)connect or reboot.",
+          "type": "string",
+          "default": "dhcp",
+          "maxLength": 6,
+          "enum": [
+            "dhcp",
+            "static"
+          ],
+          "x-espos-restartRequired": true
+        },
+        "ip": {
+          "title": "Static IP address",
+          "description": "IPv4 address for ip_mode = static. Invalid or empty falls back to DHCP with a warning in the log.",
+          "type": "string",
+          "default": "",
+          "maxLength": 15,
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$|^$",
+          "x-espos-restartRequired": true
+        },
+        "netmask": {
+          "title": "Static netmask",
+          "description": "e.g. 255.255.255.0. Required with a static address.",
+          "type": "string",
+          "default": "",
+          "maxLength": 15,
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$|^$",
+          "x-espos-restartRequired": true
+        },
+        "gateway": {
+          "title": "Static gateway",
+          "description": "Default router. Empty = none (the device then reaches its own subnet only).",
+          "type": "string",
+          "default": "",
+          "maxLength": 15,
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$|^$",
+          "x-espos-restartRequired": true
+        },
+        "dns0": {
+          "title": "Static DNS 1",
+          "description": "Primary resolver with a static address. Empty = the gateway.",
+          "type": "string",
+          "default": "",
+          "maxLength": 15,
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$|^$",
+          "x-espos-restartRequired": true
+        },
+        "dns1": {
+          "title": "Static DNS 2",
+          "description": "Backup resolver with a static address. Empty = none.",
+          "type": "string",
+          "default": "",
+          "maxLength": 15,
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$|^$",
+          "x-espos-restartRequired": true
+        },
         "backoff_max_s": {
           "title": "Reconnect backoff cap",
           "description": "Exponential backoff between rounds over all networks, 1 s doubling up to this cap, ±25 % jitter.",
@@ -436,7 +532,7 @@
         },
         "portal_ssid": {
           "title": "Access point SSID",
-          "description": "Empty = espOS-<last 4 hex of MAC>.",
+          "description": "Empty = espOS-<last 4 hex of the device MAC>.",
           "type": "string",
           "default": "",
           "maxLength": 32
@@ -467,7 +563,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Station networks in priority order (slot 0 first), reconnect policy and the provisioning access point."
+      "description": "Station networks in priority order (slot 0 first), addressing, reconnect policy and the provisioning access point."
     }
   },
   "additionalProperties": false

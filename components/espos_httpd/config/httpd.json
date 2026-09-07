@@ -1,6 +1,6 @@
 {
   "namespace": "httpd",
-  "version": 1,
+  "version": 2,
   "title": "HTTP server",
   "description": "Built-in web server serving the UI and the REST API.",
   "keys": [
@@ -13,6 +13,25 @@
       "title": "TCP port",
       "description": "Port the HTTP server listens on.",
       "restart_required": true
+    },
+    {
+      "name": "api_key",
+      "type": "string",
+      "default": "",
+      "maxLength": 64,
+      "secret": true,
+      "title": "API key",
+      "description": "Shared secret for the web UI and the REST API, sent as Authorization: Bearer or exchanged for a login cookie. Empty = no authentication, the API is open to anyone on the network. 8–64 characters; the Config page can generate one. Changing it logs every browser out."
+    },
+    {
+      "name": "session_ttl_s",
+      "type": "int",
+      "default": 86400,
+      "min": 60,
+      "max": 2592000,
+      "unit": "s",
+      "title": "Login session lifetime",
+      "description": "How long a browser login (the espos_sid cookie) stays valid. Sessions live in RAM; a reboot ends them all."
     }
   ]
 }

@@ -5,7 +5,7 @@ A Preact + TypeScript single-page app built with Vite, served by
 versioned REST API in [rest-api.md](rest-api.md) and gets live state over the SSE
 stream — no polling, no coupling to firmware internals.
 
-Pages: **Status** (WiFi, SignalK, device, last crash), **WiFi** (join /
+Pages: **Status** (WiFi, SignalK, device, access, last crash), **WiFi** (join /
 scan / saved networks / portal), **SignalK** (token state and actions,
 delta stream, discovered servers, manual server), **Config** (every
 namespace rendered from `GET /config/schema`: types, ranges, enums,
@@ -13,7 +13,40 @@ secrets, restart-required marker, export/import JSON, reset section),
 **Logs** (live log ring with filter, follow, download, runtime log level),
 **OTA** (running image and slot state, confirm/rollback, manifest check
 with the available build, install with progress, install from a URL,
-update-source settings).
+update-source settings). Plus the **login page**, which is not a tab: it
+replaces the app while the device wants a key this browser does not hold.
+
+## Login
+
+Authentication is the device's decision ([security.md](security.md)): with
+`httpd.api_key` unset there is no login and the UI behaves as it always did.
+Once a key is set, the shell asks `GET /api/v1/auth/status` at startup and
+shows the login page when the answer is "required, not authenticated"; a
+`401` on any later call (the session expired, the device rebooted, the key
+changed) brings the page back. The page posts the key to `/api/v1/auth/login`
+and gets the `espos_sid` cookie, which `fetch()` and `EventSource` then send
+by themselves — every call goes out with `credentials: "same-origin"`. After
+a login the app is mounted afresh with a new event stream, so nothing has to
+retry what it failed to load while logged out. **Log out** in the header
+posts `/api/v1/auth/logout`.
+
+Two conveniences on the Config page and Status page: `httpd.api_key` has a
+**Generate** button (20 characters from an alphabet without look-alikes,
+shown once in full — write it down; after Save every browser, the designer
+and any script need it), and Status has an **Access** card saying whether the
+device is open or keyed and how this very page got in (cookie, Bearer, the
+setup portal). A firmware built with `CONFIG_ESPOS_HTTPD_AUTH_REQUIRED=y`
+and no key yet answers `403 auth_unconfigured`; the login page then explains
+that the key is set from the portal network.
+
+In development the page is not served by the device it talks to — the Vite
+dev server proxies `/api` to a device or to the mock — so `Origin` never
+equals `Host` and the device would refuse every cookie-authenticated save.
+`npm run dev` therefore keeps the key in `sessionStorage` and sends it as
+`Authorization: Bearer` on every call as well (the cookie is still taken, for
+`EventSource`). The built bundle on a device uses the cookie only. A bundle
+built for another origin sets `VITE_ESPOS_BASE` to an absolute API URL and
+gets the same Bearer behaviour.
 
 ## Working on it — no hardware needed
 
@@ -26,8 +59,10 @@ ESPOS_API=http://127.0.0.1:<port> npm run dev  # …or to the host harness (test
 ```
 
 `mock/server.mjs` (node, zero deps) implements the API contract with a
-simulated WiFi state machine, discovery + token flow, a log ring and SSE,
-and regenerates the config schema from the real descriptors via
+simulated WiFi state machine, discovery + token flow, a log ring, SSE, and
+the authentication (`/auth/*`, `/system/ping`, Bearer and cookie, the
+throttle; set `httpd.api_key` on the Config page to see the login page), and
+regenerates the config schema from the real descriptors via
 `components/espos_config/tools/espos_gen_config.py` when python3 is present. It is the reference
 "device" for UI development; when the API changes, change the mock and the
 docs together.
@@ -57,6 +92,12 @@ firmware still builds and serves the embedded placeholder page (`GET
 * State lives in tiny subscribable stores fed by one `EventSource`
   (`src/api.ts`); pages `useStore()` what they show. `EventSource`
   reconnects on its own (`retry: 3000`), the header shows the link state.
+  A stream the device *refused* (a `401` after the session ended) is closed
+  by the browser for good; `api.ts` notices, asks `/auth/status`, and either
+  reopens it or hands over to the login page.
+* `authStore` (`open | ok | login | unconfigured`) is what `mount.tsx`
+  renders from: the app, keyed by session so a fresh login remounts it, or
+  the login page. Every helper in `api.ts` flips it to `login` on a `401`.
 * No component library, no router package: a 30-line history router and
   ~120 lines of CSS with light/dark via `prefers-color-scheme`.
 * The Config page is generic: adding a key to a descriptor JSON adds a

@@ -6,12 +6,22 @@
  * REST API under /api/v1. Other espOS components register their endpoints
  * through espos_httpd_register(); the UI bundle is served from /.
  *
+ * Every registered endpoint is protected by the REST authentication
+ * (docs/security.md) unless registered with ESPOS_HTTPD_PUBLIC: when
+ * httpd.api_key is set, a request must carry `Authorization: Bearer <key>`
+ * or the session cookie from POST /api/v1/auth/login, else it is answered
+ * 401 before the handler runs. With no key set everything is open.
+ *
+ * URI handlers run on the esp_http_server task — one task for every request
+ * the device gets: build the reply, send it, return.
+ *
  * API contract: docs/rest-api.md. Changing it is a cross-component decision.
  */
 #pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "esp_http_server.h"
 
@@ -25,8 +35,36 @@ esp_err_t espos_httpd_start(void);
 esp_err_t espos_httpd_stop(void);
 httpd_handle_t espos_httpd_handle(void);
 
-/** Register an additional URI handler (thin wrapper, server must be started). */
+/** Register an additional URI handler (server must be started). The handler
+ * is protected: see espos_httpd_register_ex(). */
 esp_err_t espos_httpd_register(const httpd_uri_t *uri);
+
+/* Registration flags for espos_httpd_register_ex(). Values are ABI. */
+typedef enum {
+    ESPOS_HTTPD_PROTECTED = 0,     /* the default: 401 without a valid credential when a key is set */
+    ESPOS_HTTPD_PUBLIC = 1u << 0,  /* reachable by anyone: the UI, liveness, the login itself */
+} espos_httpd_flags_t;
+
+/**
+ * Register a URI handler with flags. The httpd_uri_t is copied; the handler
+ * is called with the user_ctx it registered. Protected handlers run only
+ * after the request passed the authentication check (a 401/403/429 has been
+ * sent otherwise); public ones always run and may ask
+ * espos_httpd_request_authenticated() themselves. ESP_ERR_INVALID_STATE
+ * before espos_httpd_start(), ESP_ERR_HTTPD_HANDLERS_FULL beyond
+ * CONFIG_ESPOS_HTTPD_MAX_URI_HANDLERS.
+ */
+esp_err_t espos_httpd_register_ex(const httpd_uri_t *uri, uint32_t flags);
+
+/**
+ * Would this request pass the check a protected endpoint applies? True on an
+ * open device (no key configured, unless the build requires one), for a
+ * request from the setup portal's network, and for a valid Bearer key or
+ * session cookie — a cookie on a state-changing request also needs a
+ * matching Origin. Sends nothing. For public handlers that behave
+ * differently for the operator.
+ */
+bool espos_httpd_request_authenticated(httpd_req_t *req);
 
 /* ------------------------------------------------- helpers for handlers */
 

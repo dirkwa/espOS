@@ -47,4 +47,37 @@ menu "espOS HTTP server"
         bool "Expose POST /api/v1/system/crash (deliberate panic, for testing core dumps)"
         default n
 
+    config ESPOS_HTTPD_AUTH_REQUIRED
+        bool "Refuse protected endpoints until an API key is configured"
+        default n
+        help
+            With an empty httpd.api_key the REST API is open to the network
+            (the default, so a device that predates authentication keeps
+            working after an update). A product build that must never ship
+            open turns this on: protected endpoints then answer
+            403 auth_unconfigured until a key is set. Requests from the
+            setup portal's network are exempt, which is where the first key
+            is set. See docs/security.md.
+
+    config ESPOS_HTTPD_MAX_SESSIONS
+        int "Maximum concurrent login sessions"
+        default 4
+        range 1 16
+        help
+            Cookie sessions minted by POST /api/v1/auth/login, kept in RAM
+            (about 48 bytes each). One more login than this evicts the
+            session idle longest; a reboot forgets them all. Bearer requests
+            use no session.
+
+    config ESPOS_HTTPD_TLS
+        bool "Serve the device's own web UI and API over HTTPS (reserved)"
+        default n
+        help
+            Reserved; not implemented. The device's web server is plain http
+            because a TLS server on the smaller targets costs RAM the
+            application needs, and a self-signed certificate on a boat LAN
+            buys little (docs/security.md). Turning this on changes nothing
+            yet; the option exists so a future implementation has a stable
+            name.
+
 endmenu

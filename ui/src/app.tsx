@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Shell: nav + a hand-rolled history router (no router dependency).
 import { useEffect, useState } from "preact/hooks";
-import { linkStore, useStore, wifiStore, skStore } from "./api";
+import { authStore, linkStore, logout, useStore, wifiStore, skStore } from "./api";
 import type { Route } from "./routes";
 
 export function navigate(path: string) {
@@ -26,6 +26,7 @@ export function App({ routes }: { routes: Route[] }) {
   const link = useStore(linkStore);
   const wifi = useStore(wifiStore);
   const sk = useStore(skStore);
+  const auth = useStore(authStore);
   const Page = route.page;
   useEffect(() => { document.title = `${route.title} · espOS`; }, [route]);
   return (
@@ -46,6 +47,7 @@ export function App({ routes }: { routes: Route[] }) {
         <span class={`link link-${link ?? "connecting"}`} title="live connection to the device">
           {link === "open" ? "live" : link === "lost" ? "reconnecting…" : "connecting…"}
         </span>
+        {auth === "ok" && <a class="logout" href="#" title="end this login session" onClick={(e) => { e.preventDefault(); void logout(); }}>Log out</a>}
       </header>
       <main>
         <Page />
