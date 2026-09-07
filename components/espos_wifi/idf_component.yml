@@ -27,6 +27,12 @@ files:
     - "sdkconfig*"
     - "managed_components/**/*"
     - "dependencies.lock"
+    - "examples/*/build/**/*"
+    - "examples/*/build-*/**/*"
+    - "examples/*/managed_components/**/*"
+    - "examples/*/dependencies.lock"
+    - "examples/*/sdkconfig*"
+    - "examples/*/*.pem"
 dependencies:
   idf: ">=6.0.0,<6.1.0"
   # Sibling espOS components. override_path makes an in-tree build (and a
@@ -54,5 +60,12 @@ dependencies:
   # target. Same pin as espos_ble.
   espressif/esp_hosted:
     version: "^2.12.0"
+    rules:
+      - if: "target == esp32p4"
+  # esp_hosted's own manifest declares only idf, so the Wi-Fi API shim that
+  # makes esp_wifi_* calls reach the co-processor has to be named here or by
+  # every consumer; naming it once is the point of the component.
+  espressif/esp_wifi_remote:
+    version: "*"
     rules:
       - if: "target == esp32p4"

@@ -81,7 +81,7 @@ const char *espos_version(void);
 const char *espos_app_name(void);
 
 /**
- * The public C ABI: every header under components/<c>/include, taken
+ * The public C ABI: every header under the components' include directories, taken
  * together (docs/development.md, "Public API rules"). Bumped by any change
  * to one of them that is not purely additive — a function, type, macro or
  * enum value removed or renamed; a signature changed; a struct's members

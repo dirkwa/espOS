@@ -90,7 +90,7 @@ Design points from the plan, all implemented:
 ## Delta stream (M4)
 
 `espos_sk_publish_number/string/bool/json(path, value)` is the whole app
-API: thread-safe, never blocks, works before WiFi is up. Values are for
+API: thread-safe, never blocks, works before WiFi is up (but only after `espos_sk_start()` — earlier calls return `ESP_ERR_INVALID_STATE`). Values are for
 `vessels.self`; the source label is `espos.<hostname>`.
 
 Pipeline (`sk_delta.c`, pure C, unit-tested; `sk_ws.c` = the transport
@@ -305,10 +305,12 @@ self-signed certificate — what a boat server most often has — is refused
 rather than accepted quietly; an "accept anything" switch would make the
 setting a decoration.
 
-The flash cost is near zero: a default espOS build already links mbedTLS and
-the certificate bundle for signed OTA, and the image measured the same size
-with and without `CONFIG_ESPOS_SK_TLS` on esp32c6. Budget ~20 KB of RAM for
-the open connection.
+The flash cost depends on the rest of the build: with `espos_ota` in it (an
+https image source already links mbedTLS and the certificate bundle) the
+image measured the same size
+with and without `CONFIG_ESPOS_SK_TLS` on esp32c6; a minimal consumer without
+`espos_ota` pays about 64 KB for the bundle (`tls_server` example). Budget
+~20 KB of RAM for the open connection.
 
 ## API
 
