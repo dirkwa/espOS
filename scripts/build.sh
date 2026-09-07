@@ -82,15 +82,23 @@ done
 
 # Anything that is not a plain build (set-target, menuconfig, flash, size, a
 # build with extra actions) goes to idf.py as-is, still niced and locked.
-is_build=0
-for a in "${args[@]}"; do [ "$a" = "build" ] && is_build=1; done
+# The value after -B is a directory, however it is named: `-B build` is the
+# most common spelling of the default and must not read as the build action.
+is_build=0; skip=0
+for a in "${args[@]}"; do
+  if [ $skip -eq 1 ]; then skip=0; continue; fi
+  case "$a" in -B) skip=1 ;; build) is_build=1 ;; esac
+done
 if [ $# -eq 0 ]; then is_build=1; args=(build); fi
 if [ $is_build -eq 0 ]; then
   exec nice -n 15 ionice -c 3 idf.py "${args[@]}"
 fi
 
 # Strip the "build" action, keep every option for reconfigure.
-cfg=()
-for a in "${args[@]}"; do [ "$a" != "build" ] && cfg+=("$a"); done
+cfg=(); skip=0
+for a in "${args[@]}"; do
+  if [ $skip -eq 1 ]; then skip=0; cfg+=("$a"); continue; fi
+  case "$a" in -B) skip=1; cfg+=("$a") ;; build) ;; *) cfg+=("$a") ;; esac
+done
 nice -n 15 ionice -c 3 idf.py "${cfg[@]}" reconfigure
 exec nice -n 15 ionice -c 3 ninja -C "$BUILD_DIR" -j "$JOBS"

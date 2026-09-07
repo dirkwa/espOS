@@ -45,7 +45,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 #                        [IDF_VERSION_FILE <path>]
 #                        [SIGNING_KEY <path>]
 #                        [PROFILE <name>]
-#                        [PARTITIONS <csv>])
+#                        [PARTITIONS <csv>]
+#                        [COMPONENTS <espos_x> ...])
 #
 # NAME              label used in messages (default: the project directory name)
 # IDF_VERSION_FILE  version pin to enforce (default: the project's own
@@ -60,12 +61,17 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # PARTITIONS        partition-table CSV, absolute or relative to the project
 #                   (default: <espos>/partitions/4mb.csv). The bundled
 #                   partitions/<n>mb.csv tables also set the flash size.
+# COMPONENTS        the OPTIONAL espOS components this firmware uses:
+#                   espos_ble, espos_n2k, espos_voice (implies espos_audio),
+#                   espos_audio. The core set (config, log, event, health,
+#                   httpd, wifi, sk, ota, core) is always available. Anything
+#                   optional and not named is excluded from the build outright.
 #
 # A macro, not a function: EXTRA_COMPONENT_DIRS and SDKCONFIG_DEFAULTS have to
 # land in the caller's scope, where `project()` will read them.
 #
 macro(espos_project_prologue)
-    cmake_parse_arguments(_ESPOS "" "NAME;IDF_VERSION_FILE;SIGNING_KEY;PROFILE;PARTITIONS" "" ${ARGN})
+    cmake_parse_arguments(_ESPOS "" "NAME;IDF_VERSION_FILE;SIGNING_KEY;PROFILE;PARTITIONS" "COMPONENTS" ${ARGN})
     if(_ESPOS_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "espos_project_prologue: unknown argument(s): ${_ESPOS_UNPARSED_ARGUMENTS}")
     endif()
@@ -96,6 +102,31 @@ macro(espos_project_prologue)
         # silently drop them from that check because the example app does not
         # require them.
         idf_build_set_property(MINIMAL_BUILD ON)
+
+        # Optional espOS components a consumer did not ask for are excluded
+        # outright, not just left unrequired: IDF hands the component manager
+        # every component it can see BEFORE MINIMAL_BUILD trims the graph, so
+        # espos_voice's manifest alone pulls esp-sr/esp-dl/esp-dsp into the
+        # lock and compiles ~350 objects nobody links (measured on a headless
+        # P4 gateway: 157 MB of esp-dl archives, 0 members linked). Naming
+        # what you use is the only place this can be decided before project().
+        set(_espos_optional espos_ble espos_n2k espos_voice espos_audio)
+        foreach(_c IN LISTS _ESPOS_COMPONENTS)
+            if(NOT "${_c}" IN_LIST _espos_optional)
+                message(FATAL_ERROR "${_ESPOS_NAME}: COMPONENTS names '${_c}', which is not an optional "
+                                    "espOS component (choose from: ${_espos_optional}); the core set "
+                                    "needs no listing.")
+            endif()
+        endforeach()
+        if("espos_voice" IN_LIST _ESPOS_COMPONENTS)
+            list(APPEND _ESPOS_COMPONENTS espos_audio)   # voice speaks through the audio contract
+        endif()
+        foreach(_c IN LISTS _espos_optional)
+            if(NOT "${_c}" IN_LIST _ESPOS_COMPONENTS)
+                list(APPEND EXCLUDE_COMPONENTS "${_c}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES EXCLUDE_COMPONENTS)
     endif()
 
     # The command line wins over the argument: `idf.py -DESPOS_PROFILE=release`

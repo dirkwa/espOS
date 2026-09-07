@@ -62,7 +62,8 @@ copied `sdkconfig.defaults`, no copied partition table:
 cmake_minimum_required(VERSION 3.22)
 include("${CMAKE_CURRENT_LIST_DIR}/espos/cmake/espos_project.cmake")
 espos_project_prologue(NAME "my-firmware"
-                       PARTITIONS "${ESPOS_DIR}/partitions/16mb.csv")
+                       PARTITIONS "${ESPOS_DIR}/partitions/16mb.csv"
+                       COMPONENTS espos_ble)      # the optional espOS parts this firmware uses
 project(my_firmware)
 espos_project_ui_partition()
 ```

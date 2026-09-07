@@ -26,7 +26,12 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
   defaults only apply to a fresh sdkconfig, and a stale one still names the
   removed root `partitions.csv`.
 - build: consumer projects build with IDF's `MINIMAL_BUILD`; espOS's own tree
-  still compiles every component. `sdkconfig.defaults*` moved to
+  still compiles every component. **Consumers:** name the optional espOS
+  components you use — `espos_project_prologue(... COMPONENTS espos_ble)` —
+  the rest (`espos_ble`, `espos_n2k`, `espos_voice`, `espos_audio`) are excluded
+  outright, because the component manager resolves every visible manifest
+  before the build graph is trimmed and `espos_voice` alone drags esp-sr,
+  esp-dl and esp-dsp into a headless gateway's lock (0 members linked). `sdkconfig.defaults*` moved to
   `sdkconfig.d/espos.defaults*`, `partitions.csv` to `partitions/4mb.csv`.
 - build: IDF version policy — `.idf-version` is the tested release, any 6.0.x
   builds with one warning, versions outside `[6.0.0, 6.1.0)` are refused
