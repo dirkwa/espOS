@@ -1,13 +1,15 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 // WyomingSatellite — a Wyoming-protocol voice satellite for an ESP32 board.
 //
-// It is a TCP SERVER on :10700. The orchestrator (signalk-wyoming, or Home
-// Assistant) is the CLIENT and dials out to us, exactly as it does to a
-// wyoming-satellite. On connect it sends `describe`; we answer `info`, then
-// it sends `run-satellite` (active) or `pause-satellite` (output-only). It
-// keeps the connection alive with `ping` (we `pong`).
+// It is a TCP SERVER on :10700 (CONFIG_ESPOS_VOICE_WYOMING_PORT). The
+// orchestrator (signalk-wyoming, or Home Assistant) is the CLIENT and dials
+// out to us, exactly as it does to a wyoming-satellite. On connect it sends
+// `describe`; we answer `info`, then it sends `run-satellite` (active) or
+// `pause-satellite` (output-only). It keeps the connection alive with `ping`
+// (we `pong`).
 //
 // OUTPUT (the boat speaks): the orchestrator frames TTS as `audio-start` /
 // `audio-chunk` / `audio-stop`; we play it through the AudioDriver and reply
@@ -40,6 +42,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "espos_audio/audio_driver.h"
 #include "espos_voice/protocol/events.h"
@@ -48,7 +51,7 @@
 namespace espos_voice {
 
 struct WyomingSatelliteConfig {
-  uint16_t port = 10700;
+  uint16_t port = CONFIG_ESPOS_VOICE_WYOMING_PORT;
   // Advertised to the orchestrator in the `info` reply, and how the device
   // appears in Home Assistant. Applications should set this; the default is
   // deliberately generic because espOS does not know what board it is on.
@@ -113,7 +116,7 @@ struct WyomingSatelliteConfig {
   // scored this panel's mic near zero. The model (which word) is chosen in
   // sdkconfig + flashed to the "model" partition. No wake_host needed.
   bool on_device_wake = true;
-  bool awake_cue = true;              // play a short blip on detection
+  bool awake_cue = true;  // play a short blip on detection
   // Pre-AFE software gain for the on-device wake feed (1 = off). The panel's
   // live mic (MIC1) reads modest; a small boost lifts speech into WakeNet's
   // preferred range. Keep conservative — too much amplifies noise equally.
@@ -127,8 +130,8 @@ struct WyomingSatelliteConfig {
   // connection to a Wyoming wake service (openWakeWord, default :10400) and
   // stream the mic to it. Kept as a reference / for a future better remote
   // detector, but on-device is the working path on this hardware.
-  std::string wake_host;              // e.g. the SK server host; "" = off
-  uint16_t wake_port = 10400;         // wyoming-openwakeword default
+  std::string wake_host;                // e.g. the SK server host; "" = off
+  uint16_t wake_port = 10400;           // wyoming-openwakeword default
   std::vector<std::string> wake_words;  // empty = listen for any word
   // Digital gain applied to the NETWORK wake stream only (the on-device AFE
   // has its own AGC and ignores this). 1.0 = off.
@@ -169,7 +172,6 @@ class WyomingSatellite {
    */
   bool set_wake_network(const std::string& host, uint16_t port = 10400,
                         const std::vector<std::string>& words = {});
-
 
   // Push-to-talk, LEVEL-triggered (press-and-hold): set held=true on the mic
   // button press, held=false on release. Safe to call from any task (e.g. the
@@ -274,7 +276,9 @@ class WyomingSatellite {
   // returns true the wake loop stops sending audio to the wake service and a
   // PTT press is ignored. Null = never muted. Called from the wake/socket
   // tasks; must be cheap and non-blocking.
-  void set_mic_muted_fn(std::function<bool()> fn) { mic_muted_fn_ = std::move(fn); }
+  void set_mic_muted_fn(std::function<bool()> fn) {
+    mic_muted_fn_ = std::move(fn);
+  }
 
  private:
   static void server_task(void* arg);
@@ -287,9 +291,9 @@ class WyomingSatellite {
   // Wake mode: an outbound client to the wake service. Reconnect loop + the
   // continuous capture that feeds it while idle.
   static void wake_task(void* arg);
-  void run_wake();                     // connect/reconnect loop
-  bool wake_session(int sock);         // one wake-service connection's life
-  bool mic_muted() const {             // consult the privacy gate
+  void run_wake();              // connect/reconnect loop
+  bool wake_session(int sock);  // one wake-service connection's life
+  bool mic_muted() const {      // consult the privacy gate
     return mic_muted_fn_ && mic_muted_fn_();
   }
   // Request + await a pipeline toward the orchestrator (used by a detection).
@@ -372,7 +376,8 @@ class WyomingSatellite {
   // detach-then-delete without a use-after-free.
   std::atomic<WakeEngine*> wake_engine_{nullptr};
 
-  void start_wake_pipeline();  // detection -> pause engine -> run pipeline -> resume
+  void
+  start_wake_pipeline();  // detection -> pause engine -> run pipeline -> resume
 
   // Network wake (legacy). wake_task_ runs run_wake() when wake_host is set.
   TaskHandle_t wake_task_ = nullptr;
@@ -402,9 +407,9 @@ class WyomingSatellite {
   // Ring buffer of the most recent captured PCM (for /mic_probe). ~2 s at
   // 16 kHz. Written by the wake loop, read under probe_mutex_.
   static constexpr size_t kProbeSamples = 32000;  // 2 s @ 16 kHz
-  int16_t* probe_buf_ = nullptr;      // lazily allocated on first capture
-  size_t probe_head_ = 0;             // next write index
-  size_t probe_filled_ = 0;           // valid samples (<= kProbeSamples)
+  int16_t* probe_buf_ = nullptr;  // lazily allocated on first capture
+  size_t probe_head_ = 0;         // next write index
+  size_t probe_filled_ = 0;       // valid samples (<= kProbeSamples)
   // Tick when the ring was last WRITTEN. The ring is only fed from the wake
   // loop's chunk path, so it FREEZES whenever capture stops (mid-pipeline, or
   // any time the loop isn't streaming) and keeps returning its last contents

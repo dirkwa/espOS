@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef COCKPIT_N2K_CANDUMP_TCP_SERVER_H_
 #define COCKPIT_N2K_CANDUMP_TCP_SERVER_H_
 
@@ -7,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "espos_n2k/can_frame.h"
 #include "espos_n2k/twai_receiver.h"
@@ -15,7 +17,7 @@
 namespace espos_n2k {
 
 struct CandumpTcpServerConfig {
-  uint16_t port = 2599;
+  uint16_t port = CONFIG_ESPOS_N2K_CANDUMP_PORT;
   uint8_t max_clients = 3;
   const char* interface_name = "can0";
 };
@@ -24,8 +26,7 @@ struct CandumpTcpServerConfig {
 /// accepts inbound candump lines for transmission on the CAN bus.
 class CandumpTcpServer {
  public:
-  CandumpTcpServer(TwaiReceiver* receiver,
-                   TwaiTransmitter* transmitter,
+  CandumpTcpServer(TwaiReceiver* receiver, TwaiTransmitter* transmitter,
                    const CandumpTcpServerConfig& config = {});
   ~CandumpTcpServer();
 
@@ -38,7 +39,8 @@ class CandumpTcpServer {
   static void server_task(void* arg);
   static void client_task(void* arg);
 
-  // Called on the receiver task for every frame — fans out to per-client queues.
+  // Called on the receiver task for every frame — fans out to per-client
+  // queues.
   void on_frame(const CanMessage& msg);
   // mDNS registration, retried from the server task until mDNS is up.
   void advertise();

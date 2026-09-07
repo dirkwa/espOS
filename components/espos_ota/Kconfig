@@ -1,0 +1,46 @@
+menu "espOS OTA"
+
+    config ESPOS_OTA_MANIFEST_MAX
+        int "Largest manifest accepted (bytes)"
+        default 16384
+        range 1024 65536
+        help
+            The version manifest (docs/ota.md) is fetched whole into RAM
+            before it is parsed; a longer body fails the check. 16 KiB holds
+            a manifest with dozens of builds. Raise it for a channel that
+            lists every target of a long release history -- it costs that
+            much heap only while a check runs.
+
+    config ESPOS_OTA_BOOT_CHECK_DELAY_S
+        int "First automatic manifest check after boot (s)"
+        default 20
+        range 0 3600
+        help
+            Uptime the automatic check waits for before its first fetch. It
+            also waits for WiFi to be connected, so this is a settling time
+            rather than a timeout: DHCP, mDNS and SignalK discovery all run
+            in those first seconds, and a manifest fetch (or the install it
+            may trigger) competing with them slows every one of them down.
+
+    config ESPOS_OTA_NO_STA_GRACE_S
+        int "Confirm a new image without a station config after (s)"
+        default 60
+        range 10 3600
+        help
+            A freshly installed image confirms itself once WiFi is connected.
+            A device with no station configured (portal only) never gets
+            there, so it is confirmed after this much uptime instead -- long
+            enough that an image which crashes at boot has already been
+            rolled back by the bootloader. Must be below ota.confirm_tmo_s,
+            or the rollback timeout wins first.
+
+    config ESPOS_OTA_STACK_SIZE
+        int "OTA task stack size (bytes)"
+        default 8192
+        range 4096 32768
+        help
+            The task that fetches the manifest and runs esp_https_ota. TLS
+            handshakes run on it, which is what the 8 KiB is for. The linux
+            simulator sizes its task in words and ignores this.
+
+endmenu

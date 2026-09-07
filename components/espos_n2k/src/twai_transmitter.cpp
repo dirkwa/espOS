@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_n2k/twai_transmitter.h"
 
 #include "esp_log.h"
@@ -26,8 +27,9 @@ void TwaiTransmitter::start() {
   detail::TwaiNodeConfig cfg;
   cfg.tx_queue_depth = tx_queue_depth_;
   if (detail::TwaiNode::instance().acquire(cfg) != ESP_OK) {
-    ESP_LOGE(kTag, "the CAN bus is not up — start the receiver (which owns the "
-                   "pins and bitrate) before the transmitter");
+    ESP_LOGE(kTag,
+             "the CAN bus is not up — start the receiver (which owns the "
+             "pins and bitrate) before the transmitter");
     running_.store(false);
     return;
   }

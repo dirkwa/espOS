@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 // Wyoming protocol events the satellite cares about — builders for the
@@ -26,9 +27,9 @@ struct AudioFormat {
 
 // What this satellite advertises in its `info` reply to `describe`.
 struct SatelliteInfo {
-  std::string name = "espos";   // overridden from WyomingSatelliteConfig::name
-  AudioFormat mic_format;   // capture format we can stream (Phase 2)
-  AudioFormat snd_format;   // playback format we expect in audio-start
+  std::string name = "espos";    // overridden from WyomingSatelliteConfig::name
+  AudioFormat mic_format;        // capture format we can stream (Phase 2)
+  AudioFormat snd_format;        // playback format we expect in audio-start
   bool supports_trigger = true;  // orchestrator may trigger a pipeline
   // active_wake_words stays empty until Phase 3.
 };

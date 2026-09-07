@@ -34,7 +34,7 @@ the certificate check for self-signed boat servers.
 
 ## Signing key
 
-`sdkconfig.defaults` turns on *Require signed app images* with the RSA
+`sdkconfig.d/espos.defaults` turns on *Require signed app images* with the RSA
 scheme and signs every build with `secure_boot_signing_key.pem` in the
 project root. That file is **git-ignored and never committed**. When it is
 missing the root `CMakeLists.txt` generates a *development* key
@@ -53,7 +53,7 @@ Every device that should take your updates must have been flashed at least
 once (USB) with a build carrying that key's public part. Rotating the key
 means one signed update built with the *old* key that already contains the
 *new* public key. ESP32 (original) needs chip rev ≥ 3 for the RSA scheme
-(`sdkconfig.defaults.esp32` pins `ESP32_REV_MIN_3`). This is *signed apps
+(`sdkconfig.d/espos.defaults.esp32` pins `ESP32_REV_MIN_3`). This is *signed apps
 without Secure Boot*: it protects against network-side tampering, not
 against someone with the USB port. Hardware Secure Boot / flash encryption
 are release-overlay decisions ([security.md](security.md)).
@@ -153,7 +153,7 @@ distribution service" of the plan, and nothing in espOS ties it to a host.
 
 `GET /api/v1/ota/status`, `POST /api/v1/ota/check`, `POST /api/v1/ota
 {"url"?}`, `POST /api/v1/ota/confirm`, `POST /api/v1/ota/rollback`, SSE
-`ota` — see [api.md](api.md).
+`ota` — see [rest-api.md](rest-api.md).
 
 ## Testing
 

@@ -1,0 +1,52 @@
+menu "espOS voice satellite"
+    # esp-sr exists for these two targets only; everywhere else the component
+    # is an empty stub (see CMakeLists.txt), so the knobs would be noise in
+    # menuconfig. They keep their defaults regardless.
+    visible if IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+
+    config ESPOS_VOICE_WYOMING_PORT
+        int "Wyoming satellite TCP port"
+        default 10700
+        range 1 65535
+        help
+            Default listening port of WyomingSatellite
+            (WyomingSatelliteConfig::port overrides it per instance). 10700
+            is the port the reference wyoming-satellite uses and the one
+            signalk-wyoming / Home Assistant dial unless told otherwise.
+
+    config ESPOS_VOICE_SERVER_STACK_SIZE
+        int "Satellite server task stack (bytes)"
+        default 6144
+        range 4096 16384
+        help
+            The task that accepts the orchestrator's connection, parses
+            Wyoming events with cJSON and plays TTS through the AudioDriver.
+
+    config ESPOS_VOICE_MIC_STACK_SIZE
+        int "Mic streaming task stack (bytes)"
+        default 4096
+        range 2048 16384
+        help
+            Started per pipeline run to stream the mic to the orchestrator.
+            It records into a heap buffer, so it needs little of its own.
+
+    config ESPOS_VOICE_WAKE_STACK_SIZE
+        int "Network wake task stack (bytes)"
+        default 4608
+        range 2048 16384
+        help
+            The outbound connection to a Wyoming wake service (openWakeWord)
+            when the wake word is detected on the server rather than on the
+            device. A little more than the mic task because it also parses
+            the detection events it gets back.
+
+    config ESPOS_VOICE_WAKENET_STACK_SIZE
+        int "On-device wake (esp-sr) task stack (bytes)"
+        default 4096
+        range 2048 16384
+        help
+            Each of the two esp-sr tasks, feed and fetch. Fetch runs WakeNet
+            inference, which is where the room goes; feed only copies mic
+            frames into the AFE.
+
+endmenu

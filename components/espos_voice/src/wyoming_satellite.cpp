@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_voice/wyoming_satellite.h"
 
 #include "espos_health.h"
@@ -11,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
+#include "sdkconfig.h"
 
 namespace espos_voice {
 
@@ -18,9 +20,8 @@ namespace {
 constexpr const char* kTag = "wyoming_sat";
 }  // namespace
 
-WyomingSatellite::WyomingSatellite(
-    espos_audio::AudioDriver* audio,
-    const WyomingSatelliteConfig& config)
+WyomingSatellite::WyomingSatellite(espos_audio::AudioDriver* audio,
+                                   const WyomingSatelliteConfig& config)
     : audio_(audio), config_(config) {
   lifecycle_ = xSemaphoreCreateMutex();
   send_mutex_ = xSemaphoreCreateMutex();
@@ -42,11 +43,15 @@ WyomingSatellite::~WyomingSatellite() {
 
 void WyomingSatellite::start() {
   if (lifecycle_) xSemaphoreTake(lifecycle_, portMAX_DELAY);
-  struct Unlock { SemaphoreHandle_t m; ~Unlock() { if (m) xSemaphoreGive(m); } }
-      unlock{lifecycle_};
+  struct Unlock {
+    SemaphoreHandle_t m;
+    ~Unlock() {
+      if (m) xSemaphoreGive(m);
+    }
+  } unlock{lifecycle_};
   if (running_.exchange(true)) return;
-  xTaskCreate(&WyomingSatellite::server_task, "wyoming_sat", 6144, this, 3,
-              &server_task_);
+  xTaskCreate(&WyomingSatellite::server_task, "wyoming_sat",
+              CONFIG_ESPOS_VOICE_SERVER_STACK_SIZE, this, 3, &server_task_);
   ESP_LOGI(kTag, "Wyoming satellite starting on port %u", config_.port);
 
   if (config_.on_device_wake) {
@@ -70,10 +75,10 @@ void WyomingSatellite::start() {
       }
     }
   } else if (!config_.wake_host.empty()) {
-    xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake", 4608, this, 3,
-                &wake_task_);
-    ESP_LOGI(kTag, "Network wake: streaming to %s:%u", config_.wake_host.c_str(),
-             config_.wake_port);
+    xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake",
+                CONFIG_ESPOS_VOICE_WAKE_STACK_SIZE, this, 3, &wake_task_);
+    ESP_LOGI(kTag, "Network wake: streaming to %s:%u",
+             config_.wake_host.c_str(), config_.wake_port);
   }
 }
 
@@ -87,7 +92,8 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
     ESP_LOGW(kTag, "set_wake_network() from the wake task — ignored");
     return false;
   }
-  if (!lifecycle_ || xSemaphoreTake(lifecycle_, pdMS_TO_TICKS(10000)) != pdTRUE) {
+  if (!lifecycle_ ||
+      xSemaphoreTake(lifecycle_, pdMS_TO_TICKS(10000)) != pdTRUE) {
     ESP_LOGW(kTag, "set_wake_network() could not take the lifecycle lock");
     return false;
   }
@@ -133,7 +139,8 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
   config_.wake_words = words;
 
   if (was_running) {
-    if (xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake", 4608, this, 3,
+    if (xTaskCreate(&WyomingSatellite::wake_task, "wyoming_wake",
+                    CONFIG_ESPOS_VOICE_WAKE_STACK_SIZE, this, 3,
                     &wake_task_) != pdPASS) {
       // The on-device engine is already gone, so returning true here would
       // leave the device with no wake back-end at all while reporting success.
@@ -154,8 +161,9 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
         }
       }
       ESP_LOGE(kTag, "wake task creation failed — kept the on-device word");
-      espos_health_report("wakeService", ESPOS_HEALTH_WARN,
-                      "could not start network wake; using the on-device word");
+      espos_health_report(
+          "wakeService", ESPOS_HEALTH_WARN,
+          "could not start network wake; using the on-device word");
       return false;
     }
   }
@@ -164,8 +172,12 @@ bool WyomingSatellite::set_wake_network(const std::string& host, uint16_t port,
 
 void WyomingSatellite::stop() {
   if (lifecycle_) xSemaphoreTake(lifecycle_, portMAX_DELAY);
-  struct Unlock { SemaphoreHandle_t m; ~Unlock() { if (m) xSemaphoreGive(m); } }
-      unlock{lifecycle_};
+  struct Unlock {
+    SemaphoreHandle_t m;
+    ~Unlock() {
+      if (m) xSemaphoreGive(m);
+    }
+  } unlock{lifecycle_};
   if (!running_.exchange(false)) return;
   // Nudge a blocked accept()/recv() to notice running_==false: closing the
   // client socket unblocks recv; the accept loop wakes on its select tick.
@@ -296,8 +308,9 @@ void WyomingSatellite::handle_client(int sock) {
           listening_.store(true);
           set_state(SatState::Listening);
           TaskHandle_t t = nullptr;
-          if (xTaskCreate(&WyomingSatellite::mic_task, "wyoming_mic", 4096,
-                          this, 4, &t) != pdPASS) {
+          if (xTaskCreate(&WyomingSatellite::mic_task, "wyoming_mic",
+                          CONFIG_ESPOS_VOICE_MIC_STACK_SIZE, this, 4,
+                          &t) != pdPASS) {
             // The orchestrator was told a pipeline is running; close it out
             // with audio-stop so it isn't left waiting on its own timeout.
             ESP_LOGW(kTag, "mic task create failed — sending audio-stop");
@@ -637,8 +650,10 @@ void WyomingSatellite::run_mic() {
     if (gain > 1.0f) {
       for (size_t i = 0; i < frames; i++) {
         int32_t v = (int32_t)(buf[i] * gain);
-        if (v > 32767) v = 32767;
-        else if (v < -32768) v = -32768;
+        if (v > 32767)
+          v = 32767;
+        else if (v < -32768)
+          v = -32768;
         buf[i] = (int16_t)v;
       }
     }
@@ -692,7 +707,7 @@ void WyomingSatellite::run_wake() {
       ESP_LOGE(kTag, "wake host '%s' is not an IPv4 address — wake disabled",
                config_.wake_host.c_str());
       espos_health_report("wakeService", ESPOS_HEALTH_WARN,
-                      "wake host is not an IPv4 address");
+                          "wake host is not an IPv4 address");
       close(sock);
       return;
     }
@@ -917,8 +932,10 @@ bool WyomingSatellite::wake_session(int sock) {
     if (config_.wake_gain > 1.0f) {
       for (size_t i = 0; i < frames; ++i) {
         int32_t v = (int32_t)(buf[i] * config_.wake_gain);
-        if (v > 32767) v = 32767;
-        else if (v < -32768) v = -32768;
+        if (v > 32767)
+          v = 32767;
+        else if (v < -32768)
+          v = -32768;
         buf[i] = (int16_t)v;
       }
     }
@@ -936,8 +953,7 @@ bool WyomingSatellite::wake_session(int sock) {
     // discarding any pre-mute samples that wake_pcm_clear() may have failed to
     // zero — so a snapshot never sees pre-mute audio, and a delayed in-flight
     // chunk can't flip the kill switch back on before the ring is clean.
-    if (probe_mutex_ &&
-        xSemaphoreTake(probe_mutex_, 0) == pdTRUE) {
+    if (probe_mutex_ && xSemaphoreTake(probe_mutex_, 0) == pdTRUE) {
       if (!probe_buf_) {
         probe_buf_ = (int16_t*)malloc(kProbeSamples * sizeof(int16_t));
       }
@@ -1064,7 +1080,8 @@ size_t WyomingSatellite::wake_pcm_snapshot(int16_t* out, size_t max_samples) {
     n = probe_filled_ < max_samples ? probe_filled_ : max_samples;
     // Oldest sample first. head points past the newest; the ring holds
     // probe_filled_ samples ending at head-1.
-    size_t start = (probe_head_ + kProbeSamples - probe_filled_) % kProbeSamples;
+    size_t start =
+        (probe_head_ + kProbeSamples - probe_filled_) % kProbeSamples;
     // We want the newest n samples: shift start forward if truncating.
     if (probe_filled_ > n) {
       start = (probe_head_ + kProbeSamples - n) % kProbeSamples;
@@ -1131,8 +1148,7 @@ bool WyomingSatellite::probe_mic_levels(
     // clears wake_capturing_) can't block the probe indefinitely.
     const TickType_t kYieldTimeout = pdMS_TO_TICKS(300);
     TickType_t t0 = xTaskGetTickCount();
-    while (wake_capturing_.load() &&
-           xTaskGetTickCount() - t0 < kYieldTimeout) {
+    while (wake_capturing_.load() && xTaskGetTickCount() - t0 < kYieldTimeout) {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
   }
@@ -1151,8 +1167,10 @@ void WyomingSatellite::play_tone(float hz, size_t ms, bool cue) {
     float env = 1.0f;
     size_t fade = n / 10;
     if (fade == 0) fade = 1;
-    if (i < fade) env = (float)i / fade;
-    else if (i >= n - fade) env = (float)(n - i) / fade;
+    if (i < fade)
+      env = (float)i / fade;
+    else if (i >= n - fade)
+      env = (float)(n - i) / fade;
     pcm[i] = (int16_t)(0.4f * 32767.0f * env *
                        sinf(2.0f * 3.14159265f * hz * i / rate));
   }

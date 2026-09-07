@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_voice/protocol/framing.h"
 
 #include <cstring>
@@ -41,10 +42,12 @@ void encode_event(std::vector<uint8_t>& out, const char* type,
   cJSON_AddStringToObject(header.get(), "type", type);
   cJSON_AddStringToObject(header.get(), "version", kWyomingVersion);
   if (has_data) {
-    cJSON_AddNumberToObject(header.get(), "data_length", (double)data_json.size());
+    cJSON_AddNumberToObject(header.get(), "data_length",
+                            (double)data_json.size());
   }
   if (payload && payload_len > 0) {
-    cJSON_AddNumberToObject(header.get(), "payload_length", (double)payload_len);
+    cJSON_AddNumberToObject(header.get(), "payload_length",
+                            (double)payload_len);
   }
 
   JsonText header_line(cJSON_PrintUnformatted(header.get()));
@@ -98,7 +101,8 @@ bool EventDecoder::read_header() {
   }
 
   const cJSON* type = cJSON_GetObjectItemCaseSensitive(doc.get(), "type");
-  if (!cJSON_IsString(type) || !type->valuestring || type->valuestring[0] == '\0') {
+  if (!cJSON_IsString(type) || !type->valuestring ||
+      type->valuestring[0] == '\0') {
     ESP_LOGE(kTag, "header missing \"type\"");
     failed_ = true;
     return false;
@@ -110,7 +114,8 @@ bool EventDecoder::read_header() {
   // trust when it waits for that many bytes.
   double data_len = 0, payload_len = 0;
   const cJSON* dl = cJSON_GetObjectItemCaseSensitive(doc.get(), "data_length");
-  const cJSON* pl = cJSON_GetObjectItemCaseSensitive(doc.get(), "payload_length");
+  const cJSON* pl =
+      cJSON_GetObjectItemCaseSensitive(doc.get(), "payload_length");
   if (cJSON_IsNumber(dl)) data_len = dl->valuedouble;
   if (cJSON_IsNumber(pl)) payload_len = pl->valuedouble;
   // Both bounds are explicit. The pre-cJSON code read these through a signed
@@ -134,7 +139,8 @@ bool EventDecoder::read_header() {
   // Inline header `data` object is accepted on read (never written by the
   // reference); the out-of-line block, if present, wins over it.
   inline_data_json_.clear();
-  const cJSON* inline_data = cJSON_GetObjectItemCaseSensitive(doc.get(), "data");
+  const cJSON* inline_data =
+      cJSON_GetObjectItemCaseSensitive(doc.get(), "data");
   if (cJSON_IsObject(inline_data)) {
     JsonText text(cJSON_PrintUnformatted(inline_data));
     if (text) inline_data_json_ = text.get();

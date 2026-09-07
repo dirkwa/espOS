@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  */
 #include <ctype.h>
 #include <stdlib.h>
@@ -113,7 +114,8 @@ esp_err_t espos_ota_manifest_pick(const char *json, size_t len, const char *mani
     }
     const cJSON *best = NULL;
     const cJSON *b;
-    cJSON_ArrayForEach(b, builds) {
+    cJSON_ArrayForEach(b, builds)
+    {
         if (!cJSON_IsObject(b)) {
             continue;
         }

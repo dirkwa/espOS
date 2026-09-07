@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_voice/wake_engine.h"
 
 #include <cstdint>  // UINT32_MAX (pcm_age_ms)
@@ -6,6 +7,7 @@
 #include <cstring>
 
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 // esp-sr (AFE + WakeNet). Only this .cpp pulls the headers.
 #include "esp_afe_config.h"
@@ -33,12 +35,16 @@ WakeEngine::~WakeEngine() { stop(); }
 // pipeline always uses the mono handle (record_pcm) and never overlaps (pause()
 // releases ours first), so the two handles are never open at once.
 void WakeEngine::capture_start() {
-  if (dual_mic_) audio_->start_capture2();
-  else audio_->start_capture();
+  if (dual_mic_)
+    audio_->start_capture2();
+  else
+    audio_->start_capture();
 }
 void WakeEngine::capture_stop() {
-  if (dual_mic_) audio_->stop_capture2();
-  else audio_->stop_capture();
+  if (dual_mic_)
+    audio_->stop_capture2();
+  else
+    audio_->stop_capture();
 }
 
 bool WakeEngine::start() {
@@ -113,10 +119,12 @@ bool WakeEngine::start() {
 
   // Feed + fetch on core 0 (SK WS / LVGL live on the app core). Feed needs a
   // modest stack; fetch runs WakeNet inference — give it room.
-  xTaskCreatePinnedToCore(&WakeEngine::feed_task_tramp, "wake_feed", 4096, this,
-                          5, &feed_task_, 0);
-  xTaskCreatePinnedToCore(&WakeEngine::fetch_task_tramp, "wake_fetch", 4096,
-                          this, 5, &fetch_task_, 0);
+  xTaskCreatePinnedToCore(&WakeEngine::feed_task_tramp, "wake_feed",
+                          CONFIG_ESPOS_VOICE_WAKENET_STACK_SIZE, this, 5,
+                          &feed_task_, 0);
+  xTaskCreatePinnedToCore(&WakeEngine::fetch_task_tramp, "wake_fetch",
+                          CONFIG_ESPOS_VOICE_WAKENET_STACK_SIZE, this, 5,
+                          &fetch_task_, 0);
   ESP_LOGI(kTag, "on-device wake started (chunk=%d ch=%d)", feed_chunk_,
            feed_channels_);
   return true;
@@ -144,9 +152,18 @@ void WakeEngine::stop() {
   afe_data_ = nullptr;
   afe_handle_ = nullptr;
   if (listening_.exchange(false)) capture_stop();
-  if (feed_paused_) { vSemaphoreDelete(feed_paused_); feed_paused_ = nullptr; }
-  if (feed_exited_) { vSemaphoreDelete(feed_exited_); feed_exited_ = nullptr; }
-  if (fetch_exited_) { vSemaphoreDelete(fetch_exited_); fetch_exited_ = nullptr; }
+  if (feed_paused_) {
+    vSemaphoreDelete(feed_paused_);
+    feed_paused_ = nullptr;
+  }
+  if (feed_exited_) {
+    vSemaphoreDelete(feed_exited_);
+    feed_exited_ = nullptr;
+  }
+  if (fetch_exited_) {
+    vSemaphoreDelete(fetch_exited_);
+    fetch_exited_ = nullptr;
+  }
   // The probe buffer/mutex are touched by pcm_snapshot()/clear_probe() on OTHER
   // tasks (the /hello httpd path, the mic-mute widget) that stop() hasn't
   // joined. running_ was cleared at the top of stop(); those callers re-check
@@ -158,8 +175,14 @@ void WakeEngine::stop() {
   for (int i = 0; i < 250 && probe_busy_.load() > 0; i++) {
     vTaskDelay(pdMS_TO_TICKS(2));
   }
-  if (probe_mutex_) { vSemaphoreDelete(probe_mutex_); probe_mutex_ = nullptr; }
-  if (probe_) { free(probe_); probe_ = nullptr; }
+  if (probe_mutex_) {
+    vSemaphoreDelete(probe_mutex_);
+    probe_mutex_ = nullptr;
+  }
+  if (probe_) {
+    free(probe_);
+    probe_ = nullptr;
+  }
   probe_head_ = 0;
   probe_filled_ = 0;
 }
@@ -274,7 +297,10 @@ void WakeEngine::fetch_task_tramp(void* arg) {
 void WakeEngine::feed_loop() {
   const size_t n = (size_t)feed_chunk_ * feed_channels_;
   int16_t* buf = (int16_t*)malloc(n * sizeof(int16_t));
-  if (!buf) { ESP_LOGE(kTag, "feed buffer oom"); return; }
+  if (!buf) {
+    ESP_LOGE(kTag, "feed buffer oom");
+    return;
+  }
 
   size_t filled = 0;  // valid samples accumulated toward a full chunk
   bool parked_for_pause = false;
@@ -309,11 +335,13 @@ void WakeEngine::feed_loop() {
     // to feed(). `filled` counts FRAMES; with dual mic each frame is 2
     // interleaved samples, so the buffer offset is filled * feed_channels_.
     size_t got =
-        dual_mic_
-            ? audio_->record_pcm2(buf + filled * feed_channels_,
-                                  feed_chunk_ - (int)filled)
-            : audio_->record_pcm(buf + filled, feed_chunk_ - (int)filled);
-    if (got == 0) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+        dual_mic_ ? audio_->record_pcm2(buf + filled * feed_channels_,
+                                        feed_chunk_ - (int)filled)
+                  : audio_->record_pcm(buf + filled, feed_chunk_ - (int)filled);
+    if (got == 0) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
     filled += got;
     if ((int)filled < feed_chunk_) continue;  // need a whole chunk
     filled = 0;
@@ -324,7 +352,10 @@ void WakeEngine::feed_loop() {
     if (input_gain_ > 1) {
       for (size_t i = 0; i < n; i++) {
         int32_t v = (int32_t)buf[i] * input_gain_;
-        if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+        if (v > 32767)
+          v = 32767;
+        else if (v < -32768)
+          v = -32768;
         buf[i] = (int16_t)v;
       }
     }
@@ -337,8 +368,9 @@ void WakeEngine::feed_loop() {
     if (probe_mutex_ && xSemaphoreTake(probe_mutex_, 0) == pdTRUE) {
       if (!probe_) probe_ = (int16_t*)malloc(kProbeSamples * sizeof(int16_t));
       if (probe_) {
-        // Stamp every write so a caller can tell fresh PCM from a ring that froze
-        // when the feed stopped — the ring keeps serving its last contents.
+        // Stamp every write so a caller can tell fresh PCM from a ring that
+        // froze when the feed stopped — the ring keeps serving its last
+        // contents.
         probe_last_write_.store((uint32_t)xTaskGetTickCount());
         probe_written_.store(true);
         for (int i = 0; i < feed_chunk_; i++) {

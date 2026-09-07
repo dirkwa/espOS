@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef COCKPIT_N2K_TWAI_RECEIVER_H_
 #define COCKPIT_N2K_TWAI_RECEIVER_H_
 
@@ -9,6 +10,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include <functional>
 #include "espos_n2k/can_frame.h"
@@ -24,7 +26,7 @@ struct TwaiReceiverConfig {
   gpio_num_t tx_pin = GPIO_NUM_NC;
   gpio_num_t rx_pin = GPIO_NUM_NC;
   uint32_t bitrate = 250000;  // NMEA 2000 standard
-  size_t rx_queue_depth = 64;
+  size_t rx_queue_depth = CONFIG_ESPOS_N2K_RX_QUEUE_DEPTH;
 };
 
 /// Reads CAN frames from the TWAI peripheral and emits them as CanMessage

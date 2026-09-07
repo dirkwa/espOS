@@ -1,15 +1,16 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "espos_n2k/candump_format.h"
 
 #include <cstdio>
-#include <cstdlib>   // strtoll, strtoul
+#include <cstdlib>  // strtoll, strtoul
 #include <cstring>
 #include <sys/time.h>
 
 namespace espos_n2k {
 
-int candump_encode(const CanMessage& msg, const char* iface,
-                   char* buf, size_t buf_len) {
+int candump_encode(const CanMessage& msg, const char* iface, char* buf,
+                   size_t buf_len) {
   // Format: (seconds.microseconds) iface CANID#HEXDATA\n
   // Use wall-clock time (Unix epoch) so SignalK gets valid timestamps.
   // Falls back to uptime if NTP hasn't synced yet (time < 2020).
@@ -34,9 +35,8 @@ int candump_encode(const CanMessage& msg, const char* iface,
   data_hex[data_len * 2] = '\0';
 
   // CAN ID — always 8 hex digits for extended frames (NMEA 2000)
-  int n = snprintf(buf, buf_len, "(%lld.%06lld) %s %08X#%s\n",
-                   (long long)sec, (long long)usec,
-                   iface, (unsigned)msg.frame.id, data_hex);
+  int n = snprintf(buf, buf_len, "(%lld.%06lld) %s %08X#%s\n", (long long)sec,
+                   (long long)usec, iface, (unsigned)msg.frame.id, data_hex);
   if (n < 0 || (size_t)n >= buf_len) return -1;
   return n;
 }
@@ -80,7 +80,8 @@ bool candump_decode(const char* line, CanMessage* out) {
 
   // Parse hex data bytes
   int data_len = 0;
-  while (*hash && *hash != '\n' && *hash != '\r' && data_len < (int)kCanMaxData) {
+  while (*hash && *hash != '\n' && *hash != '\r' &&
+         data_len < (int)kCanMaxData) {
     unsigned int byte;
     if (sscanf(hash, "%2x", &byte) != 1) break;
     out->frame.data[data_len++] = (uint8_t)byte;

@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ESPOS_N2K_SRC_TWAI_NODE_H_
 #define ESPOS_N2K_SRC_TWAI_NODE_H_
 
@@ -24,6 +25,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "espos_n2k/can_frame.h"
 
@@ -34,7 +36,7 @@ struct TwaiNodeConfig {
   gpio_num_t tx_pin = GPIO_NUM_NC;
   gpio_num_t rx_pin = GPIO_NUM_NC;
   uint32_t bitrate = 250000;
-  size_t rx_queue_depth = 64;
+  size_t rx_queue_depth = CONFIG_ESPOS_N2K_RX_QUEUE_DEPTH;
   size_t tx_queue_depth = 32;
 };
 
@@ -62,8 +64,11 @@ class TwaiNode {
  private:
   TwaiNode() = default;
 
-  static bool on_rx_done(twai_node_handle_t node, const twai_rx_done_event_data_t* edata, void* ctx);
-  static bool on_state_change(twai_node_handle_t node, const twai_state_change_event_data_t* edata, void* ctx);
+  static bool on_rx_done(twai_node_handle_t node,
+                         const twai_rx_done_event_data_t* edata, void* ctx);
+  static bool on_state_change(twai_node_handle_t node,
+                              const twai_state_change_event_data_t* edata,
+                              void* ctx);
   static void rx_task(void* arg);
 
   void teardown();

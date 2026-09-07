@@ -1,5 +1,6 @@
 /*
- * SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+ * SPDX-License-Identifier: Apache-2.0
  *
  * espos_ota — signed over-the-air updates with rollback.
  *
@@ -52,7 +53,7 @@ esp_err_t espos_ota_confirm(void);
 /** Mark the running image invalid and reboot into the other slot. */
 esp_err_t espos_ota_rollback(void);
 
-/** Status document of docs/api.md (malloc'ed). */
+/** Status document of docs/rest-api.md (malloc'ed). */
 char *espos_ota_status_json(void);
 
 #ifdef __cplusplus

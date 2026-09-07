@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+/* SPDX-FileCopyrightText: 2026 Dirk Wahrheit */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 // WakeEngine — ON-DEVICE wake word via esp-sr AFE + WakeNet.
@@ -37,8 +38,7 @@ class WakeEngine {
   using DetectFn = std::function<void()>;
   using MutedFn = std::function<bool()>;
 
-  explicit WakeEngine(espos_audio::AudioDriver* audio)
-      : audio_(audio) {}
+  explicit WakeEngine(espos_audio::AudioDriver* audio) : audio_(audio) {}
   ~WakeEngine();
 
   void set_on_detect(DetectFn fn) { on_detect_ = std::move(fn); }
@@ -94,9 +94,9 @@ class WakeEngine {
   MutedFn muted_fn_;
 
   // esp-sr handles (void* to keep esp-sr headers out of this header).
-  void* afe_handle_ = nullptr;   // const esp_afe_sr_iface_t*
-  void* afe_data_ = nullptr;     // esp_afe_sr_data_t*
-  int feed_chunk_ = 0;           // samples per feed (per channel)
+  void* afe_handle_ = nullptr;  // const esp_afe_sr_iface_t*
+  void* afe_data_ = nullptr;    // esp_afe_sr_data_t*
+  int feed_chunk_ = 0;          // samples per feed (per channel)
   int feed_channels_ = 1;
   // True when AFE was created with format "MM" and the feed pulls the board's
   // 2-channel [MIC1,MIC2] path (start_capture2/record_pcm2). Decided once at
