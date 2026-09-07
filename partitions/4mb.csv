@@ -2,12 +2,17 @@
 # gen_esp32part (app slots align to 64 KB); 64 KB stay free at the end.
 # Selected by espos_project_prologue(PARTITIONS ...); 8mb.csv and 16mb.csv
 # are the same layout with bigger app slots and storage.
+# Rebalanced 2026-09-08: 256K moved from storage into the two app slots.
+# The web UI bundle is ~22K, so 384K is still seventeen times what it needs,
+# while a full build (WiFi, TLS-capable crypto, mDNS, LittleFS, the UI) had
+# grown to 92% of a 1600K slot -- too little room for the next feature or
+# for an OTA image that is briefly larger than the running one.
 # Name,     Type, SubType,  Offset,  Size,   Flags
 nvs,        data, nvs,      ,        24K,
 otadata,    data, ota,      ,        8K,
 phy_init,   data, phy,      ,        4K,
 nvs_keys,   data, nvs_keys, ,        4K,    encrypted
 coredump,   data, coredump, ,        64K,
-ota_0,      app,  ota_0,    ,        1600K,
-ota_1,      app,  ota_1,    ,        1600K,
-storage,    data, littlefs, ,        640K,
+ota_0,      app,  ota_0,    ,        1728K,
+ota_1,      app,  ota_1,    ,        1728K,
+storage,    data, littlefs, ,        384K,
