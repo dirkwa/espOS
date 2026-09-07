@@ -85,9 +85,84 @@ static void pop_oldest(void)
     s.dropped++;
 }
 
+#if CONFIG_ESPOS_LOG_WALLCLOCK
+/**
+ * The wall clock, if this firmware has one. espos_time provides the strong
+ * definition (src/log_wallclock.c); the weak one here says "no clock", which
+ * is what a build without that component gets — and what every build gets
+ * before a source has set it.
+ *
+ * The hook, rather than a call to espos_time directly: espos_log is the
+ * component everything else logs through, so it depends on nothing above it.
+ * espos_time depends on espos_httpd, which logs; naming espos_time here would
+ * close that circle.
+ *
+ * Called with the ring lock held, once per stored line. Must not allocate,
+ * block, or log.
+ */
+__attribute__((weak)) size_t espos_log_wallclock_hook(char *buf, size_t n)
+{
+    (void)buf;
+    (void)n;
+    return 0;
+}
+
+/**
+ * Insert the wall clock into the IDF prefix, which is "<L> (<ms>) tag: text".
+ * The result is "<L> (<ms>|<iso>) tag: text": the monotonic value stays
+ * exactly where it was — it is what you read to see how long after boot
+ * something happened, and existing eyes and greps expect it — and the UTC
+ * time joins it inside the same parentheses. The level letter stays at
+ * offset 0, so anything colouring lines by severity keeps working.
+ *
+ * Returns the new length, or `len` unchanged when the line does not look like
+ * an IDF prefix (an application printing straight to stdout), when there is no
+ * clock, or when the stamp would not fit. Never fails in a way that loses the
+ * line: the worst case is the line as it was.
+ */
+static size_t add_wallclock(char *line, size_t len, size_t cap)
+{
+    /* "<L> (" — the shortest prefix that can carry a timestamp. */
+    if (len < 5 || line[1] != ' ' || line[2] != '(') {
+        return len;
+    }
+    size_t close = 3;
+    while (close < len && line[close] >= '0' && line[close] <= '9') {
+        close++;
+    }
+    if (close == 3 || close >= len || line[close] != ')') {
+        return len;
+    }
+    char iso[32];
+    size_t iso_len = espos_log_wallclock_hook(iso, sizeof(iso));
+    if (iso_len == 0 || len + 1 + iso_len > cap) {
+        return len;
+    }
+    /* Open a gap at the closing paren and drop "|<iso>" into it. */
+    memmove(line + close + 1 + iso_len, line + close, len - close);
+    line[close] = '|';
+    memcpy(line + close + 1, iso, iso_len);
+    return len + 1 + iso_len;
+}
+#endif /* CONFIG_ESPOS_LOG_WALLCLOCK */
+
 /* Lock held. */
 static void push(const char *line, size_t len)
 {
+#if CONFIG_ESPOS_LOG_WALLCLOCK
+    /* Stamp before truncating, so a line that is about to lose its tail does
+     * not lose its timestamp with it. The scratch buffer is one stamp longer
+     * than a stored line; the truncation below then applies to the result. */
+    char stamped[LOG_LINE_MAX + 32];
+    if (len < sizeof(stamped) - 32) {
+        memcpy(stamped, line, len);
+        size_t slen = add_wallclock(stamped, len, sizeof(stamped));
+        if (slen != len) {
+            line = stamped;
+            len = slen;
+        }
+    }
+#endif
     if (len > (size_t)LOG_LINE_MAX) {
         len = LOG_LINE_MAX;
     }

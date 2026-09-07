@@ -1,0 +1,31 @@
+menu "espOS time"
+
+    config ESPOS_TIME_RTC_STALE_H
+        int "A time carried through deep sleep goes stale after (hours)"
+        default 24
+        range 0 8760
+        help
+            A device that naps between measurements keeps the wall clock in
+            RTC memory and adopts it on waking, so it is not blind until the
+            network comes back. That value drifts: the RTC oscillator is not
+            a timekeeping crystal, and the sleep itself is only approximately
+            measured. Past this age the device still reports the time — it is
+            the best guess it has, and a log line with an approximate stamp
+            beats one with none — but stops calling itself synced, so a
+            consumer that needs a trustworthy timestamp can tell the
+            difference.
+
+            0 disables the rule and a restored time never goes stale.
+
+    config ESPOS_TIME_MAX_SUBSCRIBERS
+        int "Clock-change subscribers"
+        default 4
+        range 1 16
+        help
+            How many consumers may register with espos_time_subscribe() to be
+            told when a source sets the clock. espOS itself takes one for the
+            SignalK fallback (to stop it once NTP succeeds); an application
+            wanting to redraw a display clock takes another. ~8 bytes each,
+            reserved for the life of the firmware.
+
+endmenu

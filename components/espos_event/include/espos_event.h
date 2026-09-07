@@ -47,7 +47,8 @@ typedef enum {
     ESPOS_EVENT_SK_STREAM_CONNECTED = 8,    /* delta stream open; data: none */
     ESPOS_EVENT_SK_STREAM_DISCONNECTED = 9, /* delta stream closed; data: none */
     ESPOS_EVENT_OTA_AVAILABLE = 10,         /* manifest names a newer build; data: espos_event_ota_t */
-    ESPOS_EVENT_MAX = 11,
+    ESPOS_EVENT_TIME_SYNCED = 11,           /* a source set the wall clock; data: espos_event_time_t */
+    ESPOS_EVENT_MAX = 12,
 } espos_event_id_t;
 
 /* ESPOS_EVENT_NETWORK_UP */
@@ -66,6 +67,15 @@ typedef struct {
 typedef struct {
     char version[32]; /* the manifest's version string */
 } espos_event_ota_t;
+
+/* ESPOS_EVENT_TIME_SYNCED. `source` is an espos_time_src_t, carried as a
+ * plain integer so this header stays a leaf — espos_event depends on nothing
+ * of espOS, which is what lets any component post to it. A subscriber that
+ * cares which source it was casts it; most only care that there now is one. */
+typedef struct {
+    uint8_t source;  /* espos_time_src_t: 1 rtc, 2 sk, 3 manual, 4 sntp */
+    int64_t unix_ms; /* the instant the clock was set to */
+} espos_event_time_t;
 
 /**
  * Post an ESPOS_EVENT to the default loop, creating the loop if nobody has
