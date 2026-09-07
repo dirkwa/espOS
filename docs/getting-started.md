@@ -114,6 +114,15 @@ under `espos.<hostname>.*` — uptime, heap, RSSI, reconnect counts — so a
 dashboard sees the device without any application code
 ([Signal K → Delta stream](signalk.md#delta-stream-m4)).
 
+## Set a key before the boat leaves the marina
+
+The web UI and REST API are open by default so the first minutes need no
+password. Once the device works, set `httpd.api_key` on the **Config** page
+(the Generate button makes a 20-character key and shows it once); from then on
+the UI asks for it, scripts send `Authorization: Bearer <key>`, and the
+setup-portal network stays exempt so you can never lock yourself out
+([security](security.md)).
+
 ## Next steps
 
 * **A setting of your own.** One entry in a JSON descriptor becomes a key

@@ -44,8 +44,8 @@ dependencies:
   signalk-espos/espos_httpd:
     version: "^0.7.0"
     override_path: "../espos_httpd"
-  signalk-espos/espos_wifi:
+  signalk-espos/espos_net:
     version: "^0.7.0"
-    override_path: "../espos_wifi"
+    override_path: "../espos_net"
   # cJSON, exact-pinned like every other registry dependency here.
   espressif/cjson: "==1.7.19~2"

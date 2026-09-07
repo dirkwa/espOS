@@ -79,7 +79,7 @@ whose `reset_reason` and `last_reset` say why the device last restarted.
   open/WEP network is refused on purpose.
 
 **`<hostname>.local` does not resolve**
-: mDNS is off in the build (`CONFIG_ESPOS_WIFI_MDNS=n`), or the client has
+: mDNS is off in the build (`CONFIG_ESPOS_NET_MDNS=n`), or the client has
   no mDNS (older Windows), or you are on another subnet — mDNS does not
   cross routers. The monitor's `connected to … as <ip>` line has the address.
 

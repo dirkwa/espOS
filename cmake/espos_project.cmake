@@ -64,8 +64,10 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # COMPONENTS        the OPTIONAL espOS components this firmware uses:
 #                   espos_ble, espos_n2k, espos_voice (implies espos_audio),
 #                   espos_audio. The core set (config, log, event, health,
-#                   httpd, wifi, sk, ota, core) is always available. Anything
-#                   optional and not named is excluded from the build outright.
+#                   httpd, net, wifi, sk, ota, core) is always available;
+#                   espos_wifi is excluded on targets without WiFi
+#                   (esp32h2/h21/h4). Anything optional and not named is
+#                   excluded from the build outright.
 #
 # A macro, not a function: EXTRA_COMPONENT_DIRS and SDKCONFIG_DEFAULTS have to
 # land in the caller's scope, where `project()` will read them.
@@ -127,6 +129,24 @@ macro(espos_project_prologue)
             endif()
         endforeach()
         list(REMOVE_DUPLICATES EXCLUDE_COMPONENTS)
+    endif()
+
+    # Targets without WiFi. The 802.15.4-only H-series has no radio esp_wifi
+    # can drive and no co-processor for esp_wifi_remote, so espos_wifi cannot
+    # build there: exclude it — in a consumer's build and in espOS's own tree
+    # alike, a component that cannot build on a target must not be in its
+    # graph — and record the decision as a build property. espos_core reads
+    # ESPOS_WIFI in early expansion, before sdkconfig exists (a Kconfig symbol
+    # could not carry it), and drops its espos_wifi requirement. Everything
+    # above the seam (espos_net, espos_sk, espos_ota) builds without WiFi.
+    set(_espos_no_wifi_targets esp32h2 esp32h21 esp32h4)
+    if(IDF_TARGET IN_LIST _espos_no_wifi_targets)
+        list(APPEND EXCLUDE_COMPONENTS espos_wifi)
+        list(REMOVE_DUPLICATES EXCLUDE_COMPONENTS)
+        idf_build_set_property(ESPOS_WIFI OFF)
+        message(STATUS "${_ESPOS_NAME}: ${IDF_TARGET} has no WiFi — espos_wifi excluded, network via espos_net transports only")
+    else()
+        idf_build_set_property(ESPOS_WIFI ON)
     endif()
 
     # The command line wins over the argument: `idf.py -DESPOS_PROFILE=release`

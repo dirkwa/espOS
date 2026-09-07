@@ -157,6 +157,11 @@ that.
 
 ## Host tests (no hardware)
 
+On a shared development host, run a host test suite under the same lock the
+build wrapper uses — `flock ~/.cache/.idf-build-$(id -u).lock ./test/host/run_all.sh` —
+because another `set-target` on the same test project deletes the ELF a
+running `run_test.py` is talking to.
+
 `./test/host/run_all.sh` discovers every `test/host/*/` project (any
 directory there with a `CMakeLists.txt`), builds it for the linux target and
 runs it: `run_test.py` where a project has one, otherwise the Unity ELF from

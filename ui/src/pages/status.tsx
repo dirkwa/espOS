@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "preact/hooks";
-import { get, post, del, useStore, wifiStore, skStore, skWsStore, fmtDuration, fmtBytes, errText, type SystemInfo, type Coredump } from "../api";
+import { get, post, del, useStore, wifiStore, skStore, skWsStore, fmtDuration, fmtBytes, errText, type SystemInfo, type Coredump, type AuthStatus } from "../api";
 import { Badge, Row, Msg, useAsync, navigate } from "../app";
 
 export function StatusPage() {
@@ -74,6 +74,7 @@ export function StatusPage() {
               <Row k="ESP-IDF">{i.idf_version}</Row>
               <Row k="Chip">{i.chip} <span class="muted">rev {i.chip_revision} · {i.cores} core{i.cores > 1 ? "s" : ""}</span></Row>
               <Row k="Uptime">{fmtDuration(i.uptime_s)}</Row>
+              <TimeRow t={(i as SystemInfo & { time?: TimeInfo }).time} />
               <Row k="Free heap">{fmtBytes(i.free_heap)} <span class="muted">min {fmtBytes(i.min_free_heap)}</span></Row>
               {i.config_storage_reset && <Msg text="Config storage was reset at boot — all values are defaults." kind="warn" />}
               {i.ui_storage === false && <Msg text="UI storage partition not mounted; serving the embedded page." kind="warn" />}
@@ -85,9 +86,66 @@ export function StatusPage() {
           )}
         </section>
 
+        <AccessCard />
         <CoredumpCard />
       </div>
     </>
+  );
+}
+
+// The wall clock, and where the device got it. Worth a line on the status page
+// because an unsynced clock is the reason a delta arrives without a timestamp
+// and the server stamps it on receipt — a silent, confusing data problem
+// otherwise (docs/time.md). `time` is absent only against a firmware older
+// than this field, so the row simply does not render there.
+// Declared here rather than on SystemInfo in api.ts: this is the only page
+// that reads the clock, and api.ts belongs to another change in flight. Move
+// it onto SystemInfo when a second consumer appears.
+interface TimeInfo { synced: boolean; source: string; now: number }
+
+function TimeRow({ t }: { t: TimeInfo | undefined }) {
+  if (!t) return null;
+  const kind = t.synced ? "ok" : t.source === "none" ? "warn" : "muted";
+  const label = t.source === "none" ? "not set" : t.synced ? t.source : `${t.source} (stale)`;
+  return (
+    <Row k="Clock">
+      <Badge kind={kind}>{label}</Badge>{" "}
+      {t.now > 0
+        ? <span class="muted">{new Date(t.now).toISOString().replace("T", " ").slice(0, 19)} UTC</span>
+        : <span class="muted">deltas are stamped by the server on arrival</span>}
+    </Row>
+  );
+}
+
+// Who may talk to this device (docs/security.md): open, or behind the API
+// key — and how this very page got in.
+function AccessCard() {
+  const st = useAsync(() => get<AuthStatus>("/auth/status"));
+  const a = st.data;
+  const kind = !a ? "muted" : !a.required ? "warn" : a.configured ? "ok" : "bad";
+  const label = !a ? "…" : !a.required ? "open" : a.configured ? "API key" : "key missing";
+  const session = a?.method === "cookie" ? "logged in (session cookie)"
+    : a?.method === "bearer" ? "API key (Bearer header)"
+      : a?.method === "portal" ? "setup portal — no key needed on this network"
+        : a?.required ? "not authenticated" : "—";
+  return (
+    <section class="card">
+      <h2>Access <Badge kind={kind}>{label}</Badge></h2>
+      {st.error && <Msg text={st.error} />}
+      {a && (
+        <>
+          <Row k="Authentication">
+            {!a.required ? <>Off — anyone on the network can read and change settings, reboot, or reset the device.</>
+              : a.configured ? <>On — the REST API and this UI need the API key (<span class="mono">httpd.api_key</span>).</>
+                : <>Required by this firmware, but no key is set: the API refuses everything but the setup portal.</>}
+          </Row>
+          <Row k="This session">{session}</Row>
+          <div class="row">
+            <a href="/config#httpd" onClick={(e) => { e.preventDefault(); navigate("/config#httpd"); }}>{a.configured ? "Change the key →" : "Set an API key →"}</a>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

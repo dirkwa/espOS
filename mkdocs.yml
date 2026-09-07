@@ -135,11 +135,13 @@ nav:
       - Troubleshooting: troubleshooting.md
   - Components:
       - Configuration store: config.md
-      - WiFi and mDNS: wifi.md
+      - Network and mDNS: net.md
+      - WiFi: wifi.md
       - Signal K: signalk.md
       - OTA: ota.md
       - Web UI: ui.md
       - Device health: health.md
+      - Time and timestamps: time.md
       - BLE gateway: ble.md
       - NMEA 2000 gateway: n2k.md
       - Voice satellite: voice.md

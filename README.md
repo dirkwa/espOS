@@ -76,7 +76,8 @@ the rest are optional.
 |---|---|---|
 | `espos_config` | NVS config store, JSON-Schema descriptors, REST-backed settings | [config.md](docs/config.md) |
 | `espos_httpd` | HTTP server, REST API, SSE, the web UI from a LittleFS partition | [rest-api.md](docs/rest-api.md) · [ui.md](docs/ui.md) |
-| `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog, mDNS responder | [wifi.md](docs/wifi.md) |
+| `espos_net` | Interface-agnostic network status and default route, mDNS responder, device id; WiFi/Ethernet plug in underneath | [net.md](docs/net.md) |
+| `espos_wifi` | Station + provisioning portal, a pure-C state machine, co-processor watchdog | [wifi.md](docs/wifi.md) |
 | `espos_log` | Log ring served over REST, so a device is debuggable without a serial cable | — |
 | `espos_health` | Device conditions (warn/alarm) and the sinks that consume them | [health.md](docs/health.md) |
 | `espos_sk` | SignalK: mDNS discovery, access token, delta stream in and out | [signalk.md](docs/signalk.md) |
