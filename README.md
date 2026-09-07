@@ -55,11 +55,14 @@ void app_main(void)
 }
 ```
 
-Docs: [REST API contract](docs/rest-api.md) · [Config store &
+Docs: **[signalk-espos.github.io/espOS](https://signalk-espos.github.io/espOS/)** —
+[Getting started](docs/getting-started.md) · [Concepts](docs/concepts.md) ·
+[Examples](docs/examples.md) · [REST API contract](docs/rest-api.md) · [Config store &
 descriptors](docs/config.md) · [WiFi](docs/wifi.md) · [SignalK
 discovery & token](docs/signalk.md) · [OTA & signing](docs/ota.md) ·
 [Web UI](docs/ui.md) · [Device health](docs/health.md) · [BLE gateway](docs/ble.md) · [NMEA 2000
-gateway](docs/n2k.md) · [Voice satellite](docs/voice.md) ·
+gateway](docs/n2k.md) · [Voice satellite](docs/voice.md) · [Hardware](docs/hardware.md) ·
+[Troubleshooting](docs/troubleshooting.md) ·
 [Development & host tests](docs/development.md) · [Releasing](docs/releasing.md) · [Security
 notes](docs/security.md)
 

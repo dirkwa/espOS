@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Doxyfile for the espOS C API reference (docs/api-c.md).
+#
+# Only the public headers are read. components/*/include is the C ABI a
+# consumer or a binding generator sees (docs/development.md, "Public API
+# rules"); the .c files are implementation and may change without notice, so
+# documenting them would document the wrong thing. The C++-only components
+# (espos_n2k, espos_voice, espos_audio) are public interfaces too and are
+# included; the site says which headers are C++.
+#
+# Two consumers. mkdoxy (mkdocs.yml, `doxy-cfg-file: Doxyfile`) reads this
+# file, overrides INPUT with its own src-dirs list (kept identical to the one
+# below) and OUTPUT_DIRECTORY with a folder under the site output, then turns
+# the XML into the pages under /api-c/. Standalone, `doxygen Doxyfile` from
+# the repository root writes the XML to build/doxygen/ (git-ignored with the
+# rest of build/) and prints the warnings CI would see.
+#
+# mkdoxy parses this file itself, not Doxygen: one `KEY = value` per line,
+# comments starting in column 0, backslash continuations allowed, no
+# `@INCLUDE`. Keep that shape.
+
+PROJECT_NAME           = "espOS C API"
+PROJECT_BRIEF          = "The public headers under components/*/include"
+OUTPUT_DIRECTORY       = build/doxygen
+
+INPUT                  = components/espos_audio/include \
+                         components/espos_ble/include \
+                         components/espos_config/include \
+                         components/espos_core/include \
+                         components/espos_event/include \
+                         components/espos_health/include \
+                         components/espos_httpd/include \
+                         components/espos_log/include \
+                         components/espos_n2k/include \
+                         components/espos_ota/include \
+                         components/espos_sk/include \
+                         components/espos_voice/include \
+                         components/espos_wifi/include
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+# Paths read `espos_core/include/espos.h`; include lines read the way a
+# consumer writes them (`espos.h`, `espos_n2k/can_frame.h`).
+STRIP_FROM_PATH        = components
+STRIP_FROM_INC_PATH    = components/espos_audio/include \
+                         components/espos_ble/include \
+                         components/espos_config/include \
+                         components/espos_core/include \
+                         components/espos_event/include \
+                         components/espos_health/include \
+                         components/espos_httpd/include \
+                         components/espos_log/include \
+                         components/espos_n2k/include \
+                         components/espos_ota/include \
+                         components/espos_sk/include \
+                         components/espos_voice/include \
+                         components/espos_wifi/include
+
+# C first: the switch shapes names and the index (no "class" wording for a
+# struct). The C++ headers are still parsed as C++.
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+# The headers document with plain `/** ... */` blocks whose first sentence
+# is the brief.
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = NO
+
+# Everything declared appears, documented or not: a reference that hides an
+# undocumented function hides API. EXTRACT_ALL also silences the
+# "not documented" warnings, so the remaining warnings are real ones.
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+# The headers are written top-down in reading order; keep it.
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+
+WARNINGS               = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+# A warning names a header to fix; the reference is never edited by hand.
+# Not an error, so a stray `<tag>` in prose cannot block a docs deploy.
+WARN_AS_ERROR          = NO
+QUIET                  = YES
+
+# Conditionals are evaluated so `#pragma once` and the extern "C" guard are
+# handled; nothing is expanded, so CONFIG_ tokens show as written. With
+# __cplusplus undefined the guard is skipped and the C view is documented.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+SKIP_FUNCTION_MACROS   = YES
+
+# XML for mkdoxy, nothing else.
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_PROGRAMLISTING     = YES

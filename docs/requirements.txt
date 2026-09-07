@@ -1,0 +1,9 @@
+# Python requirements of the documentation site (mkdocs.yml). Installed by
+# .github/workflows/docs.yml and by `pip install -r docs/requirements.txt`
+# in a venv (docs/development.md, "Documentation site"). Exact pins: the
+# site is rebuilt on every push and a theme or plugin release must not
+# change it, or break `mkdocs build --strict`, without a reviewed bump.
+# Doxygen itself is a system package (apt), not a Python one.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+mkdoxy==1.2.8
