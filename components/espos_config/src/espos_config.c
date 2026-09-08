@@ -1469,8 +1469,8 @@ esp_err_t espos_config_apply_plan(const espos_config_plan_entry_t *plan, size_t 
          * plan entry is stale, so skip it rather than write through a freed
          * descriptor. */
         esp_err_t e = (!nss || !nss->h) ? ESP_ERR_NOT_FOUND
-                      : plan[i].reset  ? reset_locked(nss, plan[i].key, &c)
-                                       : write_locked(nss, plan[i].key, &plan[i].val, &c);
+                      : plan[i].reset   ? reset_locked(nss, plan[i].key, &c)
+                                        : write_locked(nss, plan[i].key, &plan[i].val, &c);
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "%s.%s: write failed (%s)", plan[i].ns->name, plan[i].key->name, esp_err_to_name(e));
             if (err == ESP_OK) {

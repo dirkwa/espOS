@@ -32,7 +32,7 @@ typedef enum {
 /* Displayed but not editable: the UI greys the control out and a write is
  * rejected. A device-derived value (a serial number, a computed limit) that a
  * user must be able to read but never set. */
-#define ESPOS_CFG_FLAG_READ_ONLY        (1u << 2)
+#define ESPOS_CFG_FLAG_READ_ONLY (1u << 2)
 
 /* Presentation hints. They never change what is stored — only how a value is
  * shown and typed in. SI units are the on-device truth (SignalK's rule), but
@@ -94,8 +94,8 @@ typedef struct {
  * that registers its own namespace gets the prefix below, so its id may be at
  * most 12 characters. */
 #define ESPOS_CFG_RUNTIME_NS_PREFIX "f_"
-#define ESPOS_CFG_RUNTIME_ID_MAX 12
-#define ESPOS_CFG_NS_NAME_MAX 15
+#define ESPOS_CFG_RUNTIME_ID_MAX    12
+#define ESPOS_CFG_NS_NAME_MAX       15
 
 /* Emitted by the generator (sorted by namespace name). */
 extern const espos_cfg_ns_t espos_cfg_namespaces[];

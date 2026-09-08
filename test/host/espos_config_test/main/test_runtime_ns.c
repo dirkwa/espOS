@@ -17,37 +17,42 @@
  * borrows the descriptor and never copies it. This is the shape a real
  * Linear("cal", …) hands over. */
 static const espos_cfg_key_t s_cal_keys[] = {
-    { .name = "mul", .title = "Multiplier", .description = "", .unit = "",
-      .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 1.0f, .has_min = true, .min.f = -100.0f,
-      .has_max = true, .max.f = 100.0f },
-    { .name = "off", .title = "Offset", .description = "", .unit = "",
-      .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 0.0f },
-    { .name = "label", .title = "Label", .description = "", .unit = "",
-      .type = ESPOS_CFG_TYPE_STRING, .def.s = "cal", .max_len = 16 },
+    { .name = "mul", .title = "Multiplier", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 1.0f, .has_min = true, .min.f = -100.0f, .has_max = true, .max.f = 100.0f },
+    { .name = "off", .title = "Offset", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 0.0f },
+    { .name = "label", .title = "Label", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_STRING, .def.s = "cal", .max_len = 16 },
 };
 static const espos_cfg_ns_t s_cal_ns = {
-    .name = "f_cal", .title = "Calibration", .version = 1,
-    .keys = s_cal_keys, .key_count = 3, .description = "Linear node \"cal\"",
+    .name = "f_cal",
+    .title = "Calibration",
+    .version = 1,
+    .keys = s_cal_keys,
+    .key_count = 3,
+    .description = "Linear node \"cal\"",
 };
 
 /* A second node, to prove the table holds more than one. */
 static const espos_cfg_key_t s_rate_keys[] = {
-    { .name = "hz", .title = "Rate", .description = "", .unit = "Hz",
-      .type = ESPOS_CFG_TYPE_INT, .def.i = 10, .min.i = 1, .max.i = 100 },
+    { .name = "hz", .title = "Rate", .description = "", .unit = "Hz", .type = ESPOS_CFG_TYPE_INT, .def.i = 10, .min.i = 1, .max.i = 100 },
 };
 static const espos_cfg_ns_t s_rate_ns = {
-    .name = "f_rate", .title = "Rate", .version = 1, .keys = s_rate_keys, .key_count = 1,
+    .name = "f_rate",
+    .title = "Rate",
+    .version = 1,
+    .keys = s_rate_keys,
+    .key_count = 1,
 };
 
 /* A curve table: string key holding JSON rows, the shape task F2 asks for. */
 static const char *const s_curve_cols[] = { "input", "output" };
 static const espos_cfg_key_t s_curve_keys[] = {
-    { .name = "points", .title = "Curve", .description = "", .unit = "",
-      .type = ESPOS_CFG_TYPE_STRING, .def.s = "[]", .max_len = 3999,
-      .display = { .table_columns = s_curve_cols, .table_column_count = 2 } },
+    { .name = "points", .title = "Curve", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_STRING, .def.s = "[]", .max_len = 3999, .display = { .table_columns = s_curve_cols, .table_column_count = 2 } },
 };
 static const espos_cfg_ns_t s_curve_ns = {
-    .name = "f_curve", .title = "Curve", .version = 1, .keys = s_curve_keys, .key_count = 1,
+    .name = "f_curve",
+    .title = "Curve",
+    .version = 1,
+    .keys = s_curve_keys,
+    .key_count = 1,
 };
 
 /* ------------------------------------------------------------------ naming */
@@ -140,12 +145,20 @@ TEST_CASE("a duplicate or malformed descriptor fails loudly", "[runtime]")
     /* same name twice: the second node would silently shadow the first */
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, espos_config_register_ns(&s_cal_ns));
     static const espos_cfg_ns_t same_name = {
-        .name = "f_cal", .title = "Other", .version = 1, .keys = s_rate_keys, .key_count = 1,
+        .name = "f_cal",
+        .title = "Other",
+        .version = 1,
+        .keys = s_rate_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, espos_config_register_ns(&same_name));
     /* a built-in namespace may not be shadowed either */
     static const espos_cfg_ns_t shadows_static = {
-        .name = "t1", .title = "Hijack", .version = 1, .keys = s_rate_keys, .key_count = 1,
+        .name = "t1",
+        .title = "Hijack",
+        .version = 1,
+        .keys = s_rate_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, espos_config_register_ns(&shadows_static));
     /* ... and cannot be unregistered */
@@ -153,19 +166,30 @@ TEST_CASE("a duplicate or malformed descriptor fails loudly", "[runtime]")
 
     /* over-long name: 16 characters, one past what NVS carries */
     static const espos_cfg_ns_t too_long = {
-        .name = "f_abcdefghijklmn", .title = "Too long", .version = 1,
-        .keys = s_rate_keys, .key_count = 1,
+        .name = "f_abcdefghijklmn",
+        .title = "Too long",
+        .version = 1,
+        .keys = s_rate_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&too_long));
     static const espos_cfg_ns_t bad_chars = {
-        .name = "f_Cal", .title = "Caps", .version = 1, .keys = s_rate_keys, .key_count = 1,
+        .name = "f_Cal",
+        .title = "Caps",
+        .version = 1,
+        .keys = s_rate_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&bad_chars));
     /* structurally broken descriptors */
     static const espos_cfg_ns_t no_keys = { .name = "f_empty", .title = "E", .version = 1 };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&no_keys));
     static const espos_cfg_ns_t no_version = {
-        .name = "f_nover", .title = "N", .version = 0, .keys = s_rate_keys, .key_count = 1,
+        .name = "f_nover",
+        .title = "N",
+        .version = 0,
+        .keys = s_rate_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&no_version));
     static const espos_cfg_key_t dup_keys[] = {
@@ -173,24 +197,34 @@ TEST_CASE("a duplicate or malformed descriptor fails loudly", "[runtime]")
         { .name = "hz", .title = "b", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_INT },
     };
     static const espos_cfg_ns_t dup_ns = {
-        .name = "f_dup", .title = "D", .version = 1, .keys = dup_keys, .key_count = 2,
+        .name = "f_dup",
+        .title = "D",
+        .version = 1,
+        .keys = dup_keys,
+        .key_count = 2,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&dup_ns));
     static const espos_cfg_key_t reserved_keys[] = {
-        { .name = "config_version", .title = "v", .description = "", .unit = "",
-          .type = ESPOS_CFG_TYPE_INT },
+        { .name = "config_version", .title = "v", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_INT },
     };
     static const espos_cfg_ns_t reserved_ns = {
-        .name = "f_resv", .title = "R", .version = 1, .keys = reserved_keys, .key_count = 1,
+        .name = "f_resv",
+        .title = "R",
+        .version = 1,
+        .keys = reserved_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&reserved_ns));
     /* a string key with no max_len would read past its buffer */
     static const espos_cfg_key_t nolen_keys[] = {
-        { .name = "s", .title = "s", .description = "", .unit = "",
-          .type = ESPOS_CFG_TYPE_STRING, .def.s = "" },
+        { .name = "s", .title = "s", .description = "", .unit = "", .type = ESPOS_CFG_TYPE_STRING, .def.s = "" },
     };
     static const espos_cfg_ns_t nolen_ns = {
-        .name = "f_nolen", .title = "N", .version = 1, .keys = nolen_keys, .key_count = 1,
+        .name = "f_nolen",
+        .title = "N",
+        .version = 1,
+        .keys = nolen_keys,
+        .key_count = 1,
     };
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(&nolen_ns));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_config_register_ns(NULL));
@@ -226,8 +260,7 @@ TEST_CASE("the runtime table has a hard limit and reports it", "[runtime]")
     static espos_cfg_ns_t many[CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS + 1];
     for (int i = 0; i <= CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
         snprintf(names[i], sizeof(names[i]), "f_r%03d", i);
-        many[i] = (espos_cfg_ns_t) { .name = names[i], .title = "R", .version = 1,
-                                     .keys = s_rate_keys, .key_count = 1 };
+        many[i] = (espos_cfg_ns_t) { .name = names[i], .title = "R", .version = 1, .keys = s_rate_keys, .key_count = 1 };
     }
     for (int i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
         TEST_ESP_OK(espos_config_register_ns(&many[i]));
@@ -562,8 +595,7 @@ TEST_CASE("a realistic graph's NVS footprint is reported", "[runtime]")
     static espos_cfg_ns_t graph[9];
     for (int i = 0; i < 8; i++) {
         snprintf(names[i], sizeof(names[i]), "f_n%02d", i);
-        graph[i] = (espos_cfg_ns_t) { .name = names[i], .title = "Node", .version = 1,
-                                      .keys = s_cal_keys, .key_count = 3 };
+        graph[i] = (espos_cfg_ns_t) { .name = names[i], .title = "Node", .version = 1, .keys = s_cal_keys, .key_count = 3 };
         TEST_ESP_OK(espos_config_register_ns(&graph[i]));
         TEST_ESP_OK(espos_config_set_float(names[i], "mul", 1.5f + i));
         TEST_ESP_OK(espos_config_set_float(names[i], "off", 0.25f * i));
