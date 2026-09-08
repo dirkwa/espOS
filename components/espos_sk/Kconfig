@@ -104,6 +104,21 @@ menu "espOS SignalK"
             A caller over the limit waits up to its own timeout for a slot
             and gets ESP_ERR_TIMEOUT if none frees up.
 
+    config ESPOS_SK_MAX_META
+        int "Metadata declarations"
+        default 32
+        range 4 128
+        help
+            How many paths espos_sk_declare_meta() can describe. Each entry
+            holds a path and its meta JSON and is reconciled with the server
+            on every reconnect.
+
+            One per custom path the device publishes; spec paths need none,
+            because the server already knows their units. A device with a
+            dozen sensors and a units line for each runs out at the old 16
+            sooner than it looks, and the declaration that does not fit is
+            the one silently missing its units in every dashboard.
+
     config ESPOS_SK_NOTIFICATIONS
         bool "Device-health notifications"
         default y
