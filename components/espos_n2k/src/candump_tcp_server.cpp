@@ -262,6 +262,41 @@ void CandumpTcpServer::client_task(void* arg) {
       }
       return false;
     }
+    // A PARTIAL send is the normal case on a socket whose buffer is nearly
+    // full, not an error: send() returns how many bytes it took, which can be
+    // fewer than asked for. Treating any non-negative return as "all of it"
+    // dropped the tail mid-line, and the next flush appended onto that
+    // fragment -- so a client like canboatjs did not lose a frame cleanly, it
+    // parsed a corrupt CAN id built from the end of one line and the start of
+    // another.
+    //
+    // The buffer holds whole newline-terminated candump lines, so recovery is
+    // to discard forward to a line boundary: keep the bytes after the last
+    // newline inside what was sent, drop the partial line, and carry the rest
+    // to the next flush. A reader then sees a gap in the stream, which is what
+    // a dropped frame should look like.
+    if (sent < tx_len) {
+      // candump_resync_offset() decides where to resume: the byte after the
+      // next newline, so the half-sent line is discarded rather than having
+      // the next frame appended to it. Pure and host-tested.
+      const int keep_from = static_cast<int>(candump_resync_offset(
+          tx_buf, static_cast<size_t>(tx_len), static_cast<size_t>(sent)));
+      const int discarded = keep_from - sent;
+      if (discarded > 0) {
+        dropped_tx += static_cast<unsigned long>(discarded);
+        if (xTaskGetTickCount() - last_drop_log > pdMS_TO_TICKS(5000)) {
+          ESP_LOGW("candump_srv",
+                   "slot %d: partial send, dropped %d bytes to the next line "
+                   "(total %lu)",
+                   slot, discarded, (unsigned long)dropped_tx);
+          last_drop_log = xTaskGetTickCount();
+        }
+      }
+      tx_len -= keep_from;
+      if (tx_len > 0) memmove(tx_buf, tx_buf + keep_from, (size_t)tx_len);
+      last_flush = xTaskGetTickCount();
+      return true;
+    }
     tx_len = 0;
     last_flush = xTaskGetTickCount();
     return true;
