@@ -1964,6 +1964,15 @@ class SkTests(unittest.TestCase):
         return js
 
     def test_10_http_helper_get_200_with_body_and_bearer_header(self):
+        # The firmware probes /signalk on its own to settle sk.scheme, and that
+        # probe is deliberately unauthenticated (SensESP #1057). It can land
+        # between this request and the log read, so "the last /signalk in the
+        # log" is not necessarily ours: take a baseline and look only at what
+        # this call added.
+        def signalk_gets():
+            return [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1].startswith("/signalk")]
+
+        n0 = len(signalk_gets())
         js = self.http("get", "/signalk")
         self.assertEqual(js["err"], "ESP_OK")
         self.assertEqual(js["status"], 200)
@@ -1971,13 +1980,17 @@ class SkTests(unittest.TestCase):
         self.assertEqual(js["len"], len(js["body"]))
         self.assertEqual(json.loads(js["body"])["endpoints"]["v1"]["version"], "2.31.1")
         # the token rode as an Authorization header, never in the URL
-        seen = [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1].startswith("/signalk")]
-        self.assertTrue(seen[-1][2].startswith("Bearer "), seen[-1])
-        self.assertNotIn("token=", seen[-1][1])
+        added = signalk_gets()[n0:]
+        mine = [e for e in added if e[2] is not None]
+        self.assertTrue(mine, added)
+        self.assertTrue(mine[-1][2].startswith("Bearer "), mine[-1])
+        self.assertNotIn("token=", mine[-1][1])
         # opting out of auth drops the header entirely
+        n1 = len(signalk_gets())
         self.http("get", "/signalk", no_auth=True)
-        seen = [e for e in self.mock.ctl("log")[1] if e[0] == "GET" and e[1] == "/signalk"]
-        self.assertIsNone(seen[-1][2])
+        added = [e for e in signalk_gets()[n1:] if e[1] == "/signalk"]
+        self.assertTrue(added, "the no_auth request was never seen")
+        self.assertTrue(all(e[2] is None for e in added), added)
 
     def test_11_http_helper_404_is_a_reply_not_an_error(self):
         js = self.http("get", "/signalk/v1/api/vessels/self/nothing/here")
