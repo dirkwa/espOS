@@ -1,0 +1,90 @@
+menu "espOS flow"
+
+    config ESPOS_FLOW_TASK_STACK
+        int "Flow loop task stack (bytes)"
+        default 6144
+        range 2048 32768
+        help
+            Every node in every graph runs on this one stack: a Poll's read
+            function, a Lambda's arithmetic, a Sink's publish, all nested as
+            deep as the longest chain. 6 KB carries the built-in nodes and a
+            reasonable application with room to spare; raise it if your own
+            transform uses a large local buffer, and remember that a chain is
+            call depth, not iteration — ten nodes in a row are ten frames.
+
+            Comes from internal RAM like every task stack, which on a board
+            with PSRAM is the scarce pool.
+
+    config ESPOS_FLOW_TASK_PRIO
+        int "Flow loop task priority"
+        default 5
+        range 1 24
+        help
+            Above the idle and housekeeping tasks and below the WiFi/network
+            stack (tskIDLE_PRIORITY+18 on IDF), so a busy graph never starves
+            the radio and a busy radio only delays the graph. Raise it only if
+            a timer's jitter genuinely matters more than the network's.
+
+    config ESPOS_FLOW_MAILBOX_DEPTH
+        int "Flow mailbox depth (messages)"
+        default 32
+        range 4 256
+        help
+            How many pieces of work other tasks and interrupts may have queued
+            for the flow loop at once (8 bytes each, reserved for the life of
+            the firmware). Posting never blocks: past this depth a post is
+            dropped and counted, and health condition "flowMailbox" is raised
+            as a WARNING once.
+
+            Deep enough that a burst of interrupts does not lose data, shallow
+            enough that a permanently overloaded loop is visible rather than
+            silently latent. If drops appear, the fix is usually a slower
+            producer or a faster consumer, not a bigger queue.
+
+    config ESPOS_FLOW_MAX_TIMERS
+        int "Timer slots"
+        default 32
+        range 4 256
+        help
+            Slots for espos_flow_every()/after() and every Poll and Ticker node
+            (~24 bytes each, reserved for the life of the firmware). Exhaustion
+            is ESP_ERR_NO_MEM and a loud log line at wiring time, never a
+            silently dropped timer.
+
+    config ESPOS_FLOW_MAX_EDGES
+        int "Graph edges"
+        default 96
+        range 8 1024
+        help
+            The static pool every connect_to() takes an edge from (~12 bytes
+            each). One edge per connection, so a chain of five nodes is four
+            edges and a producer feeding three consumers is three.
+
+            Exhaustion aborts at wiring time with the node ids involved rather
+            than dropping the connection: a graph that silently lost an edge
+            would look like a sensor that stopped working months later.
+
+    config ESPOS_FLOW_CHECK_TASK
+        bool "Assert that emit() runs on the flow task"
+        default y
+        help
+            The whole no-locks-in-nodes argument rests on one rule: everything
+            in a graph runs on the flow task, and anything else comes in
+            through a Mailbox. With this on, an emit() from the wrong task
+            fails immediately, naming the task, instead of corrupting a node's
+            state in a way that surfaces as an impossible value next season.
+
+            Costs one task-handle comparison per emit. Leave it on unless a
+            profile says otherwise; the class of bug it catches is the
+            expensive one.
+
+    config ESPOS_FLOW_HEALTH
+        bool "Report flow conditions to espos_health"
+        default y
+        help
+            Raises "flowMailbox" (WARN) the first time a post is dropped, so a
+            loop that cannot keep up shows on the health page and in SignalK
+            notifications instead of only in the counters. Turn off for a
+            firmware that does not build espos_health.
+
+endmenu
