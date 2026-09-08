@@ -22,6 +22,7 @@ threading, boot order, the server's REST tree, TLS.
 | `listener_relay` | Newbie | subscribe to a path, drive a relay | `listener` | `components/espos_sk/examples/listener_relay` |
 | `json_and_meta` | Advanced | publish a JSON value, declare metadata for a path of your own | `raw_json`, the metadata example (SensESP #501) | `components/espos_sk/examples/json_and_meta` |
 | `tls_server` | Advanced | https/wss to the server (`CONFIG_ESPOS_SK_TLS`) | `ssl_connection` | `components/espos_sk/examples/tls_server` |
+| `ble_gateway` | Advanced | a BLE→Signal K gateway: the whole firmware is `espos_start(NULL)`, the configuration is the content | — (SensESP has no equivalent) | `components/espos_ble/examples/ble_gateway` |
 
 ## How to build one
 
