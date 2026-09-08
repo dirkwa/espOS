@@ -2,8 +2,13 @@
 # slots (a native-radio target with Bluedroid links ~2 MB), the rest to the
 # LittleFS storage partition that holds the gzipped web UI and whatever the
 # firmware keeps next to it; 64 KB stay free at the end.
+# nvs is 48K, not the 24K espOS shipped through v0.7: a graph node stores its
+# settings here, and a curve table is one string key that can approach 4 KB on
+# its own, so a handful of nodes with tables would fill the old partition. The
+# size is fixed at flash time -- growing it later needs a USB flash, not an
+# OTA -- so it is set before any device ships tables rather than after.
 # Name,     Type, SubType,  Offset,  Size,   Flags
-nvs,        data, nvs,      ,        24K,
+nvs,        data, nvs,      ,        48K,
 otadata,    data, ota,      ,        8K,
 phy_init,   data, phy,      ,        4K,
 nvs_keys,   data, nvs_keys, ,        4K,    encrypted

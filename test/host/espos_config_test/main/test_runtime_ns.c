@@ -641,10 +641,13 @@ TEST_CASE("a realistic graph's NVS footprint is reported", "[runtime]")
            (unsigned)total_entries, (unsigned)scalar_entries, (unsigned)label_entries,
            (unsigned)curve_entries);
     printf("  NVS data bytes  : %u\n", (unsigned)bytes);
-    printf("  NVS pages       : %u of 6 in a 24K partition\n", (unsigned)pages);
+    printf("  NVS pages       : %u of 12 in a 48K partition\n", (unsigned)pages);
     /* The claim docs/config.md makes: a graph of this size fits well inside
-     * the 24K partition next to the built-in namespaces. */
-    TEST_ASSERT_TRUE_MESSAGE(pages <= 3, "a realistic graph must not fill the 24K nvs partition");
+     * the 48K partition next to the built-in namespaces, with room for the
+     * free page NVS compacts into and for rewrites that briefly hold both
+     * the old and the new value. Three of twelve leaves that margin; three
+     * of the six pages the partition had through v0.7 did not. */
+    TEST_ASSERT_TRUE_MESSAGE(pages <= 3, "a realistic graph must not fill the nvs partition");
     free(curve);
     fixture_teardown(m);
 }
