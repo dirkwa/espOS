@@ -2,9 +2,12 @@
  * SPDX-FileCopyrightText: 2026 Dirk Wahrheit
  * SPDX-License-Identifier: Apache-2.0
  *
- * JSON export/import for espos_config, using cJSON.
+ * JSON export/import and the merged JSON Schema for espos_config, using cJSON.
  */
+#include <inttypes.h>
+#include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,11 +135,14 @@ esp_err_t espos_config_export_json(const char *only_ns, bool include_secrets, ch
     if (!root) {
         return ESP_ERR_NO_MEM;
     }
-    /* One consistent snapshot: hold the store lock across all namespaces. */
+    /* One consistent snapshot: hold the store lock across all namespaces.
+     * The iteration covers the runtime table too, so a node's settings export
+     * and import exactly like a compiled namespace's. */
     espos_config_lock();
-    for (size_t i = 0; i < espos_cfg_namespace_count; i++) {
-        const espos_cfg_ns_t *nd = &espos_cfg_namespaces[i];
-        if (single && nd != single) {
+    size_t total = espos_config_ns_total_locked();
+    for (size_t i = 0; i < total; i++) {
+        const espos_cfg_ns_t *nd = espos_config_ns_at_locked(i);
+        if (!nd || (single && nd != single)) {
             continue;
         }
         cJSON *o = export_ns(nd, include_secrets);
@@ -393,6 +399,13 @@ esp_err_t espos_config_import_json(const char *json, size_t json_len, bool ignor
                     break;
                 }
             }
+            if (kd->flags & ESPOS_CFG_FLAG_READ_ONLY) {
+                /* Left untouched, like a secret echoed back as the sentinel.
+                 * Rejecting instead would break the ordinary round trip: an
+                 * export contains every key, and re-importing that file is
+                 * exactly what "restore my settings" does. */
+                continue;
+            }
             espos_config_plan_entry_t *e = &plan[nplan];
             e->ns = nd;
             e->key = kd;
@@ -444,4 +457,231 @@ out:
     free(changed_idx);
     cJSON_Delete(root);
     return err;
+}
+
+/* ------------------------------------------------------------------ schema */
+
+/* One key's JSON Schema property, the runtime twin of build_schema() in
+ * tools/espos_gen_config.py. The two must agree: the UI has one renderer, and
+ * a node's multiplier field has to look exactly like a compiled one. */
+static cJSON *key_to_schema(const espos_cfg_key_t *k)
+{
+    cJSON *p = cJSON_CreateObject();
+    if (!p) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(p, "title", k->title ? k->title : k->name);
+    if (k->description && k->description[0]) {
+        cJSON_AddStringToObject(p, "description", k->description);
+    }
+    switch (k->type) {
+    case ESPOS_CFG_TYPE_BOOL:
+        cJSON_AddStringToObject(p, "type", "boolean");
+        cJSON_AddBoolToObject(p, "default", k->def.b);
+        break;
+    case ESPOS_CFG_TYPE_INT:
+        cJSON_AddStringToObject(p, "type", "integer");
+        cJSON_AddNumberToObject(p, "default", (double)k->def.i);
+        if (k->min.i != INT32_MIN) {
+            cJSON_AddNumberToObject(p, "minimum", (double)k->min.i);
+        }
+        if (k->max.i != INT32_MAX) {
+            cJSON_AddNumberToObject(p, "maximum", (double)k->max.i);
+        }
+        break;
+    case ESPOS_CFG_TYPE_FLOAT:
+        cJSON_AddStringToObject(p, "type", "number");
+        cJSON_AddNumberToObject(p, "default", float_for_json(k->def.f));
+        if (k->has_min) {
+            cJSON_AddNumberToObject(p, "minimum", float_for_json(k->min.f));
+        }
+        if (k->has_max) {
+            cJSON_AddNumberToObject(p, "maximum", float_for_json(k->max.f));
+        }
+        break;
+    case ESPOS_CFG_TYPE_STRING:
+        cJSON_AddStringToObject(p, "type", "string");
+        cJSON_AddStringToObject(p, "default", k->def.s ? k->def.s : "");
+        cJSON_AddNumberToObject(p, "maxLength", (double)k->max_len);
+        if (k->enum_values && k->enum_count) {
+            cJSON *e = cJSON_AddArrayToObject(p, "enum");
+            for (size_t i = 0; e && i < k->enum_count; i++) {
+                cJSON_AddItemToArray(e, cJSON_CreateString(k->enum_values[i]));
+            }
+        }
+        break;
+    case ESPOS_CFG_TYPE_BLOB:
+        cJSON_AddStringToObject(p, "type", "string");
+        cJSON_AddStringToObject(p, "contentEncoding", "base64");
+        cJSON_AddStringToObject(p, "x-espos-type", "blob");
+        cJSON_AddNumberToObject(p, "x-espos-maxBytes", (double)k->max_len);
+        cJSON_AddStringToObject(p, "default", "");
+        break;
+    }
+    if (k->unit && k->unit[0]) {
+        cJSON_AddStringToObject(p, "x-espos-unit", k->unit);
+    }
+    if (k->flags & ESPOS_CFG_FLAG_SECRET) {
+        cJSON_AddBoolToObject(p, "writeOnly", true);
+        cJSON_AddStringToObject(p, "format", "password");
+        cJSON_AddBoolToObject(p, "x-espos-secret", true);
+    }
+    if (k->flags & ESPOS_CFG_FLAG_RESTART_REQUIRED) {
+        cJSON_AddBoolToObject(p, "x-espos-restartRequired", true);
+    }
+    if (k->flags & ESPOS_CFG_FLAG_READ_ONLY) {
+        cJSON_AddBoolToObject(p, "readOnly", true);
+    }
+    if (k->display.group && k->display.group[0]) {
+        cJSON_AddStringToObject(p, "x-espos-group", k->display.group);
+    }
+    if (k->display.display_mul != 0.0f && k->display.display_mul != 1.0f) {
+        cJSON_AddNumberToObject(p, "x-espos-displayMultiplier", float_for_json(k->display.display_mul));
+    }
+    if (k->display.display_off != 0.0f) {
+        cJSON_AddNumberToObject(p, "x-espos-displayOffset", float_for_json(k->display.display_off));
+    }
+    if (k->display.table_columns && k->display.table_column_count) {
+        cJSON_AddStringToObject(p, "x-espos-format", "table");
+        cJSON *c = cJSON_AddArrayToObject(p, "x-espos-columns");
+        for (size_t i = 0; c && i < k->display.table_column_count; i++) {
+            cJSON_AddItemToArray(c, cJSON_CreateString(k->display.table_columns[i]));
+        }
+    }
+    return p;
+}
+
+static cJSON *ns_to_schema(const espos_cfg_ns_t *nd)
+{
+    cJSON *o = cJSON_CreateObject();
+    if (!o) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(o, "type", "object");
+    cJSON_AddStringToObject(o, "title", nd->title ? nd->title : nd->name);
+    if (nd->description && nd->description[0]) {
+        cJSON_AddStringToObject(o, "description", nd->description);
+    }
+    cJSON_AddNumberToObject(o, "x-espos-version", (double)nd->version);
+    /* Marks the section as one a node put there: the UI can offer to forget
+     * its stored values when the node is gone, which it must never offer for
+     * a built-in. */
+    cJSON_AddBoolToObject(o, "x-espos-runtime", true);
+    cJSON *props = cJSON_AddObjectToObject(o, "properties");
+    if (!props) {
+        cJSON_Delete(o);
+        return NULL;
+    }
+    for (size_t i = 0; i < nd->key_count; i++) {
+        cJSON *p = key_to_schema(&nd->keys[i]);
+        if (!p || !cJSON_AddItemToObject(props, nd->keys[i].name, p)) {
+            cJSON_Delete(p);
+            cJSON_Delete(o);
+            return NULL;
+        }
+    }
+    cJSON_AddBoolToObject(o, "additionalProperties", false);
+    return o;
+}
+
+/* Compiled etag, hashed together with the generation counter. The merged
+ * document is not rehashed: what a client needs is a value that changes
+ * whenever the schema could have changed, and register/unregister is the only
+ * way a runtime namespace appears or goes.
+ *
+ * With nothing registered the document IS the compiled one, so the compiled
+ * ETag is served unchanged and a browser that cached it keeps its 304 —
+ * including on a device where nodes were registered and then all removed
+ * again, which is exactly the state the compiled schema describes. */
+static void schema_etag(char out[ESPOS_CFG_ETAG_MAX])
+{
+    if (espos_config_runtime_ns_count() == 0) {
+        snprintf(out, ESPOS_CFG_ETAG_MAX, "%s", espos_cfg_schema_etag);
+        return;
+    }
+    uint32_t h = 5381;
+    for (const char *p = espos_cfg_schema_etag; *p; p++) {
+        h = h * 33u + (unsigned char)*p;
+    }
+    h = h * 33u + espos_config_generation();
+    snprintf(out, ESPOS_CFG_ETAG_MAX, "%.8s-%08" PRIx32, espos_cfg_schema_etag, h);
+}
+
+void espos_config_schema_etag(char etag[ESPOS_CFG_ETAG_MAX])
+{
+    if (etag) {
+        schema_etag(etag);
+    }
+}
+
+esp_err_t espos_config_schema_json(char **out, char etag[ESPOS_CFG_ETAG_MAX])
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out = NULL;
+    if (etag) {
+        schema_etag(etag);
+    }
+    /* Snapshot the runtime namespaces under the lock, then build outside it:
+     * cJSON allocates, and holding the store lock across that would block
+     * every getter for the length of a document build. The descriptors stay
+     * valid because unregistering one is the caller's promise that nobody is
+     * still using it. */
+    espos_config_lock();
+    size_t total = espos_config_ns_total_locked();
+    size_t nrt = total > espos_cfg_namespace_count ? total - espos_cfg_namespace_count : 0;
+    const espos_cfg_ns_t **rt = nrt ? calloc(nrt, sizeof(*rt)) : NULL;
+    if (nrt && !rt) {
+        espos_config_unlock();
+        return ESP_ERR_NO_MEM;
+    }
+    for (size_t i = 0; i < nrt; i++) {
+        rt[i] = espos_config_ns_at_locked(espos_cfg_namespace_count + i);
+    }
+    espos_config_unlock();
+
+    if (nrt == 0) {
+        /* The overwhelmingly common case: hand back the compiled text. */
+        free(rt);
+        char *copy = malloc(espos_cfg_schema_json_len + 1);
+        if (!copy) {
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(copy, espos_cfg_schema_json, espos_cfg_schema_json_len + 1);
+        *out = copy;
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(espos_cfg_schema_json, espos_cfg_schema_json_len);
+    cJSON *props = root ? cJSON_GetObjectItemCaseSensitive(root, "properties") : NULL;
+    if (!props || !cJSON_IsObject(props)) {
+        cJSON_Delete(root);
+        free(rt);
+        ESP_LOGE(TAG, "compiled schema is not usable as a merge base");
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = ESP_OK;
+    for (size_t i = 0; i < nrt; i++) {
+        if (!rt[i]) {
+            continue; /* unregistered between the snapshot and here */
+        }
+        cJSON *o = ns_to_schema(rt[i]);
+        if (!o || !cJSON_AddItemToObject(props, rt[i]->name, o)) {
+            cJSON_Delete(o);
+            err = ESP_ERR_NO_MEM;
+            break;
+        }
+    }
+    free(rt);
+    char *txt = err == ESP_OK ? cJSON_PrintUnformatted(root) : NULL;
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!txt) {
+        return ESP_ERR_NO_MEM;
+    }
+    *out = txt;
+    return ESP_OK;
 }

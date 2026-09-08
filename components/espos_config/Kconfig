@@ -16,4 +16,16 @@ menu "espOS config store"
         default 8
         range 1 32
 
+    config ESPOS_CONFIG_MAX_RUNTIME_NS
+        int "Maximum runtime-registered namespaces"
+        default 32
+        range 0 128
+        help
+            Slots for namespaces registered at run time with
+            espos_config_register_ns() — one per graph node that owns
+            settings. Each costs one pointer plus an open NVS handle; the
+            limit exists so the table is fixed-size like every other in
+            espOS. Registration past this fails loudly (health condition
+            flowConfig), it never silently drops a node's settings.
+
 endmenu

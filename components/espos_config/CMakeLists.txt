@@ -25,7 +25,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS include "${ESPOS_CONFIG_GEN_DIR}/include"
     REQUIRES nvs_flash
-    PRIV_REQUIRES espressif__cjson)
+    PRIV_REQUIRES espressif__cjson espos_health)
 
 # Generate schema + tables from every descriptor registered via
 # espos_config_add_descriptor(). The list is read at generate time.

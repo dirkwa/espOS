@@ -1,0 +1,16 @@
+{
+  "$comment": "Exercises the presentation-only descriptor fields on the STATIC path: readOnly, group and the x block (display multiplier/offset, table format). None of them change what is stored.",
+  "namespace": "disp",
+  "version": 1,
+  "title": "Display hints",
+  "keys": [
+    {"name": "serial", "type": "string", "default": "unset", "maxLength": 16,
+     "readOnly": true, "group": "Device", "title": "Serial number"},
+    {"name": "heading", "type": "float", "default": 0.0, "unit": "rad",
+     "group": "Calibration", "x": {"displayMultiplier": 57.29578}},
+    {"name": "uptime", "type": "int", "default": 0, "unit": "s",
+     "x": {"displayMultiplier": 0.00027777778, "displayOffset": 0.5}},
+    {"name": "curve", "type": "string",
+     "x": {"format": "table", "columns": ["input", "output"]}}
+  ]
+}

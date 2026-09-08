@@ -141,8 +141,41 @@ export interface JsonSchemaProp {
   title?: string; description?: string; type: "string" | "integer" | "number" | "boolean";
   default?: unknown; minimum?: number; maximum?: number; maxLength?: number; enum?: string[]; pattern?: string;
   "x-espos-secret"?: boolean; "x-espos-restartRequired"?: boolean; "x-espos-unit"?: string; "x-espos-type"?: string; "x-espos-maxBytes"?: number;
+  // Presentation only. The device stores SI; the UI converts on the way in
+  // and out, so a value shown in degrees is written back in radians.
+  readOnly?: boolean;
+  "x-espos-group"?: string;
+  "x-espos-displayMultiplier"?: number;
+  "x-espos-displayOffset"?: number;
+  "x-espos-format"?: "table";
+  "x-espos-columns"?: string[];
 }
-export interface JsonSchemaNs { title?: string; description?: string; "x-espos-version"?: number; properties: Record<string, JsonSchemaProp> }
+export interface JsonSchemaNs {
+  title?: string; description?: string; "x-espos-version"?: number;
+  properties: Record<string, JsonSchemaProp>;
+  // true for a namespace a graph node registered at run time rather than one
+  // a build-time descriptor declared.
+  "x-espos-runtime"?: boolean;
+}
+
+// display = stored * multiplier + offset, and the exact inverse on write.
+// A field that declares neither is untouched, so the identity path costs
+// nothing and cannot introduce rounding.
+export function toDisplay(p: JsonSchemaProp, v: unknown): unknown {
+  const m = p["x-espos-displayMultiplier"] ?? 1;
+  const o = p["x-espos-displayOffset"] ?? 0;
+  if (typeof v !== "number" || (m === 1 && o === 0)) return v;
+  return v * m + o;
+}
+export function fromDisplay(p: JsonSchemaProp, v: unknown): unknown {
+  const m = p["x-espos-displayMultiplier"] ?? 1;
+  const o = p["x-espos-displayOffset"] ?? 0;
+  if (typeof v !== "number" || (m === 1 && o === 0)) return v;
+  const stored = (v - o) / m;
+  // An integer key must stay an integer after the round trip, or the device
+  // rejects the document it just served.
+  return p.type === "integer" ? Math.round(stored) : stored;
+}
 export interface ConfigSchema { properties: Record<string, JsonSchemaNs> }
 export interface PutResult { changed: string[]; restart_required: boolean }
 

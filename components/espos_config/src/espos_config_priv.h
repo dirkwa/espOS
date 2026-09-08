@@ -50,6 +50,20 @@ void espos_config_lock(void);
 void espos_config_unlock(void);
 bool espos_config_is_inited(void);
 
+/* Iteration over both descriptor tables, static first then runtime, so
+ * export/import/schema see one flat list. `i` past the end returns NULL, and
+ * the count can change between calls — a caller that needs a stable view
+ * holds espos_config_lock() across the loop and uses the _locked variants. */
+const espos_cfg_ns_t *espos_config_ns_at(size_t i);
+size_t espos_config_ns_total(void);
+/* Same, but the caller already holds the store lock. */
+const espos_cfg_ns_t *espos_config_ns_at_locked(size_t i);
+size_t espos_config_ns_total_locked(void);
+
+/* Register/unregister counter. The schema ETag is derived from it, so a
+ * browser sees a new document the moment a node's settings appear. */
+uint32_t espos_config_generation(void);
+
 /* Read the effective value into caller buffers (used by export). Lock held.
  * For STRING: sbuf must hold key->max_len + 1 bytes. For BLOB: bbuf must hold
  * key->max_len bytes, *blen receives the length. Never fails for declared keys. */

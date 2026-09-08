@@ -227,6 +227,73 @@ class GenTests(unittest.TestCase):
         _, _, _, h2 = self.run_gen(write(self.tmp, "e.json", dict(d, version=2)))
         self.assertNotEqual(etag, re.search(r'ESPOS_CFG_SCHEMA_ETAG "([0-9a-f]{16})"', h2).group(1))
 
+    def test_read_only_and_group(self):
+        d = {"namespace": "d", "version": 1, "keys": [
+            {"name": "serial", "type": "string", "readOnly": True, "group": "Device"},
+            {"name": "plain", "type": "int"},
+        ]}
+        _, schema, c, _ = self.run_gen(write(self.tmp, "d.json", d))
+        ps = schema["properties"]["d"]["properties"]
+        self.assertTrue(ps["serial"]["readOnly"])
+        self.assertEqual(ps["serial"]["x-espos-group"], "Device")
+        self.assertIn("ESPOS_CFG_FLAG_READ_ONLY", c)
+        self.assertIn('.group = "Device"', c)
+        # a key that asks for neither stays exactly as it was before
+        self.assertNotIn("readOnly", ps["plain"])
+        self.assertNotIn("x-espos-group", ps["plain"])
+
+    def test_display_multiplier_and_offset(self):
+        d = {"namespace": "d", "version": 1, "keys": [
+            {"name": "heading", "type": "float", "unit": "rad",
+             "x": {"displayMultiplier": 57.29578}},
+            {"name": "runtime", "type": "int", "unit": "s",
+             "x": {"displayMultiplier": 0.0002777778, "displayOffset": 1.5}},
+        ]}
+        _, schema, c, _ = self.run_gen(write(self.tmp, "d.json", d))
+        ps = schema["properties"]["d"]["properties"]
+        self.assertAlmostEqual(ps["heading"]["x-espos-displayMultiplier"], 57.29578)
+        self.assertNotIn("x-espos-displayOffset", ps["heading"])
+        self.assertAlmostEqual(ps["runtime"]["x-espos-displayOffset"], 1.5)
+        self.assertIn(".display_mul = 57.29578f", c)
+        self.assertIn(".display_off = 1.5f", c)
+
+    def test_table_format(self):
+        d = {"namespace": "d", "version": 1, "keys": [
+            {"name": "curve", "type": "string",
+             "x": {"format": "table", "columns": ["input", "output"]}},
+        ]}
+        _, schema, c, _ = self.run_gen(write(self.tmp, "d.json", d))
+        p = schema["properties"]["d"]["properties"]["curve"]
+        self.assertEqual(p["x-espos-format"], "table")
+        self.assertEqual(p["x-espos-columns"], ["input", "output"])
+        # a table is a string key, so an export stays readable; and its budget
+        # is the whole NVS string, not the 256-byte string default
+        self.assertEqual(p["type"], "string")
+        self.assertEqual(p["maxLength"], 3999)
+        self.assertEqual(p["default"], "[]")
+        self.assertIn('s_cols_d_curve[] = { "input", "output" }', c)
+        self.assertIn(".table_column_count = 2", c)
+
+    def test_rejects_display(self):
+        bad = [
+            (dict(BASE, keys=[{"name": "k", "type": "int", "readOnly": 1}]), "readOnly"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "secret": True, "readOnly": True}]), "readOnly"),
+            (dict(BASE, keys=[{"name": "k", "type": "int", "group": "x" * 25}]), "group"),
+            (dict(BASE, keys=[{"name": "k", "type": "int", "x": []}]), "'x' must be an object"),
+            (dict(BASE, keys=[{"name": "k", "type": "int", "x": {"nope": 1}}]), "unknown 'x' field"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "x": {"displayMultiplier": 2}}]), "int and float"),
+            (dict(BASE, keys=[{"name": "k", "type": "int", "x": {"displayMultiplier": 0}}]), "must not be zero"),
+            (dict(BASE, keys=[{"name": "k", "type": "int", "x": {"format": "table", "columns": ["a"]}}]), "string key"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "x": {"format": "grid"}}]), "table"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "x": {"format": "table"}}]), "columns"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "x": {"format": "table", "columns": ["a", "a"]}}]), "duplicates"),
+            (dict(BASE, keys=[{"name": "k", "type": "string", "x": {"columns": ["a"]}}]), "needs 'x.format'"),
+        ]
+        for i, (d, frag) in enumerate(bad):
+            with self.assertRaises(g.DescriptorError, msg=repr(d)) as cm:
+                self.run_gen(write(self.tmp, f"bad{i}.json", d))
+            self.assertIn(frag, str(cm.exception), repr(d))
+
     def test_cli_semicolon_list(self):
         a = write(self.tmp, "a.json", BASE)
         b = write(self.tmp, "b.json", dict(BASE, namespace="u"))
