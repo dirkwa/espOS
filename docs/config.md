@@ -166,8 +166,8 @@ that moves on every register and unregister).
 
 ### NVS capacity
 
-The `nvs` partition is 24K in every `partitions/*.csv` — six 4096-byte pages,
-126 entries of 32 bytes each. A realistic graph of **8 nodes with 3 parameters
+The `nvs` partition is 48K in every `partitions/*.csv` — twelve 4096-byte
+pages, 126 entries of 32 bytes each. A realistic graph of **8 nodes with 3 parameters
 each plus one 250-point curve table** costs, measured by
 `test/host/espos_config_test` ("a realistic graph's NVS footprint is
 reported"):
@@ -180,10 +180,20 @@ reported"):
 | 250-point curve string (2336 bytes)          | 75      | 2400  |
 | **total**                                    | **116** | **3712** |
 
-That is **one of the six pages**. The built-in namespaces occupy a fraction of
-another. **24K still suffices** and `partitions/*.csv` needs no change; the
-partition would only come under pressure past roughly five such curve tables,
-which is well beyond what a node graph on a 4 MB part would carry.
+That is **one of the twelve pages**, and the built-in namespaces occupy a
+fraction of another.
+
+The partition was 24K through v0.7 and the arithmetic above fits that too, but
+not with much left over. NVS keeps at least one page free to compact into
+(`ESP_ERR_NVS_NO_FREE_PAGES` otherwise), and a rewritten key consumes fresh
+entries until the old page is reclaimed, so six pages meant five usable and a
+graph of this size already reached three of them. Past roughly five curve
+tables a device would have started failing writes it had accepted the day
+before.
+
+The size is fixed when the table is flashed: growing it later needs a USB
+flash, not an OTA. It was doubled in the release that introduced editable
+tables rather than after devices were carrying them.
 
 ## Migrations
 
