@@ -24,6 +24,17 @@ threading, boot order, the server's REST tree, TLS.
 | `tls_server` | Advanced | https/wss to the server (`CONFIG_ESPOS_SK_TLS`) | `ssl_connection` | `components/espos_sk/examples/tls_server` |
 | `ble_gateway` | Advanced | a BLE→Signal K gateway: the whole firmware is `espos_start(NULL)`, the configuration is the content | — (SensESP has no equivalent) | `components/espos_ble/examples/ble_gateway` |
 
+The three below are the same ideas as a **data-flow graph**, in C++. Nothing
+needs them — a firmware is free to stay with the C examples above, which is
+what the graph is sugar over — but each replaces a task, a queue or a
+hand-written loop with a line of wiring.
+
+| Example | Level | What it shows | Replaces (SensESP) | Path |
+|---|---|---|---|---|
+| `sensor_graph` | Newbie | the whole of a sensor firmware as four lines of wiring | `analog_input` as a graph | `components/espos_flow/examples/sensor_graph` |
+| `dusk_relay` | Newbie | a value from the server through a hysteresis to a relay, with no queue and no worker task | `listener` + `Hysteresis` | `components/espos_sk_flow/examples/dusk_relay` |
+| `smart_switch` | Advanced | a relay a phone can switch and a button that switches it back: inbound PUT | `smart_switch` with `SKPutRequest` | `components/espos_sk_flow/examples/smart_switch` |
+
 ## How to build one
 
 An example is an ordinary ESP-IDF project. From its directory, with the IDF
