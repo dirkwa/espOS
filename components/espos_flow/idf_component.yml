@@ -34,3 +34,15 @@ files:
     - "examples/*/*.pem"
 dependencies:
   idf: ">=6.0.0,<6.1.0"
+  # Sibling espOS components. override_path makes an in-tree build (and a
+  # firmware that vendors espOS as a submodule) use the checkout next to this
+  # file instead of downloading it from the registry; a copy fetched from the
+  # registry has no such directory and the field is ignored there.
+  #
+  # espos_formulas is required rather than optional: transforms/marine.hpp is
+  # written on top of it and includes it unconditionally, so a consumer that
+  # did not have it failed to compile the moment it included
+  # espos_flow/transforms.hpp. It is header-only and links nothing.
+  signalk-espos/espos_formulas:
+    version: "^0.7.0"
+    override_path: "../espos_formulas"
