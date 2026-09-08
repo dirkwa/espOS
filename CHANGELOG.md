@@ -13,6 +13,20 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Changed
 
+- partitions: the `nvs` partition is 48K, was 24K, in all three shipped tables.
+  A graph node keeps its settings there and a curve table is one string key of
+  up to about 4 KB, so the release that introduced editable tables is the one
+  that has to size the partition for them: the size is fixed when the table is
+  flashed and growing it later needs a USB flash, not an OTA. **Existing
+  devices are not affected by an update** — an OTA writes the app slot, not the
+  partition table, so a device in the field keeps the layout it was flashed
+  with, and espOS resolves every partition by label rather than offset. A
+  device only takes the new table when it is flashed over USB, which erases
+  NVS anyway. **Consumers with their own partition CSV** should make the same
+  change; in both espOS consumers the three small data partitions after `nvs`
+  shifted into space that was already spare before `ota_0`, so no application
+  or data partition moved.
+
 - build: consumers inherit espOS's sdkconfig instead of copying it.
   `espos_project_prologue()` assembles `SDKCONFIG_DEFAULTS` from
   `sdkconfig.d/espos.defaults` (+ `.<target>`), an optional profile
