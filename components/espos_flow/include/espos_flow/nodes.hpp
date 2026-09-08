@@ -418,6 +418,26 @@ class Mailbox : public NodeBase, public Producer<T> {
  public:
   explicit Mailbox(const char* id) : NodeBase(id) {}
 
+  // A post hands the loop a callback holding `this`, and the loop may not
+  // have run it yet when the mailbox dies -- a Mailbox with block scope, or
+  // one owned by a node that is torn down. Running that callback afterwards
+  // reads a destroyed object and emits into a destroyed producer.
+  //
+  // There is no way to withdraw a queued post (the flow mailbox is a plain
+  // FreeRTOS queue of {callback, argument} and cancelling by argument would
+  // have to walk it), so the object marks itself dead instead and deliver()
+  // becomes a no-op. The flag is atomic because the loop runs on another
+  // task, and release/acquire so that a delivery which observes `live_` as
+  // true also sees the ring contents that were published before it.
+  //
+  // This only makes the stale delivery harmless. A Mailbox still must not
+  // outlive its graph, and the usual arrangement -- Graph::make<T>(), owned
+  // for the firmware's lifetime -- never reaches this path at all.
+  ~Mailbox() { live_.store(false, std::memory_order_release); }
+
+  Mailbox(const Mailbox&) = delete;
+  Mailbox& operator=(const Mailbox&) = delete;
+
   // From any task. Never blocks. Returns ESP_ERR_NO_MEM when the ring is
   // full (the loop is behind) or the flow mailbox is, and the value is
   // dropped — see espos_flow.h on why dropping beats blocking.
@@ -490,6 +510,9 @@ class Mailbox : public NodeBase, public Producer<T> {
 
   static void deliver(void* self) {
     Mailbox* m = static_cast<Mailbox*>(self);
+    // The mailbox was destroyed after this delivery was queued: there is
+    // nothing left to emit into, and the object under `self` is gone.
+    if (!m->live_.load(std::memory_order_acquire)) return;
     uint32_t r = m->read_.load(std::memory_order_relaxed);
     // Nothing published yet: a post whose flow-post was accepted before a
     // slower writer committed. The value is not lost — the next delivery
@@ -505,6 +528,7 @@ class Mailbox : public NodeBase, public Producer<T> {
   std::atomic<uint32_t> ready_{0};
   std::atomic<uint32_t> read_{0};
   uint32_t dropped_ = 0;
+  std::atomic<bool> live_{true};
 };
 
 }  // namespace espos::flow

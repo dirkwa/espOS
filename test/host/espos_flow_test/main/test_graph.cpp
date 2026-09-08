@@ -618,8 +618,32 @@ TEST_CASE("graph: a full Mailbox drops rather than blocks", "[graph][mailbox]")
     TEST_ASSERT_EQUAL_FLOAT(1.0f, g_floats[0]);
     TEST_ASSERT_EQUAL_FLOAT(2.0f, g_floats[1]);
 
-    // Drained: it takes posts again.
+    // Drained: it takes posts again. Pump it before leaving the scope --
+    // the mailbox dies at the closing brace, and a delivery still queued
+    // for it would be run by the next test's pump against an object that
+    // no longer exists.
     TEST_ASSERT_EQUAL(ESP_OK, mb.post(4.0f));
+    pump();
+    TEST_ASSERT_EQUAL_UINT32(3, g_floats.size());
+    TEST_ASSERT_EQUAL_FLOAT(4.0f, g_floats[2]);
+}
+
+TEST_CASE("graph: a delivery outliving its Mailbox is dropped, not run",
+          "[graph][mailbox]")
+{
+    pump();
+    reset_log();
+    {
+        Mailbox<float, 2> mb("gone");
+        FloatSink out("out", RecordFloat {});
+        mb >> out;
+        TEST_ASSERT_EQUAL(ESP_OK, mb.post(9.0f));
+        // mb and out die here with that delivery still queued.
+    }
+    // The queued callback still runs; it must notice its mailbox is gone
+    // and emit nothing rather than touch the destroyed object.
+    pump();
+    TEST_ASSERT_EQUAL_UINT32(0, g_floats.size());
 }
 
 TEST_CASE("graph: the ISR path delivers the same way", "[graph][mailbox]")
