@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+
+menu "espOS sensors"
+
+    config ESPOS_SENSORS_ONEWIRE
+        bool "1-Wire and DS18B20 support"
+        default n
+        help
+            Build espos_onewire.h: a 1-Wire bus and the DS18B20
+            temperature sensors on it, over the registry components
+            espressif/ds18b20 and espressif/onewire_bus.
+
+            Off by default because turning it on downloads those two
+            components and links the RMT driver they use. A firmware with
+            no DS18B20 on it should pay for neither.
+
+            The bus needs an external 4.7k pull-up to 3V3; the internal
+            pull-up cannot supply a DS18B20 and the bus reads as empty.
+
+    config ESPOS_SENSORS_MAX_GPIO_NODES
+        int "GPIO change nodes"
+        default 8
+        range 1 32
+        help
+            How many GpioChange nodes can watch pins at once. Each holds
+            the ISR trampoline that posts into the node's mailbox; the
+            table is fixed so an interrupt never walks a list that
+            something else is editing.
+
+endmenu

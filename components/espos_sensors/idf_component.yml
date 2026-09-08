@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_sensors component manifest: registry metadata for signalk-espos/espos_sensors.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "Sensor drivers on the IDF 6 APIs -- ADC, GPIO, PCNT, LEDC, I2C, 1-Wire -- as espos::flow nodes"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_sensors"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/sensors.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - sensors
+  - adc
+  - onewire
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
+## The DS18B20 driver is NOT a dependency here on purpose. The component
+## manager resolves manifests before Kconfig exists, so a dependency listed
+## above is downloaded by every firmware that uses espos_sensors, including
+## the majority with no 1-Wire sensor on them.
+##
+## A firmware that wants espos_onewire.h adds the driver to ITS OWN manifest
+## and turns the option on -- two lines, documented in docs/sensors.md:
+##
+##   dependencies:
+##     espressif/ds18b20: "^0.3.1"
