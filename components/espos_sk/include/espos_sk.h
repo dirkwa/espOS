@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "espos_sk_token_sm.h"
 
@@ -113,7 +114,11 @@ esp_err_t espos_sk_notify(const char *key, espos_sk_alert_t state, const char *m
  * Reconciled on every (re)connect: GET the server's meta, PUT only if it
  * is empty — server-side edits win. Up to ESPOS_SK_MAX_META entries.
  */
-#define ESPOS_SK_MAX_META 16
+/* The compile-time cap. CONFIG_ESPOS_SK_MAX_META tunes the table the
+ * implementation actually allocates; this is the number the API promises and
+ * stays a literal, because a public header that reads a CONFIG_ token gives
+ * two firmwares built from one header different ABIs. */
+#define ESPOS_SK_MAX_META 32
 esp_err_t espos_sk_declare_meta(const char *path, const char *meta_json, uint32_t period_ms);
 
 /* ------------------------------------------------------- inbound (M7) */
@@ -149,6 +154,72 @@ esp_err_t espos_sk_put(const char *path, const char *value_json, espos_sk_put_cb
  * server should ingest as-is). ESP_ERR_INVALID_STATE when not connected. */
 esp_err_t espos_sk_send_raw(const char *json);
 
+/* -------------------------------------------------- inbound PUT (control) */
+
+/**
+ * Handle a PUT the SERVER sends to this device: how a phone operates a
+ * switch. The counterpart of espos_sk_put(), which goes the other way.
+ *
+ * The server only routes a PUT to a device it has seen publish that path,
+ * so a controllable path must be published at least once (any
+ * espos_sk_publish_*) before a request can arrive -- signalk-server keys
+ * its route on the (path, $source) pairs it has observed on this
+ * connection.
+ *
+ * `value_json` is the requested value as JSON text ("true", "0.5",
+ * "\"auto\"", "null"). Return:
+ *   ESP_OK              applied -- answered COMPLETED 200,
+ *   ESP_ERR_INVALID_ARG the value made no sense -- COMPLETED 400,
+ *   anything else       COMPLETED 502.
+ * Answer later instead by returning ESPOS_SK_PUT_PENDING and calling
+ * espos_sk_put_respond() when the work is done; the server waits 60 s.
+ *
+ * cb runs on the stream task: copy what you need, do not block, and do not
+ * call back into espos_sk_* calls that wait on the stream. Publishing the
+ * new value is the normal thing to do and is safe (it never blocks).
+ *
+ * A path with no handler is answered COMPLETED 405, which is what
+ * signalk-server itself replies for an unhandled path (src/put.ts) and what
+ * a client expects.
+ */
+typedef esp_err_t (*espos_sk_put_handler_t)(const char *path, const char *value_json, void *arg);
+
+/** Returned by a handler that will answer later via espos_sk_put_respond(). */
+#define ESPOS_SK_PUT_PENDING 1
+
+#define ESPOS_SK_MAX_PUT_HANDLERS 16
+esp_err_t espos_sk_put_handler_register(const char *path, espos_sk_put_handler_t cb, void *arg);
+esp_err_t espos_sk_put_handler_unregister(const char *path);
+
+/**
+ * Answer a PUT request. Only needed after a handler returned
+ * ESPOS_SK_PUT_PENDING -- every other outcome is answered automatically.
+ *
+ * `state` is "COMPLETED" or "PENDING": signalk-server accepts nothing else
+ * on this path (src/interfaces/ws.ts, isWsRequestReply) and silently drops
+ * a reply carrying anything else, which reads as a request that timed out
+ * 60 s later. A failure is COMPLETED with a 4xx/5xx statusCode, not a
+ * "FAILED" state.
+ *
+ * Thread-safe; may be called from any task. ESP_ERR_INVALID_STATE when the
+ * stream is not connected.
+ */
+esp_err_t espos_sk_put_respond(const char *request_id, const char *state, int status_code, const char *message);
+
+/**
+ * Send everything buffered and wait until the stream has drained, up to
+ * timeout_ms. The prerequisite for deep sleep: a delta published a
+ * millisecond before esp_deep_sleep_start() is otherwise still sitting in
+ * the batch buffer when the radio goes down.
+ *
+ * Returns ESP_OK when nothing is left to send, ESP_ERR_TIMEOUT when the
+ * deadline passed with data still pending, ESP_ERR_INVALID_STATE when the
+ * stream is not connected (nothing can drain, so the caller should not
+ * wait). Blocks the calling task; never call it from the stream task or a
+ * subscription callback.
+ */
+esp_err_t espos_sk_flush(uint32_t timeout_ms);
+
 typedef struct {
     bool enabled;
     bool connected;
@@ -166,6 +237,8 @@ typedef struct {
     size_t subs;              /* active subscriptions */
     size_t puts_pending;
     uint32_t puts_sent, puts_failed;
+    uint32_t puts_in;         /* inbound PUT items received from the server */
+    uint32_t puts_rejected;   /* of those, answered 405 (no handler) or 502 */
 } espos_sk_ws_status_t;
 esp_err_t espos_sk_ws_get_status(espos_sk_ws_status_t *out);
 

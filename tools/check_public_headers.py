@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Dirk Wahrheit
 # SPDX-License-Identifier: Apache-2.0
 """
-Check the public headers, components/*/include/**/*.h, against the C ABI rules.
+Check the public headers, components/*/include/**/*.{h,hpp}, against the C ABI rules.
 
 Those headers are the contract a binding is generated from (docs/development.md,
 "Public API rules"): bindgen reads them as they are and follows every #include,
@@ -66,7 +66,8 @@ ALLOWLIST: dict[str, dict[str, str]] = {
 
 # Components whose public headers are C++ interfaces by design; not part of
 # the C ABI until they get C wrappers.
-CPP_ONLY = {"espos_audio", "espos_n2k", "espos_voice"}
+CPP_ONLY = {"espos_audio", "espos_n2k", "espos_voice",
+            "espos_flow", "espos_formulas", "espos_sensors", "espos_sk_flow"}
 
 # The one IDF header every public header may include: esp_err_t is the return
 # type of the whole API.
@@ -129,7 +130,12 @@ def blank_comments(text: str, strings: bool) -> str:
 
 
 def public_headers(root: Path) -> list[Path]:
-    return sorted(p for p in root.glob("components/*/include/**/*.h") if p.is_file())
+    # .hpp as well as .h: the C++ components' headers are public API too, and
+    # globbing only *.h made every one of them invisible to this check rather
+    # than exempt from it -- which is worse, because the summary line then
+    # reported a header count that quietly excluded them.
+    return sorted(p for p in root.glob("components/*/include/**/*.h*")
+                  if p.is_file() and p.suffix in (".h", ".hpp"))
 
 
 def include_name(header: Path, root: Path) -> str:
@@ -224,7 +230,8 @@ def check_header(header: Path, root: Path, public: set[str], rep: Report) -> Non
                 rep.config_tokens_cpp += 1
             rep.emit(rel, lineno, "warning",
                      f"{m.group(0)} in code: Kconfig leaks into the public ABI "
-                     "(new headers: none; existing: remediation backlog)")
+                     "(remediation backlog: replace with a runtime query or a "
+                     "fixed _MAX)")
 
     if not PRAGMA_ONCE_RE.search(code):
         if cpp_only and IFNDEF_GUARD_RE.search(code):

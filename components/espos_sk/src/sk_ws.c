@@ -62,7 +62,7 @@ static struct {
     TaskHandle_t task;
     SemaphoreHandle_t lock;          /* delta engine + meta table + status */
     espos_sk_delta_t *delta;
-    meta_entry_t meta[ESPOS_SK_MAX_META];
+    meta_entry_t meta[ESPOS_SK_META_CAP];
     size_t meta_n;
     bool meta_dirty;                 /* something to reconcile on the live connection */
     volatile bool stop;
@@ -240,7 +240,7 @@ esp_err_t espos_sk_declare_meta(const char *path, const char *meta_json, uint32_
         }
     }
     if (!e) {
-        if (s.meta_n >= ESPOS_SK_MAX_META) {
+        if (s.meta_n >= ESPOS_SK_META_CAP) {
             unlock();
             free(txt);
             return ESP_ERR_NO_MEM;
@@ -261,7 +261,7 @@ esp_err_t espos_sk_declare_meta(const char *path, const char *meta_json, uint32_
  * only if the server has none. Runs on the ws task with a live token. */
 static void reconcile_meta(const espos_sk_server_t *srv, const char *token)
 {
-    for (size_t i = 0; i < ESPOS_SK_MAX_META; i++) {
+    for (size_t i = 0; i < ESPOS_SK_META_CAP; i++) {
         char path[ESPOS_SK_PATH_MAX];
         char *meta = NULL;
         lock();
@@ -927,6 +927,48 @@ static void ws_task(void *arg)
 }
 
 /* ------------------------------------------------------------ status */
+
+esp_err_t espos_sk_flush(uint32_t timeout_ms)
+{
+    if (!s.lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    lock();
+    bool connected = s.st.connected;
+    /* Close the current batch so what was just published becomes a message
+     * the stream task can take, instead of waiting out sk.batch_ms. */
+    if (s.delta && connected) {
+        espos_sk_delta_flush(s.delta, now_ms());
+    }
+    unlock();
+    if (!connected) {
+        /* Nothing can drain while the stream is down, so waiting would only
+         * burn the caller's timeout before it sleeps. */
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Poll rather than signal: the stream task is already looping over the
+     * same queues, and a condition variable here would have to be taken on
+     * its hot path to save a few 10 ms ticks on a call that happens once
+     * before sleeping. */
+    uint32_t deadline = now_ms() + timeout_ms;
+    for (;;) {
+        espos_sk_ws_status_t st;
+        if (espos_sk_ws_get_status(&st) != ESP_OK) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (!st.connected) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (st.pending == 0 && st.buffered == 0) {
+            return ESP_OK;
+        }
+        if ((int32_t)(now_ms() - deadline) >= 0) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
 
 esp_err_t espos_sk_ws_get_status(espos_sk_ws_status_t *out)
 {

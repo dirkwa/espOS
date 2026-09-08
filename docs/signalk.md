@@ -165,8 +165,8 @@ espos_sk_send_raw("{\"context\":\"vessels.self\",\"updates\":[…]}");
   `espos_sk_*` function that could wait on the stream). Frames are
   reassembled up to `CONFIG_ESPOS_SK_RX_FRAME_MAX` (16 KiB); larger ones
   are dropped with a log line.
-* **PUT**: `{"context":"vessels.self","requestId":<uuid4>,"put":{"path",
-  "value"}}`; the response (`state` COMPLETED/FAILED, `statusCode`,
+* **PUT (outbound)**: `{"context":"vessels.self","requestId":<uuid4>,"put":
+  {"path","value"}}`; the response (`state` COMPLETED/FAILED, `statusCode`,
   `message`) is matched by requestId and handed to the callback; no answer
   in 10 s → `"TIMEOUT"`. Up to 8 in flight; `ESP_ERR_INVALID_STATE` when
   the stream is down (nothing is queued across reconnects — a control
@@ -179,11 +179,155 @@ espos_sk_send_raw("{\"context\":\"vessels.self\",\"updates\":[…]}");
   failed}`; REST `POST /api/v1/sk/put {"path","value"}` (202; last
   answer under `GET /api/v1/sk/put`) for scripts.
 * The example app subscribes to `app.watch_path` and logs each update.
+* **PUT (inbound)** — the server operating *this* device — is a separate
+  mechanism with its own handler table; see
+  [Inbound PUT (control)](#inbound-put-control).
 
 Verified 2026-08-18 against signalk-server 2.31 on the ESP32-P4: 586
 updates in ~40 s of `navigation.*` from N2K sources, satellitesInView
 objects of several KiB reassembled, PUT round trip (405 from a server
 without handlers).
+
+## Inbound PUT (control)
+
+Everything above is this device *asking* the server for something. This
+section is the other direction: **the server asking this device to change
+something** — a switch operated from a phone, a setpoint moved from a
+plotter. Without it a device can only ever report.
+
+```c
+static esp_err_t set_bilge(const char *path, const char *value_json, void *arg)
+{
+    if (strcmp(value_json, "true") == 0) { gpio_set_level(RELAY, 1); return ESP_OK; }
+    if (strcmp(value_json, "false") == 0) { gpio_set_level(RELAY, 0); return ESP_OK; }
+    return ESP_ERR_INVALID_ARG;                 /* answered COMPLETED 400 */
+}
+
+espos_sk_put_handler_register("electrical.switches.bilge.state", set_bilge, NULL);
+espos_sk_publish_bool("electrical.switches.bilge.state", false);   /* REQUIRED, see below */
+```
+
+The handler's return value becomes the answer:
+
+| return | answer |
+|---|---|
+| `ESP_OK` | `COMPLETED` 200 |
+| `ESP_ERR_INVALID_ARG` | `COMPLETED` 400 |
+| anything else | `COMPLETED` 502 |
+| `ESPOS_SK_PUT_PENDING` | `PENDING` 202, and you call `espos_sk_put_respond()` later |
+| *no handler for the path* | `COMPLETED` 405 |
+
+### Three things that are easy to get wrong
+
+**The device must publish the path first.** signalk-server routes a PUT to a
+device by the `(path, $source)` pairs it has *seen that connection publish*
+(`processUpdates` in `src/interfaces/ws.ts`). A path this device has never
+published does not exist as a PUT target, and the request is answered 405 by
+the server without ever reaching the device. Publish the current state once at
+boot, and again on every change.
+
+**`put` arrives as an ARRAY.** The server writes
+`{"requestId","context","put":[{"path","value"}]}` — an array, even for one
+path. That is not the shape a client sends outbound (`espos_sk_put` writes a
+single object), and a parser that only understands the object form silently
+sees no requests at all. espOS accepts both.
+
+**The reply state must be `COMPLETED` or `PENDING`.** signalk-server's
+`isWsRequestReply()` accepts a `state` of exactly `COMPLETED`, `PENDING` or
+`null` and **silently ignores** anything else. A reply with
+`"state":"FAILED"` — the obvious spelling for a failure — is dropped without
+a word, and the client then waits out the server's full 60-second timeout. A
+failure is `COMPLETED` with a 4xx/5xx `statusCode`.
+
+espOS answers **every** request, including one whose path has no handler and
+one whose items are unusable. Silence is the worst answer: it costs the
+client 60 seconds and tells it nothing.
+
+### Flushing before sleep
+
+```c
+espos_sk_flush(2000);      /* send what is buffered, then deep-sleep */
+```
+
+Deltas are batched (`sk.batch_ms`), so a value published a millisecond before
+`esp_deep_sleep_start()` is still sitting in the buffer when the radio goes
+down. `espos_sk_flush()` closes the batch and waits — `ESP_OK` when nothing is
+left, `ESP_ERR_TIMEOUT` if the deadline passed, `ESP_ERR_INVALID_STATE` when
+the stream is down and nothing *can* drain. Never call it from the stream task
+or a subscription callback.
+
+## The graph nodes (`espos_sk_flow`)
+
+`espos_sk_flow` is the Signal K end of the [data-flow graph](flow.md) — the
+same calls as above, as nodes.
+
+```cmake
+idf_component_register(SRCS main.cpp PRIV_REQUIRES espos_core espos_flow espos_sk_flow)
+```
+
+| Node | Direction |
+|---|---|
+| `sk::Output<T>(path[, Meta])` | publish |
+| `sk::Listener<T>(path)` | receive a value from the server |
+| `sk::PutHandler<T>(path)` | let the server change something here |
+| `sk::PutRequest<T>(path)` | ask the server to change something |
+| `sk::Notify(key, message)` | raise/clear a device condition |
+| `sk::NetRssi`, `sk::IpAddress` | what the network says about itself |
+
+### Metadata is impossible to get wrong
+
+**Never send metadata for a path in the Signal K specification.** The server
+already knows that `navigation.speedOverGround` is metres per second; a device
+that declares it anyway can only get it wrong, and then every dashboard on the
+boat is wrong.
+
+So `Output` has **no units argument**. A units string cannot be passed without
+constructing a `Meta`, and constructing a `Meta` is the statement "this path
+is mine, nobody else knows what it means" — which is exactly when metadata is
+correct:
+
+```cpp
+sk::Output<float> sog("navigation.speedOverGround");             // spec: no meta, ever
+sk::Output<float> pv("sensors.solar.0.voltage", sk::Meta{"V"});  // ours: meta declared
+```
+
+The rule is not documented and hoped for; it is unspeakable.
+
+`Output<std::optional<T>>` publishes JSON `null` when disengaged — "this
+sensor has nothing right now", which is different from zero and different
+from stale.
+
+### Receiving
+
+`Listener` and `PutHandler` receive on the **stream task** and neither emits
+there: both post into a `Mailbox`, so the emit happens on the flow task like
+every other node. That is why you wire from `.out()`:
+
+```cpp
+auto& depth = g.make<sk::Listener<float>>("environment.depth.belowTransducer");
+depth.out() >> shallow_alarm;
+```
+
+### A switch a phone can operate
+
+```cpp
+auto& req   = g.make<sk::PutHandler<bool>>("electrical.switches.bilge.state");
+auto& relay = g.make<espos::sensors::GpioOutput>("relay", 22);
+auto& state = g.make<sk::Output<bool>>("electrical.switches.bilge.state");
+
+req.out() >> relay >> state;     // PUT -> pin -> publish what the pin did
+```
+
+Publishing at the end of the chain is what registers this device as the
+path's source, without which the server has nowhere to route the PUT. It also
+publishes what the pin *actually did* rather than what was asked for — they
+differ when the pin failed to open, which is exactly when a dashboard must not
+lie.
+
+`PutHandler` answers 200 as soon as the value is accepted into the mailbox,
+not once the chain has run: the alternative is to block the stream task until
+the flow task finishes, and one slow consumer would then stall every other
+frame on the connection.
 
 ## HTTP requests to the server
 

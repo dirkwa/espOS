@@ -173,7 +173,12 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddNumberToObject(j, "min_free_heap", esp_get_minimum_free_heap_size());
     cJSON_AddStringToObject(j, "reset_reason", reset_reason_str(esp_reset_reason()));
     cJSON_AddBoolToObject(j, "config_storage_reset", espos_config_storage_was_reset());
-    cJSON_AddStringToObject(j, "schema_etag", espos_cfg_schema_etag);
+    /* The merged tag, not the compiled one: a node that registers its settings
+     * at run time changes the schema, and a client comparing this against the
+     * ETag it was served would otherwise never refetch. */
+    char schema_etag[ESPOS_CFG_ETAG_MAX];
+    espos_config_schema_etag(schema_etag);
+    cJSON_AddStringToObject(j, "schema_etag", schema_etag);
     cJSON_AddBoolToObject(j, "ui_storage", espos_httpd_static_mounted());
     add_time(j);
     add_last_reset(j);

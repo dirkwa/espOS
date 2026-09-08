@@ -135,6 +135,89 @@ bool espos_config_is_set(const char *ns, const char *key);
 const espos_cfg_ns_t *espos_config_find_ns(const char *ns);
 const espos_cfg_key_t *espos_config_find_key(const espos_cfg_ns_t *ns, const char *key);
 
+/* ---------------------------------------------------- runtime namespaces */
+
+/**
+ * Add a namespace that no build-time descriptor declares.
+ *
+ * A graph node built at run time — Linear("cal", …) with its own multiplier
+ * and offset — has no CMake of its own to register a descriptor from, yet its
+ * settings must be editable in the web UI and survive a reboot like any
+ * other. It builds an espos_cfg_ns_t (typically a static ParamSet inside the
+ * node class) and registers it here; from that moment the namespace behaves
+ * exactly like a compiled one: typed access, validation, export/import, and a
+ * section in the JSON Schema.
+ *
+ * Ownership: the descriptor, its key array, every string it points at and any
+ * enum/column table must outlive the registration. Nothing is copied — a
+ * table on the stack, or one freed while registered, is a use-after-free.
+ * Static storage in the registering node is the intended shape.
+ *
+ * `ns->name` must be a valid NVS namespace: 1..15 characters of
+ * [a-z0-9_], not already taken by a static or runtime namespace. Use
+ * espos_config_flow_ns_name() to build one from a node id.
+ *
+ * Calling this after espos_config_init() is the normal case (the graph is
+ * built once the store is up); before init works too, and the namespace is
+ * opened along with the static ones. Every failure is logged with the
+ * offending name and raises the `flowConfig` health condition, because a node
+ * whose settings silently do not appear is far worse than a loud error.
+ *
+ * @return ESP_OK,
+ *         ESP_ERR_INVALID_ARG   malformed descriptor or name,
+ *         ESP_ERR_INVALID_STATE name already registered,
+ *         ESP_ERR_NO_MEM        table full (CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS),
+ *         or a backend error if the namespace could not be opened.
+ * Thread-safe; may be called from any task.
+ */
+esp_err_t espos_config_register_ns(const espos_cfg_ns_t *ns);
+
+/**
+ * Remove a runtime namespace. Stored values are left in NVS untouched (the
+ * node may come back on the next boot) — use espos_config_reset_ns() first to
+ * discard them. Only namespaces added by espos_config_register_ns() can be
+ * removed; a compiled one returns ESP_ERR_INVALID_ARG.
+ *
+ * The caller must ensure no other task is reading that namespace: after this
+ * returns, the descriptor memory may be freed.
+ */
+esp_err_t espos_config_unregister_ns(const char *ns);
+
+/** How many runtime namespaces are registered right now. */
+size_t espos_config_runtime_ns_count(void);
+
+/**
+ * Build the NVS namespace name for a flow node id: "f_" + id.
+ * @param id   node id, 1..ESPOS_CFG_RUNTIME_ID_MAX characters of [a-z0-9_]
+ *             (the NVS 15-character limit minus the prefix).
+ * @param out  receives the name; needs ESPOS_CFG_NS_NAME_MAX + 1 bytes.
+ * @return ESP_ERR_INVALID_ARG if the id is empty, too long, or has a
+ *         character NVS/the schema cannot carry.
+ */
+esp_err_t espos_config_flow_ns_name(const char *id, char *out, size_t out_size);
+
+/* -------------------------------------------------------------- schema */
+
+/**
+ * The JSON Schema of the whole configuration document, static namespaces and
+ * runtime ones merged.
+ *
+ * With no runtime namespace registered this is byte-for-byte the compiled
+ * espos_cfg_schema_json and the compiled ETag, so the common case costs one
+ * strdup and nothing else changes downstream.
+ *
+ * @param out   receives a malloc'ed NUL-terminated document; caller frees.
+ * @param etag  receives the ETag text (no quotes), or NULL if not wanted.
+ *              Needs ESPOS_CFG_ETAG_MAX bytes. It changes whenever a
+ *              namespace is registered or unregistered, so a browser holding
+ *              the old schema revalidates instead of rendering a stale form.
+ */
+#define ESPOS_CFG_ETAG_MAX 24
+esp_err_t espos_config_schema_json(char **out, char etag[ESPOS_CFG_ETAG_MAX]);
+
+/** Just the current ETag text (no quotes), for callers that only compare. */
+void espos_config_schema_etag(char etag[ESPOS_CFG_ETAG_MAX]);
+
 /* -------------------------------------------------------------- change feed */
 
 typedef void (*espos_config_change_cb_t)(const char *ns, const char *key, void *arg);

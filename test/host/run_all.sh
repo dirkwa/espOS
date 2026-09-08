@@ -23,6 +23,25 @@ set -uo pipefail
 cd "$(dirname "$0")"
 here=$(pwd)
 
+# One run at a time, per user. Two concurrent runs share every project's
+# build/ directory: they rebuild and delete each other's ELFs, and the losing
+# run reports failures and errors that have nothing to do with the code (it
+# has already happened twice in this repo, once as "6 failures + 16 errors"
+# that were entirely a second run removing the harness binary mid-test).
+# This is a separate lock from scripts/build.sh's: a host run and a firmware
+# build touch different trees and need not exclude each other.
+_lock_dir="${ESPOS_BUILD_LOCK_DIR:-$HOME/.cache}"
+mkdir -p "$_lock_dir"
+exec 8>"$_lock_dir/.espos-host-tests-$(id -u).lock"
+if ! flock -n 8; then
+    if [ "${HOST_TESTS_NOWAIT:-0}" = "1" ]; then
+        echo "run_all.sh: another host-test run is in progress (HOST_TESTS_NOWAIT=1) -- aborting" >&2
+        exit 1
+    fi
+    echo "==> waiting for the running host-test suite to finish..." >&2
+    flock 8
+fi
+
 if [ "$#" -gt 0 ]; then
     projects=("$@")
 else

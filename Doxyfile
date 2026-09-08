@@ -28,13 +28,13 @@ PROJECT_BRIEF          = "The public headers under components/*/include"
 # scripts/check_doxyfile_inputs.sh keeps them level with the tree.
 OUTPUT_DIRECTORY       = build/doxygen
 
-INPUT                  = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sk/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
-FILE_PATTERNS          = *.h
+INPUT                  = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_flow/include components/espos_formulas/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sensors/include components/espos_sk/include components/espos_sk_flow/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
+FILE_PATTERNS          = *.h *.hpp
 RECURSIVE              = YES
 # Paths read `espos_core/include/espos.h`; include lines read the way a
 # consumer writes them (`espos.h`, `espos_n2k/can_frame.h`).
 STRIP_FROM_PATH        = components
-STRIP_FROM_INC_PATH    = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sk/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
+STRIP_FROM_INC_PATH    = components/espos_audio/include components/espos_ble/include components/espos_config/include components/espos_core/include components/espos_event/include components/espos_flow/include components/espos_formulas/include components/espos_health/include components/espos_httpd/include components/espos_log/include components/espos_n2k/include components/espos_net/include components/espos_ota/include components/espos_sensors/include components/espos_sk/include components/espos_sk_flow/include components/espos_time/include components/espos_voice/include components/espos_wifi/include
 
 # C first: the switch shapes names and the index (no "class" wording for a
 # struct). The C++ headers are still parsed as C++.
@@ -61,6 +61,14 @@ WARN_NO_PARAMDOC       = NO
 # Not an error, so a stray `<tag>` in prose cannot block a docs deploy.
 WARN_AS_ERROR          = NO
 QUIET                  = YES
+
+# `detail` namespaces are the implementation of a public header, not its API:
+# nobody calls espos::sk::detail::from_json. Excluding them also sidesteps a
+# mkdoxy defect -- it builds an in-page anchor out of a template argument, so a
+# specialisation on std::string yields `#function-from_json-std::string`, an
+# anchor the colons make it unable to find again, which fails the strict docs
+# build on generated output no one can edit.
+EXCLUDE_SYMBOLS        = *::detail *::detail::*
 
 # Conditionals are evaluated so `#pragma once` and the extern "C" guard are
 # handled; nothing is expanded, so CONFIG_ tokens show as written. With

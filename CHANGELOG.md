@@ -78,6 +78,74 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Added
 
+- `espos_flow`: the data-flow runtime — one loop task, a wrap-safe timer wheel,
+  a cross-task mailbox, and a typed producer/consumer graph over them. Nodes are
+  wired with `connect_to()` or `>>`, cost no allocation after start-up and need
+  no locks, because everything in a graph runs on one task and everything else
+  enters through a `Mailbox`. `Poll`, `Lambda`, `Join`, `Sink`, `Value`,
+  `Constant`, `Ticker` and `Mailbox`; `Graph::make<T>()` or value semantics for
+  ownership. A firmware that does not require the component links zero bytes of
+  it (measured: the minimal example is byte-identical). See docs/flow.md.
+- `espos_formulas`: the marine arithmetic as a header-only component with no
+  dependencies at all — SI conversions for every unit the Signal K spec uses,
+  curve interpolation, dew point (Arden Buck), heat index (the full NOAA
+  regression with both adjustments), air density, resistive dividers, tank
+  level and battery state of charge. It is separate from `espos_flow` on
+  purpose: the formulas are testable, and tested, without a graph, a task or a
+  chip. See docs/transforms.md.
+- sk: **inbound PUT** — a Signal K client can operate a switch on an espOS
+  device, which was simply not possible before: the stream parser never looked
+  at `put`. `espos_sk_put_handler_register()` / `_unregister()` answer a request
+  automatically (200, 400 for an unusable value, 502, and 405 for a path with no
+  handler), or return `ESPOS_SK_PUT_PENDING` and answer later with
+  `espos_sk_put_respond()`. Both wire forms are accepted: the **array** form
+  signalk-server actually sends and the single-object form a client sends.
+  Every request is answered, because silence costs the client a 60-second
+  timeout. Note the server routes a PUT on `(path, $source)` it has *observed*,
+  so a device must publish a path before it can be written to.
+- sk: `espos_sk_flush(timeout_ms)` drains buffered deltas — the prerequisite for
+  sleeping without losing the last samples. `ESPOS_SK_MAX_META` 16 → 32, now
+  `CONFIG_ESPOS_SK_MAX_META`. `/api/v1/sk/status` gains `puts_in` and
+  `puts_rejected`.
+- `espos_sensors`: the drivers a sensor firmware starts from, on IDF 6 APIs and
+  as flow nodes — calibrated ADC reads in volts, GPIO in and out, pulse counting
+  over PCNT **with a GPIO-interrupt fallback on SoCs that have no PCNT unit**
+  (the ESP32-C3), LEDC PWM, a shared I2C bus for breakouts, and optional
+  1-Wire/DS18B20 (`CONFIG_ESPOS_SENSORS_ONEWIRE`, off by default and costing
+  nothing when off). See docs/sensors.md.
+- `espos_sk_flow`: the Signal K nodes for the graph — `Output`, `Listener`,
+  `PutHandler`, `PutRequest`, `Notify`, `NetRssi`, `IpAddress`. `Output` takes
+  metadata only together with a custom path, so the rule that spec paths never
+  carry meta cannot be broken by accident. The `smart_switch` example is the one
+  that could not be written before inbound PUT existed.
+- `espos_flow` transforms: 33 nodes covering what a SensESP firmware wires
+  daily — `Linear`, `MovingAverage`, `Median`, `Ema`, `ChangeFilter`,
+  `Debounce`, `Throttle`, `Threshold`, `Hysteresis`, `Curve`, `Frequency`,
+  `RunHours`, `Expire`, `Repeat`, `Clamp`, `Deadband`, `RateOfChange`,
+  `MinMaxHold`, `Latch`, `Counter`, `WrapAngle`, `Convert` and the rest. A
+  node's constant can be bound to a config namespace with `Param`, which makes
+  it editable in the web UI, and the time-stamping transforms use `espos_time`
+  when the firmware builds it; both are optional dependencies and the headers
+  compile without them.
+- Config namespaces registered at run time: `espos_config_register_ns()` /
+  `espos_config_unregister_ns()` let a graph node publish its own settings
+  (multiplier, offset, curve table) to the web UI and NVS without a
+  build-time descriptor. A node id of at most 12 characters becomes the NVS
+  namespace `f_<id>`; a duplicate, over-long or malformed one fails loudly
+  and raises the health condition `flowConfig`.
+- `espos_config_schema_json()` serves the compiled schema merged with the
+  runtime namespaces, under an ETag that moves on every register and
+  unregister; `GET /api/v1/config/schema` and `/system/info`'s `schema_etag`
+  both use it.
+- Descriptor fields `readOnly`, `group` and the presentation block `x`
+  (`displayMultiplier`, `displayOffset`, `format: "table"` with `columns`),
+  accepted for build-time descriptors as well. Tables are string keys holding
+  JSON, so an export stays readable and the UI edits rows without base64.
+- Web UI: groups render as tabs, read-only fields are shown but not editable,
+  display multiplier and offset are applied on read and inverted on write,
+  and table keys get a row editor.
+- `CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS` (default 32).
+
 - time: new `espos_time` component — the device's wall clock, learned from
   SNTP, a manual `PUT /api/v1/time`, `navigation.datetime` on the SignalK
   stream, or an instant carried through a deep sleep in RTC memory, ranked in
@@ -293,6 +361,41 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 - sk: a change of scheme was accepted by the configuration and then silently
   dropped by the token machine, whose "same server" test compared only host
   and port. A device switched between http and https kept using the old one.
+
+- formulas: curve interpolation no longer extrapolates below its first sample.
+  SensESP's `CurveInterpolator` divides by the gap between two points that do
+  not exist for an input under the table's first x, publishing NaN to the
+  server for what is usually a cold sender at rest (SensESP #1005); a
+  duplicated x in the table is a second 0/0. Out-of-range inputs now clamp to
+  the nearest sample and a duplicated x is rejected when the table is set.
+- formulas: dew point uses the Arden Buck equation and is defined at 0 %
+  humidity, where the Magnus form SensESP uses returns `-inf`; heat index
+  applies both NOAA adjustments (low humidity at high temperature, high
+  humidity in the mid 80s °F), which SensESP omits, and is only evaluated
+  where the regression is valid.
+- formulas: a resistive divider with an open circuit — a disconnected sender,
+  the single most common failure on a boat — returns no value instead of
+  infinity. SensESP publishes the infinity, and a tank gauge downstream reads
+  it as full.
+- flow: `ChangeFilter` no longer lets a value through *because* it rejected
+  too many. SensESP's `max_skips` forces the next sample out after N
+  consecutive rejections, so a stuck or glitching sender defeats exactly the
+  filter meant to suppress it; a rejected value is now simply not emitted.
+- test: `tools/check_public_headers.py` reads `.hpp` as well as `.h`. It globbed
+  only `*.h`, so the C++ components' public headers were not exempt from the C
+  ABI rules but **invisible** to the check, and the summary line reported a
+  header count that silently excluded them — 48 where the tree has 67. The four
+  new C++ components are declared `CPP_ONLY` like the three that were already
+  there, which surfaces three Kconfig-in-a-public-header warnings that had been
+  hidden.
+- test: `test/host/run_all.sh` takes a per-user lock, so two concurrent runs
+  can no longer rebuild and delete each other's test binaries and report
+  failures that are not in the code. It is a different lock from the firmware
+  build's — a host run and a build need not exclude each other.
+- test: the REST harness no longer assumes the last `/signalk` request in the
+  mock server's log is its own. The firmware probes that path itself to settle
+  `sk.scheme`, deliberately without a token, so the Bearer-header assertion
+  could read the probe instead of the request under test.
 
 - config: `espos_gen_config.py` emits valid empty tables and an empty schema
   when no descriptor is registered (was a build error for a consumer that

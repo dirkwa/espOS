@@ -49,8 +49,44 @@ and NVS length limits (15 chars for namespace and key) fail the build.
 | `secret`           | string, blob     | redacted on export, sentinel ignored on import                |
 | `restart_required` | all              | surfaces in the PUT response and the schema                   |
 | `unit`             | all              | display hint (`x-espos-unit`)                                 |
+| `readOnly`         | all              | shown, never editable; a write returns `ESP_ERR_NOT_SUPPORTED` and an import ignores the member |
+| `group`            | all              | UI tab within the namespace (`x-espos-group`), ≤ 24 chars     |
+| `x`                | see below        | presentation only: `displayMultiplier`, `displayOffset`, `format`, `columns` |
 
 Key name `config_version` is reserved.
+
+### Presentation: the `x` block
+
+The device stores SI — radians, seconds, metres — because SignalK requires
+it. Nobody trims an anchor rode in radians, so the *UI* converts:
+
+```
+display = stored * displayMultiplier + displayOffset
+```
+
+and writes back the exact inverse. Both fields are numbers, int and float
+keys only, and a multiplier of zero is rejected (it is not invertible).
+Omitting the block leaves the identity transform, so every descriptor written
+before this existed renders unchanged.
+
+```json
+{"name": "heading", "type": "float", "unit": "rad",
+ "x": {"displayMultiplier": 57.29578}}          // radians stored, degrees typed
+{"name": "runtime", "type": "int", "unit": "s",
+ "x": {"displayMultiplier": 0.000277778}}       // seconds stored, hours shown
+```
+
+`"format": "table"` marks a **string** key whose value is a JSON array of
+rows; `columns` names the members, in order, and the UI renders a row editor.
+It is a string and not a blob on purpose: an export stays readable and
+diffable, and the editor never round-trips through base64. Such a key
+defaults to `"[]"` and to the full NVS string budget of 3999 bytes — roughly
+250 numeric points.
+
+```json
+{"name": "curve", "type": "string",
+ "x": {"format": "table", "columns": ["input", "output"]}}
+```
 
 ## Runtime API (`espos_config.h`)
 
@@ -69,9 +105,85 @@ Key name `config_version` is reserved.
   writing anything.
 * `espos_config_factory_reset()` erases the partition and re-initialises;
   the caller reboots.
+* `espos_config_register_ns()` / `espos_config_unregister_ns()` add and remove
+  namespaces no build-time descriptor declares (see below), and
+  `espos_config_schema_json()` serves the merged schema.
 
 Thread safety: one internal mutex around all storage access. Migrations run
 inside `espos_config_init()` before anything else can touch the store.
+
+## Namespaces registered at run time
+
+A graph node built at run time — `Linear("cal", …)` with its own multiplier
+and offset — has no CMakeLists of its own to register a descriptor from, yet
+its settings must appear in the web UI, validate, and survive a reboot like
+any other. It builds an `espos_cfg_ns_t` (a static `ParamSet` inside the node)
+and hands it over:
+
+```c
+static const espos_cfg_key_t cal_keys[] = {
+    { .name = "mul", .title = "Multiplier", .description = "", .unit = "",
+      .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 1.0f },
+    { .name = "off", .title = "Offset", .description = "", .unit = "",
+      .type = ESPOS_CFG_TYPE_FLOAT, .def.f = 0.0f },
+};
+static const espos_cfg_ns_t cal_ns = {
+    .name = "f_cal", .title = "Calibration", .version = 1,
+    .keys = cal_keys, .key_count = 2, .description = "Linear node cal",
+};
+espos_config_register_ns(&cal_ns);
+```
+
+From that moment the namespace is indistinguishable from a compiled one:
+typed getters and setters, validation, `espos_config_export_json` /
+`espos_config_import_json`, and a section in the schema served at
+`GET /api/v1/config/schema` (marked `"x-espos-runtime": true` so the UI can
+tell them apart).
+
+* **Ownership.** The descriptor is *borrowed*, never copied — it, its key
+  array and every string it points at must outlive the registration. Static
+  storage in the node is the intended shape.
+* **Naming.** NVS caps a namespace at 15 characters, so a node id of at most
+  12 becomes `f_<id>`; `espos_config_flow_ns_name()` builds and checks it.
+* **Failures are loud.** A duplicate name, a name that collides with a
+  built-in, an over-long id, a malformed descriptor or a full table
+  (`CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS`, default 32) all log an error *and*
+  raise the health condition `flowConfig`. A node whose settings silently do
+  not appear looks like a UI bug for as long as nobody reads the log.
+* **Unregistering** removes the section but leaves the stored values in NVS,
+  so a graph rebuilt on the next boot finds its calibration where it was.
+  Call `espos_config_reset_ns()` first to actually discard them. After
+  `espos_config_unregister_ns()` returns, the descriptor memory may be freed —
+  the caller must have stopped every other reader first.
+* Registering before `espos_config_init()` works; the namespace is opened
+  along with the static ones. Registering afterwards is the normal case.
+
+`espos_config_schema_json()` merges the compiled properties with the runtime
+ones. With nothing registered it returns the compiled document byte for byte
+under the compiled ETag, so a cached browser keeps its 304; once a node
+registers, the ETag changes (compiled etag hashed with a generation counter
+that moves on every register and unregister).
+
+### NVS capacity
+
+The `nvs` partition is 24K in every `partitions/*.csv` — six 4096-byte pages,
+126 entries of 32 bytes each. A realistic graph of **8 nodes with 3 parameters
+each plus one 250-point curve table** costs, measured by
+`test/host/espos_config_test` ("a realistic graph's NVS footprint is
+reported"):
+
+| Item                                        | Entries | Bytes |
+|---------------------------------------------|---------|-------|
+| 8 × (mul, off, `config_version`)             | 24      | 768   |
+| curve namespace `config_version`             | 1       | 32    |
+| 8 × label string ("sensor", 7 bytes)         | 16      | 512   |
+| 250-point curve string (2336 bytes)          | 75      | 2400  |
+| **total**                                    | **116** | **3712** |
+
+That is **one of the six pages**. The built-in namespaces occupy a fraction of
+another. **24K still suffices** and `partitions/*.csv` needs no change; the
+partition would only come under pressure past roughly five such curve tables,
+which is well beyond what a node graph on a 4 MB part would carry.
 
 ## Migrations
 

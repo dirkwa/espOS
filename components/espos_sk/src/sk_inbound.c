@@ -43,6 +43,16 @@ typedef struct {
     bool used;
 } put_t;
 
+/* Inbound: a path this device lets the server operate. Exact paths only --
+ * a wildcard handler would have to decide what a PUT to "electrical.*"
+ * means, and every honest answer to that is a per-path handler anyway. */
+typedef struct {
+    char path[ESPOS_SK_PATH_MAX];
+    espos_sk_put_handler_t cb;
+    void *arg;
+    bool used;
+} put_handler_t;
+
 /* Tables are heap-allocated on first use: ~8 KiB of static .bss here was
  * enough to push the ESP32-P4 main task stack out of internal RAM into
  * SPM (esp_hosted eats most of RETENT_RAM before app_main), where the
@@ -56,6 +66,8 @@ static struct {
     char pending_unsub[4][ESPOS_SK_PATH_MAX];
     size_t n_unsub;
     put_t puts[MAX_PUTS];
+    put_handler_t *handlers;   /* ESPOS_SK_MAX_PUT_HANDLERS, allocated on first register */
+    uint32_t puts_in, puts_rejected;
     char *raw[MAX_RAW];        /* outbound frames waiting for the stream task */
     size_t raw_head, raw_n;
     bool connected;
@@ -214,6 +226,91 @@ esp_err_t espos_sk_put(const char *path, const char *value_json, espos_sk_put_cb
     return ESP_OK;
 }
 
+/* ------------------------------------------------- inbound PUT handlers */
+
+esp_err_t espos_sk_put_handler_register(const char *path, espos_sk_put_handler_t cb, void *arg)
+{
+    if (!path || !*path || !cb || strlen(path) >= ESPOS_SK_PATH_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ensure_init();
+    lock();
+    if (!s.handlers) {
+        s.handlers = calloc(ESPOS_SK_MAX_PUT_HANDLERS, sizeof(put_handler_t));
+        if (!s.handlers) {
+            unlock();
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    put_handler_t *free_slot = NULL;
+    for (size_t i = 0; i < ESPOS_SK_MAX_PUT_HANDLERS; i++) {
+        if (s.handlers[i].used && strcmp(s.handlers[i].path, path) == 0) {
+            /* Re-registering a path replaces it rather than adding a second
+             * handler: two handlers for one path have no defined winner, and
+             * the common cause of a repeat is a node being rebuilt. */
+            s.handlers[i].cb = cb;
+            s.handlers[i].arg = arg;
+            unlock();
+            return ESP_OK;
+        }
+        if (!s.handlers[i].used && !free_slot) {
+            free_slot = &s.handlers[i];
+        }
+    }
+    if (!free_slot) {
+        unlock();
+        return ESP_ERR_NO_MEM;
+    }
+    memset(free_slot, 0, sizeof(*free_slot));
+    snprintf(free_slot->path, sizeof(free_slot->path), "%s", path);
+    free_slot->cb = cb;
+    free_slot->arg = arg;
+    free_slot->used = true;
+    unlock();
+    ESP_LOGI(TAG, "PUT handler for %s", path);
+    return ESP_OK;
+}
+
+esp_err_t espos_sk_put_handler_unregister(const char *path)
+{
+    if (!path) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ensure_init();
+    lock();
+    for (size_t i = 0; s.handlers && i < ESPOS_SK_MAX_PUT_HANDLERS; i++) {
+        if (s.handlers[i].used && strcmp(s.handlers[i].path, path) == 0) {
+            s.handlers[i].used = false;
+            unlock();
+            return ESP_OK;
+        }
+    }
+    unlock();
+    return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t espos_sk_put_respond(const char *request_id, const char *state, int status_code, const char *message)
+{
+    if (!request_id || !*request_id || !state) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ensure_init();
+    /* Built by the parser half (pure, host-tested: the exact shape
+     * signalk-server accepts) and queued like any other frame, so it goes
+     * out behind whatever the stream task is already sending. */
+    char *frame = espos_sk_put_response_frame(request_id, state, status_code, message);
+    if (!frame) {
+        return ESP_ERR_NO_MEM;
+    }
+    lock();
+    esp_err_t err = s.connected ? enqueue_raw_locked(frame) : ESP_ERR_INVALID_STATE;
+    unlock();
+    if (err != ESP_OK) {
+        free(frame);
+    }
+    return err;
+}
+
 /* ------------------------------------------- called by the stream task */
 
 void espos_sk_inbound_set_connected(bool connected)
@@ -345,6 +442,81 @@ static bool dispatch(const espos_sk_update_t *u, void *arg)
     return true;
 }
 
+/* One item of an inbound PUT. Runs on the stream task, inside the parse.
+ *
+ * The answer is sent per item, because a request names one path in practice
+ * (signalk-server's handlePut writes exactly one) and a per-item answer is
+ * the only one that can carry a per-item status. */
+static bool dispatch_put(const espos_sk_update_t *u, void *arg)
+{
+    bool *answered = arg;
+    espos_sk_put_handler_t cb = NULL;
+    void *cb_arg = NULL;
+    lock();
+    s.puts_in++;
+    for (size_t i = 0; s.handlers && i < ESPOS_SK_MAX_PUT_HANDLERS; i++) {
+        if (s.handlers[i].used && strcmp(s.handlers[i].path, u->path) == 0) {
+            cb = s.handlers[i].cb;
+            cb_arg = s.handlers[i].arg;
+            break;
+        }
+    }
+    unlock();
+
+    if (!cb) {
+        /* No handler: 405, the same answer signalk-server gives for a path
+         * nothing can act on (src/put.ts). Answering is what matters -- an
+         * ignored request leaves the client waiting the full 60 s. */
+        lock();
+        s.puts_rejected++;
+        unlock();
+        ESP_LOGW(TAG, "PUT %s: no handler", u->path);
+        if (u->request_id) {
+            espos_sk_put_respond(u->request_id, "COMPLETED", 405, "PUT not supported for this path");
+            *answered = true;
+        }
+        return true;
+    }
+
+    esp_err_t err = cb(u->path, u->value_json ? u->value_json : "null", cb_arg);
+    if (!u->request_id) {
+        return true;   /* nothing to answer to */
+    }
+    if (err == ESPOS_SK_PUT_PENDING) {
+        /* The handler owns the answer from here; tell the server to keep
+         * waiting so it does not resolve the request on the 60 s timeout
+         * without ever hearing why. */
+        espos_sk_put_respond(u->request_id, "PENDING", 202, NULL);
+        *answered = true;
+        return true;
+    }
+    /* Every terminal answer is state COMPLETED with an HTTP-style code:
+     * signalk-server drops a reply whose state is anything but COMPLETED,
+     * PENDING or null (isWsRequestReply in src/interfaces/ws.ts), so a
+     * "FAILED" state would read as no answer at all. */
+    if (err == ESP_OK) {
+        espos_sk_put_respond(u->request_id, "COMPLETED", 200, NULL);
+    } else if (err == ESP_ERR_INVALID_ARG) {
+        espos_sk_put_respond(u->request_id, "COMPLETED", 400, "invalid value");
+    } else {
+        lock();
+        s.puts_rejected++;
+        unlock();
+        espos_sk_put_respond(u->request_id, "COMPLETED", 502, esp_err_to_name(err));
+    }
+    *answered = true;
+    return true;
+}
+
+/* Routes one parsed item to the delta dispatcher or the PUT dispatcher. */
+static bool route_item(const espos_sk_update_t *u, void *arg)
+{
+    if (u->request_id) {
+        return dispatch_put(u, arg);
+    }
+    return dispatch(u, NULL);
+}
+
 bool espos_sk_inbound_handle_frame(const char *json, size_t len, char *err_out, size_t err_size)
 {
     ensure_init();
@@ -352,9 +524,21 @@ bool espos_sk_inbound_handle_frame(const char *json, size_t len, char *err_out, 
     lock();
     s.frames++;
     unlock();
-    espos_sk_frame_parse(json, len, &info, dispatch, NULL);
+    /* One callback for both kinds of item-carrying frame. request_id is set
+     * only on a PUT item (see espos_sk_parse.h), which is exactly the
+     * question "does this item owe an answer?". */
+    bool answered = false;
+    espos_sk_frame_parse(json, len, &info, route_item, &answered);
     bool is_error = false;
     switch (info.kind) {
+    case ESPOS_SK_FRAME_PUT:
+        /* A PUT whose items were all unusable (no path, or no value) still
+         * gets an answer: silence costs the client a 60 s timeout, and a
+         * malformed request is the case where a clear code helps most. */
+        if (!answered && info.request_id) {
+            espos_sk_put_respond(info.request_id, "COMPLETED", 400, "no usable path/value in the request");
+        }
+        break;
     case ESPOS_SK_FRAME_RESPONSE: {
         put_t p = { 0 };
         bool found = false;
@@ -429,5 +613,7 @@ void espos_sk_inbound_stats(espos_sk_ws_status_t *st)
     st->puts_pending = pend;
     st->puts_sent = s.puts_sent;
     st->puts_failed = s.puts_failed;
+    st->puts_in = s.puts_in;
+    st->puts_rejected = s.puts_rejected;
     unlock();
 }

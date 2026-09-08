@@ -83,19 +83,34 @@ static esp_err_t config_put(httpd_req_t *req)
 
 static esp_err_t schema_get(httpd_req_t *req)
 {
-    char etag[40];
-    snprintf(etag, sizeof(etag), "\"%s\"", espos_cfg_schema_etag);
-    char inm[40];
+    /* Not espos_cfg_schema_json any more: a graph node that registered its
+     * own namespace has a section in the document too, and the ETag moves
+     * with it so a browser holding the previous schema revalidates instead of
+     * rendering a form without the node's settings. */
+    char raw[ESPOS_CFG_ETAG_MAX];
+    espos_config_schema_etag(raw);
+    char etag[ESPOS_CFG_ETAG_MAX + 4];
+    snprintf(etag, sizeof(etag), "\"%s\"", raw);
+    char inm[sizeof(etag)];
     if (httpd_req_get_hdr_value_str(req, "If-None-Match", inm, sizeof(inm)) == ESP_OK &&
         strcmp(inm, etag) == 0) {
         httpd_resp_set_status(req, "304 Not Modified");
         httpd_resp_set_hdr(req, "ETag", etag);
         return httpd_resp_send(req, NULL, 0);
     }
+    char *json = NULL;
+    esp_err_t err = espos_config_schema_json(&json, NULL);
+    if (err != ESP_OK || !json) {
+        free(json);
+        return espos_httpd_send_error(req, "500 Internal Server Error", "schema_failed",
+                                      esp_err_to_name(err));
+    }
     httpd_resp_set_type(req, "application/schema+json");
     httpd_resp_set_hdr(req, "ETag", etag);
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    return httpd_resp_send(req, espos_cfg_schema_json, (ssize_t)espos_cfg_schema_json_len);
+    err = httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    free(json);
+    return err;
 }
 
 esp_err_t espos_httpd_register_config_api(void)

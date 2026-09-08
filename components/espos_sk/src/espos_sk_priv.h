@@ -78,6 +78,16 @@ esp_err_t espos_sk_register_api(void);
 esp_err_t espos_sk_tls_reset_now(void);
 
 /* WebSocket delta stream + meta reconciliation + health (sk_ws.c). */
+/* The meta table the implementation allocates. CONFIG_ESPOS_SK_MAX_META
+ * tunes it; ESPOS_SK_MAX_META (the public header) is what the API promises,
+ * and the build fails below rather than silently accepting fewer
+ * declarations than callers were told they could make. */
+#ifdef CONFIG_ESPOS_SK_MAX_META
+#define ESPOS_SK_META_CAP CONFIG_ESPOS_SK_MAX_META
+#else
+#define ESPOS_SK_META_CAP ESPOS_SK_MAX_META
+#endif
+
 esp_err_t espos_sk_ws_start(void);
 void espos_sk_ws_stop(void);
 void espos_sk_ws_config_changed(void);

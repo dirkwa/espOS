@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# This example is C++ (the graph is the C++ half of espos_flow), so it takes
+# the same Google style the component's own C++ carries rather than the
+# 4-space C style of the root .clang-format.
+---
+Language: Cpp
+BasedOnStyle: Google
+# Include order is deliberate: the component's own header first, then the
+# espOS headers it depends on, then the system and IDF ones. Google's
+# regrouping would move e.g. "espos_flow.h" below <cstdint>; never reorder.
+SortIncludes: Never

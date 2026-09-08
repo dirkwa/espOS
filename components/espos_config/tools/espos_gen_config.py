@@ -30,6 +30,17 @@ Descriptor format (see docs/config.md):
   }
 
 Key types: bool | int | float | string | blob.
+
+Presentation-only fields, which never change what is stored:
+
+  "readOnly": true        # shown, never editable; a write is refused
+  "group": "Calibration"  # UI tab within the namespace
+  "x": {                  # display = stored * multiplier + offset. SI stays
+    "displayMultiplier": 57.29578,   # the on-device truth (radians, seconds);
+    "displayOffset": 0,              # the UI converts both ways.
+    "format": "table",               # string key holding a JSON array of rows
+    "columns": ["input", "output"]
+  }
 Only the Python standard library is used on purpose.
 """
 
@@ -125,12 +136,69 @@ def load_descriptor(path):
     }
 
 
+# The presentation block, `"x": {...}`. It never changes what is stored: the
+# device keeps SI (radians, seconds, metres) the way SignalK requires, and the
+# UI converts on the way in and out. A descriptor that omits `x` gets the
+# identity transform, so every descriptor written before this existed is
+# unaffected.
+DISPLAY_MAX_COLUMNS = 8
+# A table lives in a string key, not a blob: an export stays readable and
+# diffable, and the UI edits rows without a base64 trip. 3999 bytes is the NVS
+# string ceiling; at ~16 bytes a point that is roughly 250 points.
+TABLE_MAX_LENGTH = NVS_STR_MAX - 1
+
+
+def _parse_display(where, x, typ):
+    """Validate the `x` object and return the normalised display hints."""
+    out = {"multiplier": None, "offset": None, "format": None, "columns": None}
+    if x is None:
+        return out
+    if not isinstance(x, dict):
+        _err(where, "'x' must be an object")
+    allowed = {"displayMultiplier", "displayOffset", "format", "columns"}
+    for f in x:
+        if f not in allowed:
+            _err(where, f"unknown 'x' field {f!r}; allowed: {sorted(allowed)}")
+    for f in ("displayMultiplier", "displayOffset"):
+        v = x.get(f)
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            _err(where, f"'x.{f}' must be a number")
+        if typ not in ("int", "float"):
+            _err(where, f"'x.{f}' only applies to int and float keys")
+        _check_float32(where, f"x.{f}", float(v))
+        out["multiplier" if f == "displayMultiplier" else "offset"] = float(v)
+    if out["multiplier"] == 0.0:
+        # display = stored * 0 + offset is not invertible: every value the
+        # user types would map back to the same stored number.
+        _err(where, "'x.displayMultiplier' must not be zero")
+    fmt = x.get("format")
+    if fmt is not None:
+        if fmt != "table":
+            _err(where, "'x.format' must be \"table\"")
+        if typ != "string":
+            _err(where, "'x.format': \"table\" requires a string key (the rows are JSON in it)")
+        cols = x.get("columns")
+        if not isinstance(cols, list) or not cols or not all(isinstance(c, str) and c for c in cols):
+            _err(where, "'x.columns' must be a non-empty array of non-empty strings")
+        if len(cols) > DISPLAY_MAX_COLUMNS:
+            _err(where, f"'x.columns' has at most {DISPLAY_MAX_COLUMNS} entries")
+        if len(set(cols)) != len(cols):
+            _err(where, "'x.columns' has duplicates")
+        out["format"], out["columns"] = fmt, cols
+    elif "columns" in x:
+        _err(where, "'x.columns' needs 'x.format': \"table\"")
+    return out
+
+
 def _parse_key(where, k, seen):
     if not isinstance(k, dict):
         _err(where, "key entry must be an object")
     allowed = {
         "$comment", "name", "type", "default", "min", "max", "maxLength", "enum",
         "pattern", "title", "description", "secret", "restart_required", "unit",
+        "readOnly", "group", "x",
     }
     for f in k:
         if f not in allowed:
@@ -158,9 +226,21 @@ def _parse_key(where, k, seen):
         _err(where, "'secret' and 'restart_required' must be booleans")
     if secret and typ not in ("string", "blob"):
         _err(where, "'secret' is only supported for string and blob keys")
+    read_only = k.get("readOnly", False)
+    if not isinstance(read_only, bool):
+        _err(where, "'readOnly' must be a boolean")
+    if read_only and secret:
+        _err(where, "'readOnly' and 'secret' together make a value nobody can read or write")
+    group = k.get("group", "")
+    if not isinstance(group, str):
+        _err(where, "'group' must be a string")
+    if len(group) > 24:
+        _err(where, "'group' must be at most 24 characters (it is a UI tab label)")
+    display = _parse_display(where, k.get("x"), typ)
     out = {
         "name": name, "type": typ, "title": title, "description": desc, "unit": unit,
         "secret": secret, "restart_required": restart,
+        "read_only": read_only, "group": group, "display": display,
         "min": None, "max": None, "max_len": None, "enum": None, "pattern": None,
     }
     has_default = "default" in k
@@ -218,7 +298,9 @@ def _parse_key(where, k, seen):
                 _err(where, f"'{f}' not allowed for float")
     elif typ == "string":
         if not has_default:
-            dflt = ""
+            # An empty table is the empty JSON array, not the empty string:
+            # the UI parses the value, and "" is not a document.
+            dflt = "[]" if display["format"] == "table" else ""
         if not isinstance(dflt, str):
             _err(where, "string default must be a string")
         enum = k.get("enum")
@@ -229,6 +311,11 @@ def _parse_key(where, k, seen):
         elif enum:
             # enum keys default to the longest allowed value
             max_len = max(len(str(e).encode("utf-8")) for e in enum)
+        elif display["format"] == "table":
+            # A table holds a JSON array of rows; 256 bytes would be four
+            # points. Give it the whole NVS string budget unless the
+            # descriptor asks for less.
+            max_len = TABLE_MAX_LENGTH
         else:
             max_len = DEFAULT_STR_MAX
         if not isinstance(max_len, int) or isinstance(max_len, bool) or not (1 <= max_len <= NVS_STR_MAX - 1):
@@ -324,6 +411,18 @@ def build_schema(namespaces):
                 p["x-espos-secret"] = True
             if k["restart_required"]:
                 p["x-espos-restartRequired"] = True
+            if k["read_only"]:
+                p["readOnly"] = True
+            if k["group"]:
+                p["x-espos-group"] = k["group"]
+            d = k["display"]
+            if d["multiplier"] is not None:
+                p["x-espos-displayMultiplier"] = d["multiplier"]
+            if d["offset"] is not None:
+                p["x-espos-displayOffset"] = d["offset"]
+            if d["format"]:
+                p["x-espos-format"] = d["format"]
+                p["x-espos-columns"] = d["columns"]
             kprops[k["name"]] = p
         nsprop = {
             "type": "object",
@@ -393,6 +492,8 @@ def build_c(namespaces, schema_text, schema_etag, keys_header_name):
                 flags.append("ESPOS_CFG_FLAG_SECRET")
             if k["restart_required"]:
                 flags.append("ESPOS_CFG_FLAG_RESTART_REQUIRED")
+            if k["read_only"]:
+                flags.append("ESPOS_CFG_FLAG_READ_ONLY")
             fields.append(f".flags = {' | '.join(flags) if flags else '0'}")
             if t == "bool":
                 fields.append(f".def.b = {'true' if k['default'] else 'false'}")
@@ -416,6 +517,19 @@ def build_c(namespaces, schema_text, schema_etag, keys_header_name):
                     fields.append(f".enum_count = {len(k['enum'])}")
             elif t == "blob":
                 fields.append(f".max_len = {k['max_len']}")
+            d = k["display"]
+            disp = []
+            if k["group"]:
+                disp.append(f".group = {_c_str(k['group'])}")
+            if d["multiplier"] is not None:
+                disp.append(f".display_mul = {_c_float(d['multiplier'])}")
+            if d["offset"] is not None:
+                disp.append(f".display_off = {_c_float(d['offset'])}")
+            if d["columns"]:
+                disp.append(f".table_columns = s_cols_{ns['namespace']}_{k['name']}")
+                disp.append(f".table_column_count = {len(d['columns'])}")
+            if disp:
+                fields.append(".display = { " + ", ".join(disp) + " }")
             L.append("    { " + ", ".join(fields) + " },")
         L.append("};")
         L.append("")
@@ -426,6 +540,9 @@ def build_c(namespaces, schema_text, schema_etag, keys_header_name):
             if k["type"] == "string" and k["enum"] is not None:
                 vals = ", ".join(_c_str(e) for e in k["enum"])
                 enum_lines.append(f"static const char *const s_enum_{ns['namespace']}_{k['name']}[] = {{ {vals} }};")
+            if k["display"]["columns"]:
+                vals = ", ".join(_c_str(c) for c in k["display"]["columns"])
+                enum_lines.append(f"static const char *const s_cols_{ns['namespace']}_{k['name']}[] = {{ {vals} }};")
     if enum_lines:
         insert_at = 4  # after includes
         L[insert_at:insert_at] = enum_lines + [""]
@@ -438,7 +555,8 @@ def build_c(namespaces, schema_text, schema_etag, keys_header_name):
                 f".title = {_c_str(ns['title'])}, "
                 f".version = {ns['version']}, "
                 f".keys = s_keys_{ns['namespace']}, "
-                f".key_count = {len(ns['keys'])} "
+                f".key_count = {len(ns['keys'])}, "
+                f".description = {_c_str(ns['description'])} "
                 "},"
             )
         L.append("};")
@@ -450,7 +568,7 @@ def build_c(namespaces, schema_text, schema_etag, keys_header_name):
         # iterates by, and it says zero.
         L.append("/* No descriptors registered: an empty table, one unused sentinel row. */")
         L.append("const espos_cfg_ns_t espos_cfg_namespaces[1] = {")
-        L.append('    { .name = "", .title = "", .version = 0, .keys = NULL, .key_count = 0 },')
+        L.append('    { .name = "", .title = "", .version = 0, .keys = NULL, .key_count = 0, .description = "" },')
         L.append("};")
     L.append(f"const size_t espos_cfg_namespace_count = {len(namespaces)};")
     L.append("")

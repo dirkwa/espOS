@@ -6,6 +6,7 @@
  * migrations, factory reset, change notification. Storage goes through the
  * injected backend so this file is host-testable.
  */
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -17,6 +18,7 @@
 
 #include "espos_config.h"
 #include "espos_config_priv.h"
+#include "espos_health.h"
 
 static const char *TAG = "espos_config";
 
@@ -25,6 +27,9 @@ static const char *TAG = "espos_config";
 #endif
 #ifndef CONFIG_ESPOS_CONFIG_MAX_SUBSCRIBERS
 #define CONFIG_ESPOS_CONFIG_MAX_SUBSCRIBERS 8
+#endif
+#ifndef CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS
+#define CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS 32
 #endif
 
 typedef struct {
@@ -52,7 +57,7 @@ struct espos_config_migrate_ctx {
 static struct {
     const espos_config_backend_t *be;
     void *be_ctx;
-    ns_state_t *ns;
+    ns_state_t *ns;      /* static namespaces, ns_count entries */
     size_t ns_count;
     SemaphoreHandle_t lock;
     bool inited;
@@ -60,18 +65,61 @@ static struct {
     migration_t migrations[CONFIG_ESPOS_CONFIG_MAX_MIGRATIONS];
     size_t migration_count;
     subscriber_t subs[CONFIG_ESPOS_CONFIG_MAX_SUBSCRIBERS];
+    /* Namespaces registered at run time. A fixed table like every other in
+     * espOS; an empty slot has desc == NULL. The descriptors themselves are
+     * borrowed, never copied — see espos_config_register_ns(). */
+    ns_state_t rt[CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS];
+    /* Bumped on every register/unregister. It is what makes the schema ETag
+     * change without rehashing the (large) merged document. */
+    uint32_t generation;
 } s;
+
+/* Registration happens outside the store lock as well (before init), so the
+ * runtime table needs a lock of its own that does not depend on s.lock
+ * existing. One static mutex, created on first use under a critical section
+ * is overkill here: registration is called from ordinary tasks, and s.lock is
+ * created in espos_config_init() which the register path can therefore not
+ * rely on. Instead the runtime table is guarded by s.lock when the store is
+ * up, and by nothing before init — at that point only the boot task runs. */
 
 /* --------------------------------------------------------------- utilities */
 
 static void cfg_lock(void)
 {
-    xSemaphoreTake(s.lock, portMAX_DELAY);
+    if (s.lock) {
+        xSemaphoreTake(s.lock, portMAX_DELAY);
+    }
 }
 
 static void cfg_unlock(void)
 {
-    xSemaphoreGive(s.lock);
+    if (s.lock) {
+        xSemaphoreGive(s.lock);
+    }
+}
+
+/* Ensure the mutex exists. Registration may run before espos_config_init(),
+ * and it must not race a concurrent registration even then. */
+static esp_err_t ensure_lock(void)
+{
+    if (!s.lock) {
+        s.lock = xSemaphoreCreateMutex();
+        if (!s.lock) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    return ESP_OK;
+}
+
+/* Runtime table lookup. Lock held (or before init, single-threaded). */
+static const espos_cfg_ns_t *find_runtime_ns(const char *ns)
+{
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (s.rt[i].desc && strcmp(s.rt[i].desc->name, ns) == 0) {
+            return s.rt[i].desc;
+        }
+    }
+    return NULL;
 }
 
 const espos_cfg_ns_t *espos_config_find_ns(const char *ns)
@@ -84,7 +132,74 @@ const espos_cfg_ns_t *espos_config_find_ns(const char *ns)
             return &espos_cfg_namespaces[i];
         }
     }
+    /* A runtime namespace can be unregistered while another task holds the
+     * pointer this returns; the contract on unregister is that the caller has
+     * stopped using it, the same rule the descriptor memory itself follows. */
+    cfg_lock();
+    const espos_cfg_ns_t *rt = find_runtime_ns(ns);
+    cfg_unlock();
+    return rt;
+}
+
+/* Iterate every namespace, static then runtime, for export/import/schema.
+ * Returns NULL past the end. `i` is a flat index over both tables. */
+static const espos_cfg_ns_t *ns_at(size_t i)
+{
+    if (i < espos_cfg_namespace_count) {
+        return &espos_cfg_namespaces[i];
+    }
+    size_t want = i - espos_cfg_namespace_count;
+    for (size_t j = 0; j < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; j++) {
+        if (s.rt[j].desc && want-- == 0) {
+            return s.rt[j].desc;
+        }
+    }
     return NULL;
+}
+
+const espos_cfg_ns_t *espos_config_ns_at_locked(size_t i)
+{
+    return ns_at(i);
+}
+
+size_t espos_config_ns_total_locked(void)
+{
+    size_t n = espos_cfg_namespace_count;
+    for (size_t j = 0; j < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; j++) {
+        if (s.rt[j].desc) {
+            n++;
+        }
+    }
+    return n;
+}
+
+const espos_cfg_ns_t *espos_config_ns_at(size_t i)
+{
+    cfg_lock();
+    const espos_cfg_ns_t *nd = ns_at(i);
+    cfg_unlock();
+    return nd;
+}
+
+size_t espos_config_ns_total(void)
+{
+    cfg_lock();
+    size_t n = espos_config_ns_total_locked();
+    cfg_unlock();
+    return n;
+}
+
+size_t espos_config_runtime_ns_count(void)
+{
+    cfg_lock();
+    size_t n = 0;
+    for (size_t j = 0; j < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; j++) {
+        if (s.rt[j].desc) {
+            n++;
+        }
+    }
+    cfg_unlock();
+    return n;
 }
 
 const espos_cfg_key_t *espos_config_find_key(const espos_cfg_ns_t *ns, const char *key)
@@ -100,9 +215,21 @@ const espos_cfg_key_t *espos_config_find_key(const espos_cfg_ns_t *ns, const cha
     return NULL;
 }
 
+/* The state slot holding the open backend handle for `desc`. Static
+ * descriptors are contiguous, so their index is pointer arithmetic; a runtime
+ * one is found by identity in the runtime table. Returns NULL only for a
+ * descriptor that is not (or is no longer) registered. */
 static ns_state_t *ns_state_for(const espos_cfg_ns_t *desc)
 {
-    return &s.ns[desc - espos_cfg_namespaces];
+    if (desc >= espos_cfg_namespaces && desc < espos_cfg_namespaces + espos_cfg_namespace_count) {
+        return &s.ns[desc - espos_cfg_namespaces];
+    }
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (s.rt[i].desc == desc) {
+            return &s.rt[i];
+        }
+    }
+    return NULL;
 }
 
 static esp_err_t lookup(const char *ns, const char *key, ns_state_t **nss, const espos_cfg_key_t **kd)
@@ -115,7 +242,11 @@ static esp_err_t lookup(const char *ns, const char *key, ns_state_t **nss, const
     if (!k) {
         return ESP_ERR_NOT_FOUND;
     }
-    *nss = ns_state_for(nd);
+    ns_state_t *st = ns_state_for(nd);
+    if (!st) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    *nss = st;
     *kd = k;
     return ESP_OK;
 }
@@ -213,6 +344,9 @@ esp_err_t espos_config_read_effective(const espos_cfg_ns_t *nd, const espos_cfg_
                                       size_t *blen, bool *is_set)
 {
     ns_state_t *nss = ns_state_for(nd);
+    if (!nss || !nss->h) {
+        return ESP_ERR_INVALID_STATE;
+    }
     esp_err_t err;
     bool set = false;
     memset(out, 0, sizeof(*out));
@@ -623,7 +757,8 @@ esp_err_t espos_config_get_version(const char *ns, uint16_t *stored, uint16_t *c
     }
     cfg_lock();
     uint16_t v = 0;
-    if (read_version(ns_state_for(nd), &v) != ESP_OK) {
+    ns_state_t *nss = ns_state_for(nd);
+    if (!nss || !nss->h || read_version(nss, &v) != ESP_OK) {
         v = 0;
     }
     cfg_unlock();
@@ -638,6 +773,16 @@ esp_err_t espos_config_get_version(const char *ns, uint16_t *stored, uint16_t *c
 
 /* -------------------------------------------------------------- lifecycle */
 
+/* Version-stamp / migrate every open runtime namespace. Lock held. */
+static void migrate_runtime_locked(void)
+{
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (s.rt[i].desc && s.rt[i].h) {
+            migrate_ns(&s.rt[i]);
+        }
+    }
+}
+
 static esp_err_t open_all_locked(void)
 {
     for (size_t i = 0; i < s.ns_count; i++) {
@@ -651,6 +796,24 @@ static esp_err_t open_all_locked(void)
             return err;
         }
     }
+    /* Namespaces registered before init: open them here rather than making
+     * the caller re-register after init. A single one that cannot be opened
+     * does not fail the whole store — the rest of the device must still come
+     * up — but it is loud, and its slot is dropped so no read hits a NULL
+     * handle. */
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (!s.rt[i].desc || s.rt[i].h) {
+            continue;
+        }
+        esp_err_t err = s.be->open(s.be_ctx, s.rt[i].desc->name, &s.rt[i].h);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "cannot open runtime namespace '%s': %s", s.rt[i].desc->name,
+                     esp_err_to_name(err));
+            s.rt[i].desc = NULL;
+            s.rt[i].h = NULL;
+            s.generation++;
+        }
+    }
     return ESP_OK;
 }
 
@@ -660,6 +823,12 @@ static void close_all_locked(void)
         if (s.ns[i].h) {
             s.be->close(s.be_ctx, s.ns[i].h);
             s.ns[i].h = NULL;
+        }
+    }
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (s.rt[i].h) {
+            s.be->close(s.be_ctx, s.rt[i].h);
+            s.rt[i].h = NULL;
         }
     }
 }
@@ -712,6 +881,7 @@ esp_err_t espos_config_init(const espos_config_backend_t *backend, void *backend
         for (size_t i = 0; i < s.ns_count; i++) {
             migrate_ns(&s.ns[i]);
         }
+        migrate_runtime_locked();
         s.inited = true;
     }
     cfg_unlock();
@@ -737,6 +907,12 @@ void espos_config_deinit(void)
     s.ns_count = 0;
     s.migration_count = 0;
     memset(s.subs, 0, sizeof(s.subs));
+    /* Runtime registrations do not survive a deinit: their descriptors belong
+     * to nodes that are torn down with the graph, and a stale entry would let
+     * the next espos_config_init() open a namespace for a freed ParamSet. A
+     * node re-registers when it is built again. */
+    memset(s.rt, 0, sizeof(s.rt));
+    s.generation++;
     cfg_unlock();
 }
 
@@ -764,6 +940,7 @@ esp_err_t espos_config_factory_reset(void)
         for (size_t i = 0; i < s.ns_count; i++) {
             migrate_ns(&s.ns[i]); /* stamps fresh versions */
         }
+        migrate_runtime_locked();
     } else {
         /* Unusable until reboot; release what we hold so a later
          * espos_config_init() (or deinit) does not leak. */
@@ -775,6 +952,210 @@ esp_err_t espos_config_factory_reset(void)
     }
     cfg_unlock();
     return err;
+}
+
+/* ---------------------------------------------------- runtime namespaces */
+
+/* Report a registration failure. Loud on purpose: a node whose settings never
+ * appear in the UI looks like a UI bug for as long as nobody reads the log,
+ * so it also becomes a health condition the operator sees. espos_health
+ * depends on nothing but FreeRTOS and the log, so requiring it here adds no
+ * cycle and no SignalK stack. */
+#define FLOW_CONFIG_CONDITION "flowConfig"
+
+static void flow_config_alarm(const char *fmt, ...)
+{
+    char msg[96];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    ESP_LOGE(TAG, "%s", msg);
+    (void)espos_health_report(FLOW_CONFIG_CONDITION, ESPOS_HEALTH_ALARM, msg);
+}
+
+/* NVS accepts any bytes, but a namespace also becomes a JSON Schema property
+ * name and a UI anchor, so it is held to the same shape as a build-time one. */
+static bool valid_ns_name(const char *n)
+{
+    if (!n) {
+        return false;
+    }
+    size_t len = strlen(n);
+    if (len == 0 || len > ESPOS_CFG_NS_NAME_MAX) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = n[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+esp_err_t espos_config_flow_ns_name(const char *id, char *out, size_t out_size)
+{
+    if (!id || !out || out_size < ESPOS_CFG_NS_NAME_MAX + 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t len = strlen(id);
+    if (len == 0 || len > ESPOS_CFG_RUNTIME_ID_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = id[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    snprintf(out, out_size, "%s%s", ESPOS_CFG_RUNTIME_NS_PREFIX, id);
+    return ESP_OK;
+}
+
+/* Everything a descriptor must satisfy before it is let into the tables: the
+ * same rules the generator enforces at build time, checked here because a
+ * runtime descriptor never passed through it. */
+static esp_err_t validate_runtime_desc(const espos_cfg_ns_t *ns)
+{
+    if (!ns || !ns->name || !ns->title || ns->version == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!valid_ns_name(ns->name)) {
+        flow_config_alarm("namespace '%s' is not 1..%d chars of [a-z0-9_]",
+                          ns->name ? ns->name : "(null)", ESPOS_CFG_NS_NAME_MAX);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (ns->key_count == 0 || !ns->keys) {
+        flow_config_alarm("namespace '%s' declares no keys", ns->name);
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < ns->key_count; i++) {
+        const espos_cfg_key_t *k = &ns->keys[i];
+        if (!k->name || !valid_ns_name(k->name)) {
+            flow_config_alarm("%s: key %u has an invalid name", ns->name, (unsigned)i);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (strcmp(k->name, ESPOS_CFG_VERSION_KEY) == 0) {
+            flow_config_alarm("%s: key name '%s' is reserved", ns->name, k->name);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (k->type < ESPOS_CFG_TYPE_BOOL || k->type > ESPOS_CFG_TYPE_BLOB) {
+            flow_config_alarm("%s.%s: unknown type %d", ns->name, k->name, (int)k->type);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if ((k->type == ESPOS_CFG_TYPE_STRING || k->type == ESPOS_CFG_TYPE_BLOB) && k->max_len == 0) {
+            flow_config_alarm("%s.%s: max_len must be set for string/blob", ns->name, k->name);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (k->type == ESPOS_CFG_TYPE_STRING && !k->def.s) {
+            flow_config_alarm("%s.%s: string key needs a default (\"\" is fine)", ns->name, k->name);
+            return ESP_ERR_INVALID_ARG;
+        }
+        for (size_t j = 0; j < i; j++) {
+            if (strcmp(ns->keys[j].name, k->name) == 0) {
+                flow_config_alarm("%s: duplicate key '%s'", ns->name, k->name);
+                return ESP_ERR_INVALID_ARG;
+            }
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t espos_config_register_ns(const espos_cfg_ns_t *ns)
+{
+    esp_err_t err = validate_runtime_desc(ns);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (ensure_lock() != ESP_OK) {
+        return ESP_ERR_NO_MEM;
+    }
+    /* A name taken by a compiled descriptor is a collision the node cannot
+     * see coming; it must not silently shadow (or be shadowed by) it. */
+    for (size_t i = 0; i < espos_cfg_namespace_count; i++) {
+        if (strcmp(espos_cfg_namespaces[i].name, ns->name) == 0) {
+            flow_config_alarm("namespace '%s' is already a built-in", ns->name);
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    cfg_lock();
+    if (find_runtime_ns(ns->name)) {
+        cfg_unlock();
+        flow_config_alarm("namespace '%s' is already registered", ns->name);
+        return ESP_ERR_INVALID_STATE;
+    }
+    ns_state_t *slot = NULL;
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (!s.rt[i].desc) {
+            slot = &s.rt[i];
+            break;
+        }
+    }
+    if (!slot) {
+        cfg_unlock();
+        flow_config_alarm("no slot for namespace '%s' (max %d)", ns->name,
+                          CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS);
+        return ESP_ERR_NO_MEM;
+    }
+    slot->desc = ns;
+    slot->h = NULL;
+    if (s.inited) {
+        err = s.be->open(s.be_ctx, ns->name, &slot->h);
+        if (err != ESP_OK) {
+            slot->desc = NULL;
+            cfg_unlock();
+            flow_config_alarm("cannot open namespace '%s': %s", ns->name, esp_err_to_name(err));
+            return err;
+        }
+        migrate_ns(slot);
+    }
+    s.generation++;
+    cfg_unlock();
+    ESP_LOGI(TAG, "registered namespace '%s' (%u key(s))", ns->name, (unsigned)ns->key_count);
+    return ESP_OK;
+}
+
+esp_err_t espos_config_unregister_ns(const char *ns)
+{
+    if (!ns) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < espos_cfg_namespace_count; i++) {
+        if (strcmp(espos_cfg_namespaces[i].name, ns) == 0) {
+            return ESP_ERR_INVALID_ARG; /* built-in: not ours to remove */
+        }
+    }
+    if (!s.lock) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    cfg_lock();
+    for (size_t i = 0; i < CONFIG_ESPOS_CONFIG_MAX_RUNTIME_NS; i++) {
+        if (s.rt[i].desc && strcmp(s.rt[i].desc->name, ns) == 0) {
+            if (s.rt[i].h) {
+                s.be->close(s.be_ctx, s.rt[i].h);
+            }
+            s.rt[i].desc = NULL;
+            s.rt[i].h = NULL;
+            s.generation++;
+            err = ESP_OK;
+            break;
+        }
+    }
+    cfg_unlock();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "unregistered namespace '%s'", ns);
+    }
+    return err;
+}
+
+uint32_t espos_config_generation(void)
+{
+    cfg_lock();
+    uint32_t g = s.generation;
+    cfg_unlock();
+    return g;
 }
 
 /* -------------------------------------------------------------- accessors */
@@ -964,6 +1345,10 @@ static esp_err_t set_value(const char *ns, const char *key, const espos_cfg_valu
     if (err != ESP_OK) {
         return err;
     }
+    if (kd->flags & ESPOS_CFG_FLAG_READ_ONLY) {
+        ESP_LOGW(TAG, "%s.%s rejected: read-only", ns, key);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     char msg[64];
     if (!espos_config_validate(kd, val, msg, sizeof(msg))) {
         ESP_LOGW(TAG, "%s.%s rejected: %s", ns, key, msg);
@@ -1039,6 +1424,9 @@ esp_err_t espos_config_reset_ns(const char *ns)
         return ESP_ERR_NOT_FOUND;
     }
     ns_state_t *nss = ns_state_for(nd);
+    if (!nss || !nss->h) {
+        return ESP_ERR_NOT_FOUND;
+    }
     bool *changed = calloc(nd->key_count ? nd->key_count : 1, sizeof(bool));
     if (!changed) {
         return ESP_ERR_NO_MEM;
@@ -1077,8 +1465,12 @@ esp_err_t espos_config_apply_plan(const espos_config_plan_entry_t *plan, size_t 
     for (size_t i = 0; i < n; i++) {
         ns_state_t *nss = ns_state_for(plan[i].ns);
         bool c = false;
-        esp_err_t e = plan[i].reset ? reset_locked(nss, plan[i].key, &c)
-                                    : write_locked(nss, plan[i].key, &plan[i].val, &c);
+        /* A runtime namespace unregistered between validation and apply: the
+         * plan entry is stale, so skip it rather than write through a freed
+         * descriptor. */
+        esp_err_t e = (!nss || !nss->h) ? ESP_ERR_NOT_FOUND
+                      : plan[i].reset   ? reset_locked(nss, plan[i].key, &c)
+                                        : write_locked(nss, plan[i].key, &plan[i].val, &c);
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "%s.%s: write failed (%s)", plan[i].ns->name, plan[i].key->name, esp_err_to_name(e));
             if (err == ESP_OK) {
