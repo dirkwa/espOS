@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# espos_formulas is C++ throughout, in the same Google style as espos_flow's
+# graph headers -- 2-space indent, `Type* p`, 80 columns. clang-format uses
+# the nearest file, so this one covers include/espos_formulas/; the umbrella
+# header one level up is matched by the repository root .clang-format, which
+# is why it is written to fit both.
+---
+Language: Cpp
+BasedOnStyle: Google
+# Include order is deliberate: the component's own headers first, then the
+# espOS headers it depends on, then the system ones. Never reorder.
+SortIncludes: Never

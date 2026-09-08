@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_formulas component manifest: registry metadata for signalk-espos/espos_formulas.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "Marine arithmetic for Signal K devices: SI unit conversions, curve interpolation, dew point, heat index, resistive senders, battery state of charge"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_formulas"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/transforms.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - units
+  - sensors
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
