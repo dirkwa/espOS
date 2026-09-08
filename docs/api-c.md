@@ -61,6 +61,15 @@ table before calling anything from inside a callback.
 | [`espos_ota.h`](api-c/espos__ota_8h.md) | `espos_ota` | signed OTA with rollback: start, status, check, install, confirm |
 | [`espos_ota_manifest.h`](api-c/espos__ota__manifest_8h.md) | `espos_ota` | manifest parsing and version comparison (pure C) |
 | [`espos_ble.h`](api-c/espos__ble_8h.md) | `espos_ble` | the BLE gateway: start, status |
+| [`espos_flow.h`](api-c/espos__flow_8h.md) | `espos_flow` | the loop task, timers and mailbox, callable from plain C |
+| [`espos_sched.h`](api-c/espos__sched_8h.md) | `espos_sched` | the wrap-safe timer wheel over an injected clock (pure C) |
+| [`espos_adc.h`](api-c/espos__adc_8h.md) | `espos_sensors` | calibrated one-shot ADC reads, in volts |
+| [`espos_gpio_in.h`](api-c/espos__gpio__in_8h.md) | `espos_sensors` | debounced GPIO input, level and edge |
+| [`espos_pcnt.h`](api-c/espos__pcnt_8h.md) | `espos_sensors` | pulse counting over PCNT, with a GPIO-ISR fallback where the SoC has no unit |
+| [`espos_pwm.h`](api-c/espos__pwm_8h.md) | `espos_sensors` | LEDC PWM output |
+| [`espos_i2c_bus.h`](api-c/espos__i2c__bus_8h.md) | `espos_sensors` | a shared i2c_master bus for breakout drivers |
+| [`espos_onewire.h`](api-c/espos__onewire_8h.md) | `espos_sensors` | 1-Wire bus and DS18B20 (optional, `CONFIG_ESPOS_SENSORS_ONEWIRE`) |
+| [`espos_sensor_math.h`](api-c/espos__sensor__math_8h.md) | `espos_sensors` | the sensor arithmetic the drivers share (pure C, host-tested) |
 
 The following headers are **C++ interfaces**, by design
 ([decisions](decisions.md)): public, but not part of the C ABI until they get
@@ -70,6 +79,19 @@ C wrappers. `tools/check_public_headers.py` lists them as `CPP_ONLY`.
 |---|---|---|
 | [`espos_audio/audio_driver.h`](api-c/audio__driver_8h.md) | `espos_audio` | `AudioDriver`, the contract a board's codec implements |
 | [`espos_audio/null_audio.h`](api-c/null__audio_8h.md) | `espos_audio` | `NullAudio`, the no-op driver for boards without audio |
+| [`espos_flow/flow.hpp`](api-c/flow_8hpp.md) | `espos_flow` | the umbrella header: graph, nodes and transforms in one include |
+| [`espos_flow/graph.hpp`](api-c/graph_8hpp.md) | `espos_flow` | `Graph`, node ownership and `make<T>()` |
+| [`espos_flow/node.hpp`](api-c/node_8hpp.md) | `espos_flow` | `Producer<T>`, `Consumer<T>`, `Transform<In,Out>` and the edge pool |
+| [`espos_flow/nodes.hpp`](api-c/nodes_8hpp.md) | `espos_flow` | `Poll`, `Lambda`, `Join`, `Sink`, `Value`, `Constant`, `Ticker`, `Mailbox` |
+| [`espos_flow/transforms.hpp`](api-c/transforms_8hpp.md) | `espos_flow` | every transform node in one include |
+| [`espos_formulas.hpp`](api-c/espos__formulas_8hpp.md) | `espos_formulas` | the umbrella header: units, curves and marine formulas |
+| [`espos_formulas/units.hpp`](api-c/units_8hpp.md) | `espos_formulas` | `constexpr` SI conversions for the units the Signal K spec uses |
+| [`espos_formulas/curve.hpp`](api-c/curve_8hpp.md) | `espos_formulas` | piecewise-linear interpolation over a sample table |
+| [`espos_formulas/marine.hpp`](api-c/files.md) | `espos_formulas` | dew point, heat index, air density, dividers, tank level, battery charge |
+| [`espos_sensors/sensors.hpp`](api-c/sensors_8hpp.md) | `espos_sensors` | `Analog`, `GpioState`, `GpioChange`, `PulseCounter`, `GpioCounter`, `GpioOutput`, `Pwm` |
+| [`espos_sensors/system.hpp`](api-c/system_8hpp.md) | `espos_sensors` | the device's own numbers as producers: heap, uptime, reset reason |
+| [`espos_sensors/onewire.hpp`](api-c/onewire_8hpp.md) | `espos_sensors` | `OneWireBus` and `Ds18b20` |
+| [`espos_sk_flow/sk.hpp`](api-c/sk_8hpp.md) | `espos_sk_flow` | `Output`, `Meta`, `Listener`, `PutHandler`, `PutRequest`, `Notify`, `NetRssi`, `IpAddress` |
 | [`espos_n2k/can_frame.h`](api-c/can__frame_8h.md) | `espos_n2k` | `CanMessage`, espOS's own CAN frame struct |
 | [`espos_n2k/twai_receiver.h`](api-c/twai__receiver_8h.md) | `espos_n2k` | `TwaiReceiver`: owns the bus, emits frames on its task |
 | [`espos_n2k/twai_transmitter.h`](api-c/twai__transmitter_8h.md) | `espos_n2k` | `TwaiTransmitter`: joins the receiver's bus |
@@ -79,6 +101,12 @@ C wrappers. `tools/check_public_headers.py` lists them as `CPP_ONLY`.
 | [`espos_voice/wyoming_satellite.h`](api-c/wyoming__satellite_8h.md) | `espos_voice` | the Wyoming satellite server |
 | [`espos_voice/wake_engine.h`](api-c/wake__engine_8h.md) | `espos_voice` | esp-sr WakeNet wrapper |
 | [`espos_voice/protocol/events.h`](api-c/events_8h.md), [`framing.h`](api-c/framing_8h.md) | `espos_voice` | the Wyoming wire protocol |
+
+<!-- `marine.hpp` is the one basename that appears twice under the documented
+     include directories (`espos_formulas/` and `espos_flow/transforms/`), so
+     Doxygen disambiguates the generated page names itself and the row above
+     points at the header index rather than a guessed filename. Replace it with
+     the real `api-c/…md` page once the site has been built once. -->
 
 ## How the reference is built
 

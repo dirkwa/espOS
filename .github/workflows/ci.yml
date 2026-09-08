@@ -262,6 +262,10 @@ jobs:
           - { example: components/espos_sk/examples/listener_relay, target: esp32p4 }
           - { example: components/espos_sk/examples/json_and_meta, target: esp32p4 }
           - { example: components/espos_sk/examples/tls_server, target: esp32p4 }
+          - { example: components/espos_flow/examples/sensor_graph, target: esp32c6 }
+          - { example: components/espos_flow/examples/sensor_graph, target: esp32p4 }
+          - { example: components/espos_sk_flow/examples/smart_switch, target: esp32c6 }
+          - { example: components/espos_sk_flow/examples/smart_switch, target: esp32p4 }
     steps:
       - uses: actions/checkout@v7
         with:
