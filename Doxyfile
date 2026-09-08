@@ -62,6 +62,14 @@ WARN_NO_PARAMDOC       = NO
 WARN_AS_ERROR          = NO
 QUIET                  = YES
 
+# `detail` namespaces are the implementation of a public header, not its API:
+# nobody calls espos::sk::detail::from_json. Excluding them also sidesteps a
+# mkdoxy defect -- it builds an in-page anchor out of a template argument, so a
+# specialisation on std::string yields `#function-from_json-std::string`, an
+# anchor the colons make it unable to find again, which fails the strict docs
+# build on generated output no one can edit.
+EXCLUDE_SYMBOLS        = *::detail *::detail::*
+
 # Conditionals are evaluated so `#pragma once` and the extern "C" guard are
 # handled; nothing is expanded, so CONFIG_ tokens show as written. With
 # __cplusplus undefined the guard is skipped and the C view is documented.
