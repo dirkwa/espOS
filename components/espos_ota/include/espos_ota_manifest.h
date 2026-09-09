@@ -24,7 +24,7 @@ extern "C" {
  * size_t conversion defined: JSON numbers are doubles, a manifest can say
  * 1e999, and that parses as infinity. Anything above this (or NaN, or
  * negative) reads as 0, which already means "unknown". */
-#define ESPOS_OTA_SIZE_MAX    (256u * 1024u * 1024u)
+#define ESPOS_OTA_SIZE_MAX (256u * 1024u * 1024u)
 
 typedef struct {
     char version[ESPOS_OTA_VERSION_MAX];
