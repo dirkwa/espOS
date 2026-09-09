@@ -241,3 +241,50 @@ TEST_CASE("resync: a real candump line survives being cut anywhere", "[candump][
         }
     }
 }
+
+/* ── inputs from the fuzz harness ───────────────────────────────────────
+ *
+ * Both of these came out of test/fuzz (ASan and UBSan respectively) and are
+ * reachable from a candump client, which is any TCP peer that connects to
+ * the gateway's server port. Kept as unit tests so they fail fast and
+ * locally, not only under a fuzzer. */
+
+TEST_CASE("decode: a lone trailing hex digit is not a byte", "[candump][fuzz]")
+{
+    /* sscanf("%2x") accepts ONE digit -- it read "A" as 0x0A and reported
+     * success -- so advancing a fixed two characters stepped over the NUL
+     * and kept reading past the end of the buffer. A truncated byte is not
+     * a byte: the frame ends before it. */
+    CanMessage got = {};
+    TEST_ASSERT_TRUE(espos_n2k::candump_decode("(1.0) can0 09F80203#0102030405060708", &got));
+    TEST_ASSERT_EQUAL_UINT8(8, got.frame.dlc);
+
+    CanMessage odd = {};
+    /* 13 digits: six whole bytes and one left over, which is dropped. */
+    TEST_ASSERT_TRUE(espos_n2k::candump_decode("(1.0) can0 09F80203#0102030405060", &odd));
+    TEST_ASSERT_EQUAL_UINT8(6, odd.frame.dlc);
+
+    CanMessage one = {};
+    /* A single digit and nothing else: no whole byte, so nothing to deliver. */
+    TEST_ASSERT_FALSE(espos_n2k::candump_decode("(1.0) can0 09F80203#A", &one));
+}
+
+TEST_CASE("decode: an absurd timestamp does not overflow the multiply", "[candump][fuzz]")
+{
+    /* sec * 1000000 overflowed int64 for a large enough seconds field, and
+     * signed overflow is undefined behaviour -- not merely a wrong time.
+     * Clamped rather than rejected: the stamp is advisory (the server
+     * restamps on arrival) and the frame still carries a PGN worth having. */
+    CanMessage got = {};
+    TEST_ASSERT_TRUE(espos_n2k::candump_decode("(12345678903456.0) can0 09F80203#0102030405060708", &got));
+    TEST_ASSERT_TRUE(got.timestamp_us > 0);
+    TEST_ASSERT_EQUAL_UINT8(8, got.frame.dlc);
+
+    CanMessage neg = {};
+    TEST_ASSERT_TRUE(espos_n2k::candump_decode("(-5.-9) can0 09F80203#0102030405060708", &neg));
+    TEST_ASSERT_TRUE(neg.timestamp_us >= 0);
+
+    CanMessage huge_us = {};
+    TEST_ASSERT_TRUE(espos_n2k::candump_decode("(1.99999999999) can0 09F80203#0102030405060708", &huge_us));
+    TEST_ASSERT_TRUE(huge_us.timestamp_us >= 1000000);
+}

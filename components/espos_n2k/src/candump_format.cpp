@@ -9,6 +9,21 @@
 
 namespace espos_n2k {
 
+namespace {
+
+// One hex digit, or -1. Deliberately not isxdigit()+strtol: this is called
+// per nibble on every received frame, and it must give a straight answer for
+// the NUL byte so the caller can look at hash[1] without checking hash[0]
+// separately.
+int hex_nibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+}  // namespace
+
 int candump_encode(const CanMessage& msg, const char* iface, char* buf,
                    size_t buf_len) {
   // Format: (seconds.microseconds) iface CANID#HEXDATA\n
@@ -49,6 +64,16 @@ bool candump_decode(const char* line, CanMessage* out) {
   while (*line == ' ' || *line == '\t') line++;
 
   // Parse timestamp: (sec.usec)
+  //
+  // Both halves are bounded before the multiply. A client is free to send
+  // "(12345678903456.0)", and sec * 1000000 then overflows int64 -- signed
+  // overflow is undefined behaviour, so this is not merely a wrong
+  // timestamp. Found by the fuzz harness (UBSan), not by review.
+  //
+  // Out-of-range clamps rather than rejecting the frame: the timestamp is
+  // advisory (the server restamps on arrival) and a CAN frame with a silly
+  // time still carries the PGN somebody needs.
+  static constexpr int64_t kMaxSec = 4000000000;  // ~2096, and sec*1e6 fits
   int64_t sec = 0, usec = 0;
   if (*line == '(') {
     line++;
@@ -61,6 +86,10 @@ bool candump_decode(const char* line, CanMessage* out) {
     if (*end == ')') end++;
     line = end;
   }
+  if (sec < 0) sec = 0;
+  if (sec > kMaxSec) sec = kMaxSec;
+  if (usec < 0) usec = 0;
+  if (usec > 999999) usec = 999999;
   out->timestamp_us = sec * 1000000 + usec;
 
   // Skip whitespace + interface name
@@ -78,13 +107,29 @@ bool candump_decode(const char* line, CanMessage* out) {
   out->frame.extended = true;  // NMEA 2000 always extended
   out->frame.remote = false;
 
-  // Parse hex data bytes
+  // Parse hex data bytes.
+  //
+  // Two digits per byte, and BOTH must be there. sscanf("%2x") is happy with
+  // one -- it reads "A" at the end of a line as 0x0A and reports success --
+  // so advancing a fixed two characters stepped over the NUL and kept
+  // reading whatever followed the buffer. A candump client is a TCP peer
+  // sending arbitrary bytes, so that was a heap overread reachable from the
+  // network. Found by the fuzz harness, not by review.
+  //
+  // Checking the pair explicitly also drops the sscanf: a nibble table is
+  // clearer about what is accepted and does not depend on how a libc reads a
+  // width-limited conversion.
   int data_len = 0;
-  while (*hash && *hash != '\n' && *hash != '\r' &&
-         data_len < (int)kCanMaxData) {
-    unsigned int byte;
-    if (sscanf(hash, "%2x", &byte) != 1) break;
-    out->frame.data[data_len++] = (uint8_t)byte;
+  while (data_len < (int)kCanMaxData) {
+    const int hi = hex_nibble(hash[0]);
+    if (hi < 0) {
+      break;
+    }
+    const int lo = hex_nibble(hash[1]);  // safe: hash[0] was not the NUL
+    if (lo < 0) {
+      break;  // a lone digit is a truncated byte, not a byte
+    }
+    out->frame.data[data_len++] = (uint8_t)((hi << 4) | lo);
     hash += 2;
   }
   out->frame.dlc = (uint8_t)data_len;

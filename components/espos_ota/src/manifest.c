@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -145,8 +146,24 @@ esp_err_t espos_ota_manifest_pick(const char *json, size_t len, const char *mani
     }
     snprintf(out->sha256, sizeof(out->sha256), "%s", str_or(best, "sha256", ""));
     snprintf(out->notes, sizeof(out->notes), "%s", str_or(best, "notes", ""));
+    /* "size" is a double out of cJSON, and a manifest is free to say 1e999 --
+     * which parses as infinity. Casting inf (or anything past SIZE_MAX) to
+     * size_t is undefined behaviour, not a large number, so the range is
+     * checked before the cast rather than after. Found by the fuzz harness
+     * (UBSan) in ten seconds; the field decides how big a firmware download
+     * this device expects.
+     *
+     * An unusable value reads as 0, which the header already defines as
+     * "unknown" -- the same answer as a manifest that omitted the field. */
     const cJSON *sz = cJSON_GetObjectItem(best, "size");
-    out->size = cJSON_IsNumber(sz) && sz->valuedouble > 0 ? (size_t)sz->valuedouble : 0;
+    out->size = 0;
+    if (cJSON_IsNumber(sz)) {
+        const double v = sz->valuedouble;
+        /* v == v rejects NaN; the upper bound keeps the cast defined. */
+        if (v == v && v > 0 && v <= (double)ESPOS_OTA_SIZE_MAX) {
+            out->size = (size_t)v;
+        }
+    }
     out->newer = running_version && *running_version ? espos_ota_version_cmp(out->version, running_version) > 0 : true;
     cJSON_Delete(root);
     return ESP_OK;

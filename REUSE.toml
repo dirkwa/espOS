@@ -15,6 +15,9 @@ path = [
   ".github/**", "ui/index.html", "ui/public/**", "ui/tsconfig*.json", "ui/src/vite-env.d.ts", "ui/dist-gz/**",
   "components/**/www/**", "components/**/config/**", "main/config/**",
   "test/host/**/config/**", "test/host/**/*.txt", "docs/**", "partitions*.csv", "REUSE.toml", "NOTICE",
+  # Fuzzer corpus: raw bytes fed to a parser. A comment header would change
+  # the input, which is the one thing these files must not do.
+  "test/fuzz/corpus/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Dirk Wahrheit"

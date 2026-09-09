@@ -19,6 +19,13 @@ extern "C" {
 #define ESPOS_OTA_URL_MAX     256
 #define ESPOS_OTA_NOTES_MAX   128
 
+/* Largest "size" a manifest may claim, 256 MB. Not a policy limit -- it is
+ * far past any ESP32 flash part -- but a bound that keeps the double-to-
+ * size_t conversion defined: JSON numbers are doubles, a manifest can say
+ * 1e999, and that parses as infinity. Anything above this (or NaN, or
+ * negative) reads as 0, which already means "unknown". */
+#define ESPOS_OTA_SIZE_MAX (256u * 1024u * 1024u)
+
 typedef struct {
     char version[ESPOS_OTA_VERSION_MAX];
     char url[ESPOS_OTA_URL_MAX];      /* absolute; relative manifest URLs are resolved */

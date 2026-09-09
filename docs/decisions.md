@@ -52,5 +52,15 @@ was retired.
   IDF 6, Tier-3 targets, no P4 hosted-WiFi host, no esp-sr/LVGL path — the ABI
   is shaped so `bindgen` yields an `espos-sys` later without a rewrite (plan
   §3.4, revisit triggers there).
+- 2026-09-10: the network-facing parsers are fuzzed under ASan and UBSan
+  ([test/fuzz](https://github.com/signalk-espOS/espOS/tree/main/test/fuzz), a
+  CI job on every PR). This is the other half of the Rust decision above, not
+  a separate initiative: choosing C over a language with a borrow checker is
+  only defensible if the code a hostile input reaches is exercised by
+  something that does not share the author's assumptions. Three harnesses
+  cover the frame parser, the OTA manifest and the candump codec — every place
+  a byte arrives from a socket and becomes a path, a firmware URL or a CAN
+  frame. They found a heap overread and a signed overflow in the first run,
+  both reachable from the network, neither visible to review or to unit tests.
 - 2026-09-07: `espressif/mdns` is espos_net's dependency (moved from espos_wifi with the T3 network seam) and a public `REQUIRES` (espos_sk browses through it); the responder is brought up from `espos_net_start()` on the caller's task, never from an event handler (mdns 1.11.3 hostname/service calls block on the responder task).
 - 2026-09-07: REST authentication is a shared secret as `Authorization: Bearer <key>` plus an optional HttpOnly session cookie, enforced centrally in `espos_httpd` (every endpoint registered through `espos_httpd_register()` is protected unless it opts out); not HTTP Digest, because machine clients (the designer, a fleet plugin, scripts) speak Bearer, the cookie rides along with `EventSource`, and Digest has no logout. Device HTTPS is deliberately not part of it (RAM cost); the key crosses a plain-http LAN like the SignalK token does. Empty key = open, so existing devices keep working; the setup-portal network is exempt as the lockout recovery path.
