@@ -13,10 +13,15 @@
 #
 # REQUIRES is deliberately tiny. espos_flow is the layer everything else will
 # eventually be wired through, so it must not depend on what is being wired:
-# no espos_sk, no espos_config, no espos_net. espos_health is the one
-# dependency and it is optional — reporting a full mailbox is worth it, and a
-# firmware built without espos_health simply loses that one report
-# (CONFIG_ESPOS_FLOW_HEALTH).
+# no espos_sk, no espos_config, no espos_net. espos_health is optional --
+# reporting a full mailbox is worth it, and a firmware built without it simply
+# loses that one report (CONFIG_ESPOS_FLOW_HEALTH).
+#
+# espos_formulas is the one hard REQUIRES, and only because
+# transforms/marine.hpp is written on top of it: every class in that header
+# calls into it, so there is no reduced version to fall back to. It is
+# header-only with no dependencies of its own, so this adds an include
+# directory and links nothing.
 # The monotonic clock is the one platform dependency, behind flow_port.h:
 # esp_timer on a chip, CLOCK_MONOTONIC on the linux target, where IDF ships
 # esp_timer's header but not esp_timer_get_time(). Same split as espos_time.
@@ -33,6 +38,7 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS include
+    REQUIRES espos_formulas
     PRIV_REQUIRES ${priv_reqs})
 
 # Linked only when the firmware also builds espos_health; the source guards
@@ -61,7 +67,14 @@ endif()
 # compiling flow's own sources and invisible to the firmware including the
 # same header, which is exactly the kind of ODR split that links cleanly and
 # then behaves differently in two translation units.
-idf_component_optional_requires(PUBLIC espos_config espos_time espos_formulas)
+# espos_formulas is NOT optional, unlike the two above. transforms/marine.hpp
+# includes it unconditionally and every class in that header is built on it, so
+# there is nothing to fall back to: made optional, a firmware that did not name
+# espos_formulas itself failed to compile the moment it included
+# espos_flow/transforms.hpp. It costs nothing to require -- the component is
+# header-only with no dependencies of its own beyond the C++ standard library,
+# so REQUIREing it adds an include directory and links no code.
+idf_component_optional_requires(PUBLIC espos_config espos_time)
 if(espos_config IN_LIST comps)
     target_compile_definitions(${COMPONENT_LIB} INTERFACE ESPOS_FLOW_HAVE_CONFIG=1)
 endif()

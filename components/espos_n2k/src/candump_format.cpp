@@ -92,4 +92,18 @@ bool candump_decode(const char* line, CanMessage* out) {
   return data_len > 0;
 }
 
+size_t candump_resync_offset(const char* buf, size_t len, size_t sent) {
+  if (sent >= len) return len;
+  // Already at a line boundary -- the socket stopped between lines, or took
+  // nothing at all. There is no partial line, so discard nothing: searching
+  // forward from here would find the NEXT line's newline and throw away a
+  // line that was never sent.
+  if (sent == 0 || buf[sent - 1] == '\n') return sent;
+  const void* nl = memchr(buf + sent, '\n', len - sent);
+  // No newline left: what remains is the tail of one line and there is no
+  // boundary to resume from, so all of it goes.
+  if (nl == nullptr) return len;
+  return static_cast<size_t>(static_cast<const char*>(nl) - buf) + 1;
+}
+
 }  // namespace espos_n2k
