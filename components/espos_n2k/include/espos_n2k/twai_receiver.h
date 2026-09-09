@@ -62,6 +62,26 @@ class TwaiReceiver {
   /// Bus-off events counted by the shared node since it came up.
   uint32_t bus_off_count() const;
 
+  /// Is the shared TWAI node up? False means the driver never started (bad
+  /// pins, a failed twai_new_node_onchip) -- which from a candump socket
+  /// looks exactly like a bus with nothing on it.
+  bool bus_running() const;
+
+  /// Frames the ISR accepted, and frames it had to drop because the queue
+  /// was full. A rising drop count is a consumer that cannot keep up, not a
+  /// bus problem.
+  uint32_t frames_received() const;
+  uint32_t frames_dropped() const;
+
+  /// Bus errors seen by the controller, and the flags of the most recent
+  /// one (arb_lost, bit_err, form_err, stuff_err, ack_err -- IDF's
+  /// twai_error_flags_t). Errors rising while frames stay at zero is the
+  /// signature of a bus that is wired but wrong: an ack error on every
+  /// transmission means nothing else is listening, and a stuff or form
+  /// error storm usually means the bitrate does not match.
+  uint32_t error_count() const;
+  uint32_t last_error_flags() const;
+
  private:
   static void sink(void* ctx, const CanMessage& msg);
 

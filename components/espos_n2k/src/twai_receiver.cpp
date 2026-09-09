@@ -45,6 +45,26 @@ void TwaiReceiver::stop() {
   detail::TwaiNode::instance().release();
 }
 
+bool TwaiReceiver::bus_running() const {
+  return detail::TwaiNode::instance().running();
+}
+
+uint32_t TwaiReceiver::frames_received() const {
+  return detail::TwaiNode::instance().frames_received();
+}
+
+uint32_t TwaiReceiver::frames_dropped() const {
+  return detail::TwaiNode::instance().frames_dropped();
+}
+
+uint32_t TwaiReceiver::error_count() const {
+  return detail::TwaiNode::instance().error_count();
+}
+
+uint32_t TwaiReceiver::last_error_flags() const {
+  return detail::TwaiNode::instance().last_error_flags();
+}
+
 uint32_t TwaiReceiver::bus_off_count() const {
   return detail::TwaiNode::instance().bus_off_count();
 }

@@ -61,6 +61,16 @@ class TwaiNode {
 
   uint32_t bus_off_count() const { return bus_off_count_.load(); }
 
+  /* Counters for the status endpoint. A bus that is wired but silent, one
+   * that is not wired at all, and one whose driver never started all look
+   * identical from the network without these -- which is exactly the
+   * position the panel was in when its N2K bus went quiet and there was no
+   * USB cable to ask. */
+  uint32_t frames_received() const { return frames_rx_.load(); }
+  uint32_t frames_dropped() const { return frames_dropped_.load(); }
+  uint32_t error_count() const { return error_count_.load(); }
+  uint32_t last_error_flags() const { return last_error_flags_.load(); }
+
  private:
   TwaiNode() = default;
 
@@ -69,6 +79,8 @@ class TwaiNode {
   static bool on_state_change(twai_node_handle_t node,
                               const twai_state_change_event_data_t* edata,
                               void* ctx);
+  static bool on_error(twai_node_handle_t node,
+                       const twai_error_event_data_t* edata, void* ctx);
   static void rx_task(void* arg);
 
   void teardown();
@@ -81,6 +93,10 @@ class TwaiNode {
   /// is not safe to call from an ISR.
   std::atomic<bool> recover_pending_{false};
   std::atomic<uint32_t> bus_off_count_{0};
+  std::atomic<uint32_t> frames_rx_{0};
+  std::atomic<uint32_t> frames_dropped_{0};
+  std::atomic<uint32_t> error_count_{0};
+  std::atomic<uint32_t> last_error_flags_{0};
 
   QueueHandle_t rx_queue_ = nullptr;
   TaskHandle_t task_ = nullptr;
