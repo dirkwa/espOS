@@ -79,3 +79,35 @@ TEST_CASE("manifest: no match, wrong app, malformed", "[ota]")
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_ota_manifest_pick(nob, strlen(nob), "https://h/m.json", "espos", "esp32p4", "stable", "0.1", &b));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, espos_ota_manifest_pick("[1,2", 4, "https://h/m.json", "espos", "esp32p4", "stable", "0.1", &b));
 }
+
+/* From the fuzz harness (UBSan, test/fuzz). "size" is a double out of cJSON
+ * and a manifest is free to say 1e999, which parses as infinity; casting
+ * that to size_t is undefined behaviour, not a large number. The field
+ * decides how big a firmware download this device expects, and the manifest
+ * is fetched over the network. */
+TEST_CASE("manifest: an unusable size reads as unknown, not as undefined behaviour", "[ota][fuzz]")
+{
+    espos_ota_build_t b;
+    char json[256];
+
+    const char *sizes[] = { "1e999", "-1e999", "1e300", "-5", "0" };
+    for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        snprintf(json, sizeof(json),
+                 "{\"schema\":1,\"builds\":[{\"app\":\"espos\",\"target\":\"esp32p4\","
+                 "\"version\":\"9.9.9\",\"url\":\"a.bin\",\"size\":%s}]}",
+                 sizes[i]);
+        TEST_ASSERT_EQUAL(ESP_OK, espos_ota_manifest_pick(json, strlen(json), "https://h/m.json",
+                                                          "espos", "esp32p4", "stable", "0.1", &b));
+        /* 0 is what the header already defines as "unknown" -- the same
+         * answer as a manifest that omitted the field. */
+        TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)b.size);
+    }
+
+    /* A size that fits is still carried through. */
+    snprintf(json, sizeof(json),
+             "{\"schema\":1,\"builds\":[{\"app\":\"espos\",\"target\":\"esp32p4\","
+             "\"version\":\"9.9.9\",\"url\":\"a.bin\",\"size\":1048576}]}");
+    TEST_ASSERT_EQUAL(ESP_OK, espos_ota_manifest_pick(json, strlen(json), "https://h/m.json",
+                                                      "espos", "esp32p4", "stable", "0.1", &b));
+    TEST_ASSERT_EQUAL_UINT32(1048576, (uint32_t)b.size);
+}
