@@ -27,7 +27,7 @@ extern "C" {
  * driver is up, whether anything has ever arrived, how long ago, and whether
  * the controller is seeing bus errors it cannot make frames out of.
  */
-esp_err_t espos_n2k_api_register(const void *receiver);
+esp_err_t espos_n2k_api_register(const void* receiver);
 
 #ifdef __cplusplus
 }

@@ -108,7 +108,7 @@ extern "C" esp_err_t espos_n2k_api_register(const void* receiver) {
   return espos_httpd_register(&uri);
 }
 
-#else  /* no espos_httpd in this build */
+#else /* no espos_httpd in this build */
 
 extern "C" esp_err_t espos_n2k_api_register(const void* receiver) {
   (void)receiver;
