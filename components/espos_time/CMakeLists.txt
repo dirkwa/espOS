@@ -27,10 +27,27 @@ else()
     # RTC-memory attributes the carry needs.
     list(APPEND priv_reqs esp_netif lwip esp_timer esp_hw_support esp_system)
 endif()
+# WHOLE_ARCHIVE, and log_wallclock.c is the whole reason.
+#
+# That file exists only to provide STRONG definitions of two hooks that
+# espos_httpd and espos_log declare weak -- the override direction avoids a
+# dependency cycle, since espos_time already depends on espos_httpd for its
+# own /time endpoints. But nothing in this component or any other CALLS
+# anything in log_wallclock.c, and a linker pulls an object out of a static
+# archive only when it resolves an undefined symbol. It never did, so the
+# weak stubs stayed and /system/info reported `"synced": false, "source":
+# "none"` on a device whose /time endpoint said sntp -- the same firmware
+# disagreeing with itself.
+#
+# Found on hardware, not in a build: both answers are correct-looking on
+# their own and only the pair is wrong. `nm` on the image is the proof --
+# espos_httpd_wallclock_hook resolved as W (weak) with the T (strong) one
+# sitting unused in libespos_time.a.
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS include
     REQUIRES ${reqs}
-    PRIV_REQUIRES ${priv_reqs})
+    PRIV_REQUIRES ${priv_reqs}
+    WHOLE_ARCHIVE)
 
 espos_config_add_descriptor(config/time.json)
