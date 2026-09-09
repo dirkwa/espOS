@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Waveshare ESP32-P4 + ESP32-C6 co-processor over SDIO. The hosted transport
+# and its pinout, the silicon revision, the main-task stack, the block-ack
+# window and the PSRAM-mempool/64-byte-cache-line pair all come from
+# sdkconfig.d/espos.defaults.esp32p4; this file adds the BLE half.
+
+# PSRAM on. The board has it and the gateway was brought up with it; espOS
+# leaves the choice to the project (its base P4 config enables none), but its
+# CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y depends on SPIRAM and is dropped
+# silently without this line — the transport's DMA pool would then sit in the
+# internal RAM the Bluetooth host stack and WiFi already share. Line mode
+# (hex) and clock (200 MHz) are IDF's P4 defaults and not restated.
+CONFIG_SPIRAM=y
+
+# --- Bluedroid over the hosted VHCI ------------------------------------
+# The P4 has no radio of its own: BT_CONTROLLER_DISABLED is what makes the
+# host stack talk HCI to the C6 through esp_hosted instead of looking for a
+# local controller.
+#
+# Init order is load-bearing (verified 2026-08-21): the remote controller must
+# be init+enabled BEFORE esp_bluedroid_attach_hci_driver(), or the first use of
+# the driver's function pointers faults. See espos_ble's bring-up.
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
