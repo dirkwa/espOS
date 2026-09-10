@@ -19,6 +19,12 @@ namespace espos::devices::detail
 //
 // Returned by value: NodeBase copies the id into its own storage, so the
 // temporary only has to outlive the make<>() call.
+//
+// A consequence worth knowing: two devices whose ids share their first 11
+// characters produce the same part ids, and would then share a config
+// namespace. That is the 12-character cap showing through rather than
+// anything this adds -- their BASE ids collide too -- but device ids are
+// where it is most tempting to be descriptive. Keep them short.
 struct SubId {
     char text[espos::flow::kIdMax + 1] = {};
 

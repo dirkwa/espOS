@@ -63,8 +63,7 @@ class TankLevel
 {
   public:
     TankLevel(espos::flow::Graph &g, const TankLevelConfig &cfg)
-        : cfg_(cfg),
-          analog_(g.make<espos::sensors::Analog>(cfg.id, cfg.gpio, cfg.period_ms,
+        : analog_(g.make<espos::sensors::Analog>(cfg.id, cfg.gpio, cfg.period_ms,
                                                  ESPOS_ADC_ATTEN_12DB,
                                                  cfg.samples)),
           ohms_(g.make<espos::flow::DividerR2>(
@@ -102,7 +101,6 @@ class TankLevel
     esp_err_t open_error() const { return analog_.open_error(); }
 
   private:
-    TankLevelConfig cfg_;
     espos::sensors::Analog &analog_;
     espos::flow::DividerR2 &ohms_;
     espos::flow::TankLevel &level_;
