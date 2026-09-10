@@ -67,7 +67,8 @@ ALLOWLIST: dict[str, dict[str, str]] = {
 # Components whose public headers are C++ interfaces by design; not part of
 # the C ABI until they get C wrappers.
 CPP_ONLY = {"espos_audio", "espos_n2k", "espos_voice",
-            "espos_flow", "espos_formulas", "espos_sensors", "espos_sk_flow"}
+            "espos_flow", "espos_formulas", "espos_sensors", "espos_sk_flow",
+            "espos_devices"}
 
 # The one IDF header every public header may include: esp_err_t is the return
 # type of the whole API.
