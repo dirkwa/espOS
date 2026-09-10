@@ -1,0 +1,184 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build, merge and release a firmware built on espOS. Reusable: a consumer
+# calls it and keeps a workflow of about fifteen lines instead of two hundred.
+#
+#   jobs:
+#     firmware:
+#       uses: signalk-espOS/espOS/.github/workflows/build-firmware.yml@main
+#       with:
+#         target: esp32p4
+#         name: p4-cockpit
+#         require: storage
+#       secrets:
+#         signing_key: ${{ secrets.SIGNING_KEY_PEM }}
+#
+# The reason this exists is not line count. Both espOS consumers had grown
+# their own copy of the same release job, and the copies had already drifted:
+# one checked the merged image for a blank storage partition, the other did
+# not, and the check exists because a firmware merged without it BOOTS and
+# serves a placeholder page that reads as a firmware bug.
+#
+# The signing key is the part worth getting right. A device only accepts an
+# OTA signed with the key whose public half it was flashed with, so a release
+# signed by a per-run throwaway installs fine over USB and then rejects every
+# future update -- on the boat, months later, with no way back except a cable.
+# This refuses to build a release without a key unless a repository variable
+# says otherwise, and labels the result when it does.
+name: build-firmware
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: "IDF target, e.g. esp32p4"
+        type: string
+        required: true
+      name:
+        description: "Asset name prefix, e.g. p4-cockpit"
+        type: string
+        required: true
+      require:
+        description: >-
+          Space-separated partitions the merged image must contain. Use it for
+          a data partition whose absence still leaves a bootable image.
+        type: string
+        default: ""
+      submodules:
+        description: "Checkout submodules (espOS is usually one)"
+        type: string
+        default: "recursive"
+      esptool:
+        description: "esptool version for the merge"
+        type: string
+        default: "4.8.1"
+    secrets:
+      signing_key:
+        description: >-
+          PEM of the app-signing key. Required for a release; without it
+          devices in the field can never take another OTA from you.
+        required: false
+    outputs:
+      unsigned:
+        description: "true when the release was built with a throwaway key"
+        value: ${{ jobs.build.outputs.unsigned }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      unsigned: ${{ steps.signing.outputs.unsigned }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.submodules }}
+          # The build needs no credentials, and a workflow that keeps them is
+          # a workflow whose every step could push.
+          persist-credentials: false
+
+      # The pin lives in the repository, not here, so a consumer that has not
+      # moved to a new IDF is not moved by an espOS change.
+      - name: read pinned IDF version
+        id: idf
+        run: |
+          v="$(cat .idf-version 2>/dev/null || cat espos/.idf-version)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "building with ESP-IDF $v"
+
+      - name: restore the signing key
+        id: signing
+        if: github.event_name == 'release'
+        env:
+          KEY: ${{ secrets.signing_key }}
+          ALLOW_UNSIGNED: ${{ vars.ESPOS_ALLOW_UNSIGNED_RELEASE }}
+        run: |
+          if [ -z "$KEY" ] && [ "$ALLOW_UNSIGNED" = "true" ]; then
+            # The opt-out, for a fork that wants a flashable binary and runs
+            # no OTA fleet. CMake generates a throwaway key, so this release
+            # installs over USB and no device will ever accept an OTA signed
+            # by a later build. Deliberate, and labelled in the release notes
+            # rather than left for someone to discover on a boat.
+            echo "::warning::ESPOS_ALLOW_UNSIGNED_RELEASE is set: building with" \
+                 "a throwaway signing key. USB flashing works; OTA does NOT."
+            echo "unsigned=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$KEY" ]; then
+            echo "::error::No signing key. Releases are signed so devices can" \
+                 "verify OTA updates; without a stable key an installed device" \
+                 "could never be updated over the air again."
+            echo "::error::  espsecure generate-signing-key --version 2 --scheme rsa3072 signing_key.pem"
+            echo "::error::  gh secret set SIGNING_KEY_PEM < signing_key.pem"
+            echo "::error::Keep that file safe: losing it means no existing" \
+                 "device can take another OTA."
+            echo "::error::To release without OTA support (USB only), set the" \
+                 "repository variable ESPOS_ALLOW_UNSIGNED_RELEASE=true."
+            exit 1
+          fi
+          printf '%s' "$KEY" > secure_boot_signing_key.pem
+          # A truncated or mangled secret would otherwise surface as a cryptic
+          # CMake failure after the build has already run for six minutes.
+          openssl rsa -in secure_boot_signing_key.pem -noout -check
+
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: ${{ inputs.target }}
+          command: idf.py build
+
+      - name: merge the flash images
+        env:
+          REQUIRE: ${{ inputs.require }}
+        run: |
+          pip install --quiet "esptool==${{ inputs.esptool }}"
+          merge="tools/espos_merge_firmware.py"
+          [ -f "$merge" ] || merge="espos/tools/espos_merge_firmware.py"
+          args=""
+          for r in $REQUIRE; do args="$args --require $r"; done
+          # shellcheck disable=SC2086
+          python "$merge" --build-dir build --chip "${{ inputs.target }}" \
+            --out merged.bin $args
+
+      - name: stage the assets
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        env:
+          # Via env, not an expression: a tag name is arbitrary text and would
+          # otherwise be pasted into this script before bash parses it.
+          TAG: ${{ github.event.release.tag_name }}
+          NAME: ${{ inputs.name }}
+        run: |
+          # A manual run is not a release: tag it with the commit so two
+          # dispatch builds are never indistinguishable on disk.
+          VERSION="${TAG:-$(cat version.txt 2>/dev/null || echo 0.0.0)-g$(git rev-parse --short HEAD)}"
+          case "$VERSION" in
+            *[!A-Za-z0-9._-]*) echo "::error::refusing unsafe tag '$VERSION'"; exit 1 ;;
+          esac
+          mkdir -p dist
+          cp merged.bin "dist/${NAME}-${VERSION}-merged.bin"
+          # The app image on its own is what a device fetches for an OTA; the
+          # merged one is for a cable. Both, because they are not the same
+          # file and picking the wrong one fails confusingly.
+          app="$(python - <<'PY'
+          import json, pathlib
+          fa = json.loads(pathlib.Path("build/flasher_args.json").read_text())
+          print(fa["app"]["file"])
+          PY
+          )"
+          cp "build/$app" "dist/${NAME}-${VERSION}-ota.bin"
+          ls -l dist/
+
+      - name: upload
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          # One flat directory: upload-artifact strips to the least common
+          # ancestor, so mixing build/foo.bin with a top-level file silently
+          # drops the prefix a later job asked for.
+          name: firmware
+          path: dist/
+          if-no-files-found: error
