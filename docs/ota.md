@@ -146,8 +146,34 @@ distribution service" of the plan, and nothing in espOS ties it to a host.
 
 ## Configuration (`ota` namespace)
 
-`manifest_url`, `channel` (stable), `auto_check` (on), `check_h` (24),
-`auto_install` (off), `allow_insecure` (off), `confirm_tmo_s` (600).
+`manifest_src` (url), `manifest_url`, `manifest_path`, `channel` (stable),
+`auto_check` (on), `check_h` (24), `auto_install` (off), `allow_insecure`
+(off), `confirm_tmo_s` (600).
+
+### Finding updates through the SignalK server
+
+`manifest_src = "signalk"` derives the manifest URL from whichever server the
+device is already connected to, appending `manifest_path`
+(`/plugins/signalk-espos-updates/manifest.json` by default) to the server's
+address.
+
+The point is that **nothing has to be typed per device**. A fresh device that
+finds its server also finds its updates, and a server that moves does not
+strand a fleet on a URL that no longer resolves. It needs a plugin on that
+server actually serving a manifest at that path.
+
+Two failures are reported plainly rather than papered over:
+
+* **No server selected yet** — ordinary at boot, before discovery has run.
+  The next scheduled check finds one.
+* **This firmware has no SignalK client** — the setting asks for something
+  the build cannot do. It does *not* fall back to `manifest_url`, because
+  silently checking a different place than the one configured is worse than
+  saying so.
+
+`espos_sk` is an optional dependency of `espos_ota` for this, not a required
+one: a firmware can do OTA with no SignalK at all, and requiring it for one
+convenience would be the wrong trade.
 
 ## API
 
