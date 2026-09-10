@@ -62,11 +62,11 @@ otherwise needs a serial cable to diagnose:
 | `frames: 0`, `errors` climbing | the bus is live and not understood. `ack_err` alone = nothing else is listening; `stuff_err`/`form_err` = wrong bitrate |
 | `dropped` climbing | frames arrive faster than they are consumed; raise `CONFIG_ESPOS_N2K_RX_QUEUE_DEPTH` |
 
-**A bus connected after boot is not picked up until the device restarts.**
-Observed 2026-09-10 on an ESP32-P4 panel: it sat at `frames: 0, errors: 0` for
-18 minutes after its bus was rewired, then took 15,346 frames within seconds of
-a reboot. Whether that is IDF's TWAI driver or this component's `start()` path
-is unproven ([#15](https://github.com/signalk-espOS/espOS/issues/15)).
+**A bus connected after boot is not picked up until the device restarts.** A
+device powered before its network stays deaf, and does not recover on its own
+however long you wait. Whether that is IDF's TWAI driver or this component's
+`start()` path is unproven; the evidence is in
+[#15](https://github.com/signalk-espOS/espOS/issues/15).
 
 This is the common case rather than an edge one: a device is routinely powered
 before the network it listens to. **So on a silent bus, restart the device
