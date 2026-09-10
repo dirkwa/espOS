@@ -51,6 +51,9 @@ class CandumpTcpServer {
   CandumpTcpServerConfig config_;
 
   TaskHandle_t server_task_ = nullptr;
+  // Set by the server task as its last act, waited on by stop(). A fixed
+  // vTaskDelay was a guess at how long the loop takes; this is the answer.
+  std::atomic<bool> server_task_done_{false};
   std::atomic<bool> running_{false};
   std::atomic<uint32_t> connected_clients_{0};
 
