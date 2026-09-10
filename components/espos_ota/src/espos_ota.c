@@ -69,6 +69,11 @@ static struct {
     bool confirmed_this_boot;
     /* config snapshot */
     char manifest_url[168];
+    /* What the last check actually fetched. With manifest_src = "signalk"
+     * the configured URL is empty, so reporting it would show nothing where
+     * a real URL was used -- and an operator reading /api/v1/ota to find out
+     * where a device looks would be told "nowhere". */
+    char manifest_eff[168];
     char manifest_src[12];
     char manifest_path[128];
     char channel[16];
@@ -221,6 +226,10 @@ static void do_check(void)
         set_state(ESPOS_OTA_FAILED, "no manifest URL configured");
         return;
     }
+    /* Whatever we are about to fetch, that is what status should report. */
+    lock();
+    snprintf(s.manifest_eff, sizeof(s.manifest_eff), "%s", url);
+    unlock();
     set_state(ESPOS_OTA_CHECKING, NULL);
     char *body = NULL;
     size_t len = 0;
@@ -536,7 +545,8 @@ char *espos_ota_status_json(void)
     json_str(err, sizeof(err), s.last_error);
     json_str(url, sizeof(url), s.avail.url);
     json_str(notes, sizeof(notes), s.avail.notes);
-    json_str(murl, sizeof(murl), s.manifest_url);
+    json_str(murl, sizeof(murl),
+             s.manifest_eff[0] ? s.manifest_eff : s.manifest_url);
     uint32_t now = espos_ota_port_uptime_s();
     int n;
     char last[16] = "null", next[16] = "null";
