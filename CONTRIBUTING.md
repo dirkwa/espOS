@@ -106,9 +106,13 @@ the person with the hardware — say in the PR which board that was.
 
 * C: C11, 4-space indent, `espos_` prefix on everything public,
   `esp_err_t` returns, comments that explain *why*. The root `.clang-format`
-  describes the existing code; run `clang-format -i` on the files you touch
-  and nothing else — CI checks only the files a PR changes, and a
-  reformatting commit hides the change it travels with.
+  describes the existing code. Run `./scripts/check_format.sh` before pushing
+  (`--fix` to reformat): CI checks every C/C++ file the branch changed against
+  `main`, which is not the same set as the files you remember editing — a
+  file written from scratch is the usual offender, because "it looks like the
+  rest of the tree" is the assumption clang-format exists to check. The script
+  runs the same diff expression CI does. Format the files you touch and
+  nothing else — a reformatting commit hides the change it travels with.
 * C++ (`espos_n2k`, `espos_voice`, `espos_audio`): Google style, 2-space
   indent, their own `.clang-format`. Do not mix the two in one component.
 * `.clang-tidy` is advisory (nothing is an error); worth a run on new code.

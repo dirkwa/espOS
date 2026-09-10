@@ -91,7 +91,7 @@ esp_err_t TwaiNode::acquire(const TwaiNodeConfig& config) {
       .on_tx_done = nullptr,
       .on_rx_done = &TwaiNode::on_rx_done,
       .on_state_change = &TwaiNode::on_state_change,
-      .on_error = nullptr,
+      .on_error = &TwaiNode::on_error,
   };
   err = twai_node_register_event_callbacks(node_, &cbs, this);
   if (err != ESP_OK) {
@@ -214,9 +214,34 @@ bool TwaiNode::on_rx_done(twai_node_handle_t node,
   BaseType_t woken = pdFALSE;
   // A full queue drops the frame, which is what the old driver's rx_queue_len
   // did too. Not logged: this runs in an ISR, and a bus that outruns the
-  // consumer would spend all its time logging.
-  xQueueSendFromISR(self->rx_queue_, &item, &woken);
+  // consumer would spend all its time logging. Counted instead, so
+  // /api/v1/n2k can say "arriving faster than they are consumed" rather than
+  // leaving a gap to be guessed at.
+  if (xQueueSendFromISR(self->rx_queue_, &item, &woken) == pdTRUE) {
+    self->frames_rx_.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    self->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+  }
   return woken == pdTRUE;
+}
+
+/* Bus errors were discarded: .on_error was nullptr, so a device on a
+ * mis-terminated or wrong-bitrate bus produced a rising error count that
+ * nothing could see. Counting them is what separates "nothing is talking"
+ * from "everything is talking and none of it is being understood" -- the
+ * two look identical from a candump socket that stays empty.
+ *
+ * ISR context: two relaxed stores and nothing else. */
+bool TwaiNode::on_error(twai_node_handle_t node,
+                        const twai_error_event_data_t* edata, void* ctx) {
+  (void)node;
+  auto* self = static_cast<TwaiNode*>(ctx);
+  self->error_count_.fetch_add(1, std::memory_order_relaxed);
+  if (edata) {
+    self->last_error_flags_.store(edata->err_flags.val,
+                                  std::memory_order_relaxed);
+  }
+  return false;  // no task woken
 }
 
 bool TwaiNode::on_state_change(twai_node_handle_t node,
