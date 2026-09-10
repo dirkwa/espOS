@@ -30,6 +30,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "esp_err.h"
+
 #include "espos_flow.h"
 #include "espos_flow/node.hpp"
 
@@ -104,5 +106,19 @@ class Graph {
   NodeBase* tail_ = nullptr;
   std::size_t count_ = 0;
 };
+
+/**
+ * Register GET /api/v1/flow, reporting `graph`'s nodes and the loop's
+ * counters.
+ *
+ * Call after espos_httpd_start(); `graph` must outlive the server, which the
+ * usual `static Graph` at file scope gives. Pass nullptr to expose the
+ * runtime counters alone -- a firmware may drive the loop from C and never
+ * build a graph, and the document says so with a null `nodes` rather than an
+ * empty array.
+ *
+ * ESP_ERR_NOT_SUPPORTED when the firmware has no espos_httpd.
+ */
+esp_err_t api_register(const Graph* graph);
 
 }  // namespace espos::flow

@@ -620,6 +620,43 @@ There is no `POST /ble/...`: scanning is driven by config
 (`PUT /config` with the `ble` namespace) and GATT sessions are opened by the
 server over the control WebSocket, never through this API.
 
+## Data flow
+
+Present only when the firmware builds `espos_flow` and calls
+`espos::flow::api_register(&graph)` (or `nullptr` for the counters alone).
+
+### `GET /flow` · protected
+
+```json
+{
+  "running": true,
+  "loop": { "posts": 1842, "dropped": 0, "timers_fired": 3680,
+            "timers_live": 2, "queue_peak": 3,
+            "edges_used": 4, "edges_max": 96 },
+  "nodes": [ { "id": "light" }, { "id": "cal", "title": "Calibration" },
+             { "id": "sk" } ]
+}
+```
+
+Replaces SensESP's status page, which was assembled from `StatusPageItem`
+objects a firmware registered by hand: the graph already knows its own shape,
+so a node added to it appears here without being told to.
+
+`nodes` is in adoption order — the order `make<T>()` was called, which is the
+order the firmware's own source reads in. It is `null`, not `[]`, when no
+graph was registered: a firmware may drive the loop from C alone, and an
+empty array would mean a graph that adopted nothing, which is a wiring bug.
+
+The `loop` half is what matters in service and neither value raises an alarm
+on its own:
+
+* **`dropped`** climbing means something posts faster than the loop consumes.
+  The value is lost, not queued.
+* **`edges_used`** approaching `edges_max` means the next `connect_to()` will
+  fail. The pool is static (`CONFIG_ESPOS_FLOW_MAX_EDGES`).
+* **`queue_peak`** is the high-water mark, so it answers "how close did this
+  ever come" rather than "how deep is it now".
+
 ## Planned (shape reserved, not implemented)
 
 Nothing — M1–M7 and the authentication are implemented. Future additions go
