@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+#
+# Publish every espos_* component to the Espressif Component Registry.
+#
+# Runs on a v* tag. A registry version is IMMUTABLE -- publishing a tag whose
+# manifests disagree with version.txt cannot be undone, only yanked -- so that
+# agreement is re-checked here rather than assumed from ci.yml, which is a
+# separate workflow that this one cannot depend on.
+#
+# The upload order matters: the registry resolves a component's dependencies
+# when it accepts the upload, so a component must not arrive before the ones
+# it names. scripts/registry_order.py computes that from the manifests rather
+# than reading a list -- docs/releasing.md carried a hand-written list of
+# eleven while the tree had nineteen, and every component added since it was
+# written was missing from it.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  # Rehearsal. A first publish, or any manifest change, is worth a dry run
+  # against the real registry: it validates the archive and the dependency
+  # resolution without creating a version that can never be taken back.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap, and it fails the release before anything is uploaded rather than
+  # part-way through: half the components published is the one state that
+  # cannot be rolled back.
+  order:
+    name: dependency order is publishable
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      components: ${{ steps.order.outputs.components }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: order
+        run: |
+          ./scripts/registry_order.py --check
+          echo "components=$(./scripts/registry_order.py)" >> "$GITHUB_OUTPUT"
+
+  # The tag/version.txt agreement lives in ci.yml. Re-checked here rather than
+  # assumed: this workflow is triggerable on its own, and "the other workflow
+  # probably ran" is not a good enough reason to create an immutable version.
+  version:
+    name: tag matches version.txt
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(cat version.txt)"
+          echo "tag=$tag version.txt=$file"
+          test "$tag" = "$file"
+          for m in components/espos_*/idf_component.yml; do
+            v="$(grep -m1 '^version:' "$m" | sed 's/version:[[:space:]]*//; s/"//g')"
+            test "$v" = "$file" || { echo "$m: version $v != $file"; exit 1; }
+          done
+
+  upload:
+    name: upload to the registry
+    needs: [order, version]
+    # `always()` so a workflow_dispatch run (where `version` is skipped, not
+    # run) still reaches this; the explicit result test is what keeps a failed
+    # version check fatal.
+    if: always() && needs.order.result == 'success' && needs.version.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Components carry no submodules, but the checkout is also what the
+          # pack step reads: shallow is fine, complete is not.
+          fetch-depth: 1
+
+      - name: what will be uploaded, and in what order
+        run: |
+          echo "${{ needs.order.outputs.components }}" | tr ' ' '\n' | nl
+
+      # A loop rather than espressif/upload-components-ci-action, because
+      # order is the point: that action takes a directories list and gives no
+      # guarantee about sequencing, and a matrix would run them in parallel.
+      # compote refuses a version the registry already has, so a re-run after
+      # a partial failure stops on the first already-published component --
+      # which is the right shape for resuming by hand, not for silently
+      # continuing.
+      - name: upload
+        env:
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          # The component manager reads its token from the environment
+          # (env_prefix IDF_COMPONENT_ + API_TOKEN); there is no --token flag.
+          # Without it compote cannot even dry-run, so a missing secret fails
+          # loudly on the first component rather than quietly publishing
+          # nothing.
+          IDF_COMPONENT_API_TOKEN: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          pip install --quiet idf-component-manager
+          for c in ${{ needs.order.outputs.components }}; do
+            echo "==> $c"
+            if [ "$DRY" = "true" ]; then
+              compote component upload \
+                --namespace signalk-espos --name "$c" \
+                --project-dir "components/$c" --dry-run
+            else
+              compote component upload \
+                --namespace signalk-espos --name "$c" \
+                --project-dir "components/$c"
+            fi
+          done
