@@ -63,11 +63,25 @@ void CandumpTcpServer::on_frame(const CanMessage& msg) {
 void CandumpTcpServer::start() {
   if (running_.exchange(true)) return;
 
+  // Cleared before the task exists, so a restart does not see the previous
+  // run's completion and return from stop() immediately.
+  server_task_done_.store(false, std::memory_order_release);
+
   // Subscribe to TwaiReceiver's output.
   receiver_->set_on_frame([this](const CanMessage& m) { this->on_frame(m); });
 
-  xTaskCreate(&CandumpTcpServer::server_task, "candump_srv", 4096, this, 3,
-              &server_task_);
+  // Checked: an unstarted server task is a gateway that accepts nothing and
+  // says nothing, and the caller has no other way to find out. Undo the
+  // subscription too -- leaving it in place would have every received frame
+  // fan out to a server that will never serve it.
+  if (xTaskCreate(&CandumpTcpServer::server_task, "candump_srv", 4096, this, 3,
+                  &server_task_) != pdPASS) {
+    ESP_LOGE(kTag, "could not create the candump server task -- not started");
+    receiver_->set_on_frame(nullptr);
+    server_task_ = nullptr;
+    running_.store(false);
+    return;
+  }
   ESP_LOGI(kTag, "Candump TCP server starting on port %u", config_.port);
 
   // Advertise via mDNS so canboatjs / SignalK Server can auto-discover the
@@ -98,9 +112,40 @@ void CandumpTcpServer::advertise() {
 
 void CandumpTcpServer::stop() {
   if (!running_.exchange(false)) return;
+
+  // Stop feeding the fan-out before anything is torn down: on_frame() walks
+  // client_queues_, and the receiver's task is not this one.
+  if (receiver_) receiver_->set_on_frame(nullptr);
+
+  // Wait for the server task to actually finish rather than assuming it has.
+  // The old fixed 200 ms was shorter than one pass of the accept loop (a
+  // 100 ms select plus whatever an accept does), so stop() could return
+  // while the task was still walking members of an object the caller was
+  // about to destroy -- and every destructor calls stop().
+  //
+  // Bounded: a task that does not finish is a bug worth a loud line, not a
+  // reason to hang the caller forever.
   if (server_task_) {
-    vTaskDelay(pdMS_TO_TICKS(200));
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(2000);
+    while (!server_task_done_.load(std::memory_order_acquire) &&
+           xTaskGetTickCount() < deadline) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!server_task_done_.load(std::memory_order_acquire)) {
+      ESP_LOGE(kTag, "server task did not finish within 2 s");
+    }
     server_task_ = nullptr;
+  }
+
+  // Withdraw the mDNS advertisement. It was added on start and never
+  // removed, so a stopped gateway kept answering browses and a client that
+  // trusted discovery got a connection refused instead of no answer at all.
+  if (advertised_) {
+    esp_err_t err = mdns_service_remove(kMdnsServiceType, "_tcp");
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+      ESP_LOGW(kTag, "mdns_service_remove failed: %s", esp_err_to_name(err));
+    }
+    advertised_ = false;
   }
 }
 
@@ -110,6 +155,7 @@ void CandumpTcpServer::server_task(void* arg) {
   int listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (listen_sock < 0) {
     ESP_LOGE(kTag, "socket() failed: %d", errno);
+    self->server_task_done_.store(true, std::memory_order_release);
     vTaskDelete(nullptr);
     return;
   }
@@ -125,6 +171,7 @@ void CandumpTcpServer::server_task(void* arg) {
   if (bind(listen_sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
     ESP_LOGE(kTag, "bind() failed: %d", errno);
     close(listen_sock);
+    self->server_task_done_.store(true, std::memory_order_release);
     vTaskDelete(nullptr);
     return;
   }
@@ -132,6 +179,7 @@ void CandumpTcpServer::server_task(void* arg) {
   if (listen(listen_sock, self->config_.max_clients) != 0) {
     ESP_LOGE(kTag, "listen() failed: %d", errno);
     close(listen_sock);
+    self->server_task_done_.store(true, std::memory_order_release);
     vTaskDelete(nullptr);
     return;
   }
@@ -155,13 +203,27 @@ void CandumpTcpServer::server_task(void* arg) {
         accept(listen_sock, (struct sockaddr*)&client_addr, &client_len);
     if (client_sock < 0) continue;
 
-    // Find a free slot.
+    // Find a free slot, within the CONFIGURED limit.
+    //
+    // The scan used to run to kMaxClients (8) and max_clients (default 3) was
+    // only the listen() backlog, so the server admitted eight clients while
+    // its configuration said three. Each costs a 128-entry queue plus a 4 KB
+    // stack -- more than double the footprint the config promised, silently.
+    //
+    // xQueueCreate is checked: a null queue would take the slot and then
+    // drop every frame, which reads as a working client that receives
+    // nothing.
+    const int limit = self->config_.max_clients < kMaxClients
+                          ? self->config_.max_clients
+                          : kMaxClients;
     int slot = -1;
     if (xSemaphoreTake(self->clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-      for (int i = 0; i < kMaxClients; i++) {
+      for (int i = 0; i < limit; i++) {
         if (self->client_queues_[i] == nullptr) {
           self->client_queues_[i] = xQueueCreate(128, sizeof(CanMessage));
-          slot = i;
+          if (self->client_queues_[i] != nullptr) {
+            slot = i;
+          }
           break;
         }
       }
@@ -180,11 +242,29 @@ void CandumpTcpServer::server_task(void* arg) {
     self->connected_clients_.fetch_add(1, std::memory_order_relaxed);
 
     auto* ctx = new ClientContext{self, client_sock, slot};
-    xTaskCreate(&CandumpTcpServer::client_task, "candump_cli", 4096, ctx, 3,
-                nullptr);
+    // Checked: on failure the socket, the context and the queue all leaked,
+    // and the slot was never released -- so a device that hit this once
+    // permanently lost one of its three client slots, and after three it
+    // accepted nobody until it was rebooted.
+    if (xTaskCreate(&CandumpTcpServer::client_task, "candump_cli", 4096, ctx, 3,
+                    nullptr) != pdPASS) {
+      ESP_LOGE(kTag, "could not create the client task -- dropping slot %d",
+               slot);
+      delete ctx;
+      close(client_sock);
+      self->connected_clients_.fetch_sub(1, std::memory_order_relaxed);
+      if (xSemaphoreTake(self->clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (self->client_queues_[slot]) {
+          vQueueDelete(self->client_queues_[slot]);
+          self->client_queues_[slot] = nullptr;
+        }
+        xSemaphoreGive(self->clients_mutex_);
+      }
+    }
   }
 
   close(listen_sock);
+  self->server_task_done_.store(true, std::memory_order_release);
   vTaskDelete(nullptr);
 }
 

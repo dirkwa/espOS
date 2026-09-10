@@ -147,6 +147,21 @@ void TwaiNode::release() {
   task_running_.store(false);
   // The task wakes at least every 100 ms on its queue read and then exits.
   for (int i = 0; i < 20 && task_; i++) vTaskDelay(pdMS_TO_TICKS(20));
+  if (task_) {
+    // It did not exit in 400 ms, and teardown() is about to delete the queue
+    // it is blocked on -- vQueueDelete under a waiting reader is a
+    // use-after-free, not a clean wakeup. Leaking the queue is the lesser
+    // fault: it is one allocation on a path taken at shutdown, and the
+    // alternative corrupts memory on a device that is still running.
+    ESP_LOGE(kTag,
+             "rx task still running after 400 ms — leaking its queue rather "
+             "than freeing it underneath it");
+    node_ = nullptr; /* twai_node_delete would fault the same way */
+    rx_queue_ = nullptr;
+    refs_.store(0);
+    xSemaphoreGive(lock_);
+    return;
+  }
   teardown();
   ESP_LOGI(kTag, "TWAI stopped");
   xSemaphoreGive(lock_);
