@@ -92,6 +92,11 @@ C wrappers. `tools/check_public_headers.py` lists them as `CPP_ONLY`.
 | [`espos_sensors/system.hpp`](api-c/system_8hpp.md) | `espos_sensors` | the device's own numbers as producers: heap, uptime, reset reason |
 | [`espos_sensors/onewire.hpp`](api-c/onewire_8hpp.md) | `espos_sensors` | `OneWireBus` and `Ds18b20` |
 | [`espos_sk_flow/sk.hpp`](api-c/sk_8hpp.md) | `espos_sk_flow` | `Output`, `Meta`, `Listener`, `PutHandler`, `PutRequest`, `Notify`, `NetRssi`, `IpAddress` |
+| [`espos_devices.hpp`](api-c/espos__devices_8hpp.md) | `espos_devices` | the umbrella header: every device class in one include |
+| [`espos_devices/tank.hpp`](api-c/tank_8hpp.md) | `espos_devices` | `TankLevel`: a resistive sender, volts → ohms → ratio |
+| [`espos_devices/engine.hpp`](api-c/engine_8hpp.md) | `espos_devices` | `EngineRpm` (revolutions per **second**), `EngineHours` |
+| [`espos_devices/switches.hpp`](api-c/switches_8hpp.md) | `espos_devices` | `SmartSwitch` (server-operable relay), `BilgeSwitch` |
+| [`espos_devices/temperature.hpp`](api-c/temperature_8hpp.md) | `espos_devices` | `OneWireTemperature` (opt-in, `CONFIG_ESPOS_SENSORS_ONEWIRE`) |
 | [`espos_n2k/can_frame.h`](api-c/can__frame_8h.md) | `espos_n2k` | `CanMessage`, espOS's own CAN frame struct |
 | [`espos_n2k/twai_receiver.h`](api-c/twai__receiver_8h.md) | `espos_n2k` | `TwaiReceiver`: owns the bus, emits frames on its task |
 | [`espos_n2k/twai_transmitter.h`](api-c/twai__transmitter_8h.md) | `espos_n2k` | `TwaiTransmitter`: joins the receiver's bus |
