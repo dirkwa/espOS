@@ -86,6 +86,7 @@ plugins:
           src-dirs: >-
             components/espos_audio/include components/espos_ble/include
             components/espos_config/include components/espos_core/include
+            components/espos_devices/include
             components/espos_event/include components/espos_flow/include components/espos_formulas/include
             components/espos_health/include components/espos_httpd/include
             components/espos_log/include components/espos_n2k/include
@@ -145,6 +146,7 @@ nav:
       - Data flow: flow.md
       - Transforms and formulas: transforms.md
       - Sensors: sensors.md
+      - Devices: devices.md
       - Time and timestamps: time.md
       - BLE gateway: ble.md
       - NMEA 2000 gateway: n2k.md
