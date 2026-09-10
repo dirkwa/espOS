@@ -38,7 +38,12 @@ files=$(git diff --name-only --diff-filter=ACMR "$base...HEAD" -- | grep -E '\.(
 # Uncommitted work counts too: the point is to catch this before pushing, and
 # a file staged but not committed is still going to CI on the next push.
 staged=$(git diff --name-only --diff-filter=ACMR HEAD -- | grep -E '\.(c|h|cpp|hpp)$' || true)
-files=$(printf '%s\n%s\n' "$files" "$staged" | sort -u | grep -v '^$' || true)
+# ...including files git has never seen. A brand-new source file is exactly
+# where this keeps hiding -- it is not in the diff against main until it is
+# committed, so a run before committing checked everything BUT the new file.
+# That is how a formatting failure reached CI with this script reporting clean.
+untracked=$(git ls-files -o --exclude-standard -- | grep -E '\.(c|h|cpp|hpp)$' || true)
+files=$(printf '%s\n%s\n%s\n' "$files" "$staged" "$untracked" | sort -u | grep -v '^$' || true)
 
 if [ -z "$files" ]; then
     echo "check_format.sh: no C/C++ files changed against $base"

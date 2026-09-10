@@ -51,7 +51,8 @@ esp_err_t get_flow(httpd_req_t* req) {
     cJSON_AddNumberToObject(s, "timers_live", (double)st.timers_live);
     cJSON_AddNumberToObject(s, "queue_peak", (double)st.queue_peak);
     cJSON_AddNumberToObject(s, "edges_used", (double)st.edges_used);
-    cJSON_AddNumberToObject(s, "edges_max", (double)CONFIG_ESPOS_FLOW_MAX_EDGES);
+    cJSON_AddNumberToObject(s, "edges_max",
+                            (double)CONFIG_ESPOS_FLOW_MAX_EDGES);
   }
 
   // The graph is optional: a firmware may drive the loop from C and never
