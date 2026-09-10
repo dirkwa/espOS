@@ -172,6 +172,57 @@ component needs at build time — `espos_config`'s generator under `tools/`,
 `espos_httpd`'s `www/index.html`, the `config/*.json` descriptors — lives
 inside the component directory for exactly this reason.
 
+## Building a consumer's firmware
+
+`.github/workflows/build-firmware.yml` is reusable: a firmware built on espOS
+calls it and keeps a workflow of about fifteen lines rather than two hundred.
+
+```yaml
+jobs:
+  firmware:
+    uses: signalk-espOS/espOS/.github/workflows/build-firmware.yml@main
+    with:
+      target: esp32p4
+      name: p4-cockpit
+      require: storage      # partitions the merged image must contain
+    secrets:
+      signing_key: ${{ secrets.SIGNING_KEY_PEM }}
+```
+
+It reads the IDF pin from the consumer's own `.idf-version` (or the espOS
+submodule's), builds, merges the flash images with
+`tools/espos_merge_firmware.py`, and stages two assets: the merged image for
+a cable, and the app image on its own for an OTA. They are not the same file
+and picking the wrong one fails confusingly, which is why both are published.
+
+**The signing key is the part that matters.** A device only accepts an OTA
+signed with the key whose public half it was flashed with, so a release
+signed by a per-run throwaway installs fine over USB and then rejects every
+future update — on the boat, months later, with no way back except a cable.
+The workflow therefore refuses to build a release without `signing_key`,
+unless the repository variable `ESPOS_ALLOW_UNSIGNED_RELEASE` is `true`, in
+which case it warns and sets its `unsigned` output so the release notes can
+say so.
+
+### `--require`, and why it is not a warning
+
+`espos_merge_firmware.py` reads the offset map the build already produced
+(`flasher_args.json`), so the offsets can never drift from what the partition
+table needs. A partition the build did not produce is skipped — usually
+harmless, because an absent `otadata` just means "boot the first slot".
+
+It is not harmless for a data partition, and the trouble is that the image
+still **boots**. An espOS firmware merged without its `storage` partition
+comes up and serves a placeholder page that reads as a firmware bug; one
+merged without a wake-word model comes up with a dead wake word that no OTA
+can repair. `--require storage` turns that into a build failure:
+
+```
+error: --require storage was given, but 'storage.bin' was not produced by
+this build. Merging without it would still yield a bootable image -- which
+is exactly why this is an error rather than a warning.
+```
+
 ## The template repository
 
 [signalk-espOS/espos-template](https://github.com/signalk-espOS/espos-template)
