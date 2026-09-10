@@ -43,6 +43,36 @@ starting the server if you also want frames in the application.
 N2K is 250 kbit/s; the transceiver (SN65HVD230 or similar) is the
 board's business, not this component's.
 
+## When the bus is silent
+
+`GET /api/v1/n2k` (register it with `espos_n2k_api_register(&receiver)`) is
+the answer to "the candump socket connects and nothing arrives", which
+otherwise needs a serial cable to diagnose:
+
+```json
+{ "present": true, "running": true, "ever_received": true, "idle_s": 0,
+  "frames": 89559, "dropped": 0, "errors": 59, "bus_off": 0,
+  "last_error": { "flags": 8, "stuff_err": true, ... } }
+```
+
+| Reading | Means |
+|---|---|
+| `running: false` | the driver never came up — pins, or a failed `twai_new_node_onchip` |
+| `frames: 0` **and** `errors: 0` | the wire is electrically quiet: unplugged, unpowered, nobody transmitting — or the driver missed the bus, see below |
+| `frames: 0`, `errors` climbing | the bus is live and not understood. `ack_err` alone = nothing else is listening; `stuff_err`/`form_err` = wrong bitrate |
+| `dropped` climbing | frames arrive faster than they are consumed; raise `CONFIG_ESPOS_N2K_RX_QUEUE_DEPTH` |
+
+**A bus connected after boot is not picked up until the device restarts.**
+Observed 2026-09-10 on an ESP32-P4 panel: it sat at `frames: 0, errors: 0` for
+18 minutes after its bus was rewired, then took 15,346 frames within seconds of
+a reboot. Whether that is IDF's TWAI driver or this component's `start()` path
+is unproven ([#15](https://github.com/signalk-espOS/espOS/issues/15)).
+
+This is the common case rather than an edge one: a device is routinely powered
+before the network it listens to. **So on a silent bus, restart the device
+before reaching for a multimeter** — and note that nothing raises an alarm for
+it, deliberately, because a firmware may legitimately run with no N2K at all.
+
 ## Consuming the stream
 
 The server advertises `_sensesp-n2k._tcp` over mDNS with
