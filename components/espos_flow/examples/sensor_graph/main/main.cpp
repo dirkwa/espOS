@@ -89,6 +89,12 @@ extern "C" void app_main() {
   ESP_ERROR_CHECK(sensor.start());
   ESP_ERROR_CHECK(g.start());
 
+  // GET /api/v1/flow: the graph's own nodes and the loop's counters. The
+  // wiring is now inspectable from a browser without a serial cable, and
+  // `dropped` climbing is the sign that something posts faster than the loop
+  // consumes -- which nothing else reports.
+  ESP_ERROR_CHECK(api_register(&g));
+
   ESP_LOGI(TAG, "graph running: %zu nodes, publishing %s every 500 ms",
            g.size(), kPath);
 

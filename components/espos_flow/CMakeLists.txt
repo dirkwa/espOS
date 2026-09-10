@@ -26,7 +26,7 @@
 # esp_timer on a chip, CLOCK_MONOTONIC on the linux target, where IDF ships
 # esp_timer's header but not esp_timer_get_time(). Same split as espos_time.
 idf_build_get_property(target IDF_TARGET)
-set(srcs src/espos_sched.c src/espos_flow.c cpp/flow_graph.cpp cpp/flow_instantiations.cpp)
+set(srcs src/espos_sched.c src/espos_flow.c cpp/flow_graph.cpp cpp/flow_instantiations.cpp cpp/api_flow.cpp)
 if(target STREQUAL "linux")
     list(APPEND srcs src/port_sim.c)
     set(priv_reqs "")
@@ -45,6 +45,14 @@ idf_component_register(
 # the call with CONFIG_ESPOS_FLOW_HEALTH, which a firmware without the
 # component turns off.
 idf_component_optional_requires(PRIVATE espos_health)
+
+# GET /api/v1/flow is worth having and not worth requiring: a firmware with
+# no web server is a legitimate one, and api_flow.cpp guards itself with
+# __has_include so it compiles to a stub there. The optional dependency is
+# what puts espos_httpd's headers on the include path when it IS in the
+# build -- without it __has_include answers no even though the component is
+# present.
+idf_component_optional_requires(PRIVATE espos_httpd espressif__cjson)
 
 # C11 for the runtime, C++ for the graph. IDF 6 compiles device code at
 # -std=gnu++26 with exceptions and RTTI off; the graph is written to that
