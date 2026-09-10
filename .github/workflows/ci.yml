@@ -163,6 +163,13 @@ jobs:
           # The action wraps the command in single quotes itself; anything
           # non-trivial lives in a script so the quoting stays out of YAML.
           command: scripts/check_manifests.sh
+      # Checked on every PR, not only at release: a dependency cycle or a
+      # component depending on one that no longer exists makes the publish
+      # workflow fail AFTER the tag exists, and a registry version cannot be
+      # taken back.
+      - name: components can be published in dependency order
+        run: ./scripts/registry_order.py --check
+
       # The responder lives in espos_wifi; a second declaration elsewhere is how
       # the dependency crept into espos_sk in the first place.
       - name: espressif/mdns is declared only where the responder lives

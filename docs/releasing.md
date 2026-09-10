@@ -87,8 +87,8 @@ number people actually need.
 ## Registry publishing
 
 Every `components/espos_*` directory is also a component on the [Espressif
-Component Registry](https://components.espressif.com), under the `espos`
-namespace: `signalk-espos/espos_config`, `signalk-espos/espos_sk`, and so on. A firmware
+Component Registry](https://components.espressif.com), under the
+`signalk-espos` namespace: `signalk-espos/espos_config`, `signalk-espos/espos_sk`, and so on. A firmware
 that does not want the submodule adds what it needs and the component
 manager pulls the rest:
 
@@ -98,7 +98,7 @@ idf.py add-dependency "signalk-espos/espos_sk^0.7"
 
 `espos_sk`'s manifest names `espos_config`, `espos_httpd`, `espos_wifi` and
 `espos_health` as dependencies, so that one line installs the core. The
-registry names each download `espos__<name>` in the build; a component's
+registry names each download `signalk-espos__<name>` in the build; a component's
 own `REQUIRES espos_config` still resolves, because the component manager
 maps a short name onto the namespaced component when only that one exists.
 
@@ -130,17 +130,35 @@ covers the manifests as well.
 
 ### Publishing a release
 
-Publishing is a workflow on the `v*` tag, after the version check has
-passed, using `espressif/upload-components-ci-action` with the registry
-token in the `IDF_COMPONENT_API_TOKEN` repository secret (`api_token:`) and
-`namespace: espos`. Upload the components leaves first — the registry
-resolves a component's dependencies when it accepts the upload, so a
-component must not arrive before the ones it names:
+`.github/workflows/publish.yml` runs on the `v*` tag. It re-checks that the
+tag, `version.txt` and every manifest agree — a registry version is
+immutable, and that check is worth repeating rather than assuming CI's copy
+ran — then uploads each component with `compote component upload`, taking
+the registry token from the `IDF_COMPONENT_API_TOKEN` repository secret.
+(The component manager reads it from the environment under that exact name;
+there is no `--token` flag.)
+
+**Before the first publish, the `signalk-espos` namespace has to exist on the
+registry.** It does not yet: a dry run today ends with
 
 ```
-espos_log espos_health espos_audio espos_config espos_httpd espos_wifi
-espos_sk espos_ota espos_ble espos_n2k espos_voice
+ERROR: Namespace "signalk-espos" not found
 ```
+
+which is the same message a nonsense namespace produces, so it is a
+registration gap rather than an authentication one. Claim the namespace at
+[components.espressif.com](https://components.espressif.com) with the account
+that owns the token. Everything else is ready — the archive packs and the
+manifests validate up to that point.
+
+Upload order is computed, not written down: the registry resolves a
+component's dependencies when it accepts the upload, so a component must not
+arrive before the ones it names. `scripts/registry_order.py` topologically
+sorts the manifests, and `--check` fails the release *before* anything is
+uploaded, since half the components published is the one state that cannot be
+rolled back. This paragraph used to carry a hand-written list of eleven
+components while the tree had nineteen; every component added after it was
+written was missing from it.
 
 A registry version is immutable; `compote component upload --dry-run` (needs
 the token) validates without creating one, and is the right rehearsal for a
