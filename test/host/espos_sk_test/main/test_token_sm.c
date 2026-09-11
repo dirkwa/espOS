@@ -267,6 +267,51 @@ TEST_CASE("reboot mid-approval resumes polling the stored href", "[sk_tok]")
     TEST_ASSERT_EQUAL_STRING("", F.saved.pending_href);
 }
 
+/* Repinning a RUNNING device -- the operator changes sk.server_host while a
+ * request is outstanding -- is not the same path as a reboot: the store is
+ * live rather than reloaded, and the poll leg may still be in flight. Both
+ * variants below were found by repinning a gateway from a discovered server
+ * to a manual one on the boat LAN, where the old href kept being polled at
+ * the new address and the device sat "pending" against a request that server
+ * had never issued. */
+TEST_CASE("repinning a live device drops a pending request for the old server", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);
+    request_result(202, "/signalk/v1/requests/abc", NULL);
+    TEST_ASSERT_EQUAL(ESPOS_SK_TOK_REQUESTED, ST()->state);
+    TEST_ASSERT_EQUAL_STRING("/signalk/v1/requests/abc", F.saved.pending_href);
+
+    /* Repin to a manual host: no self URN, so only host/port can decide. */
+    F.polls = 0;
+    F.requests = 0;
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_MANUAL);
+    TEST_ASSERT_EQUAL(0, F.polls);                      /* never poll A's href at the new host */
+    TEST_ASSERT_EQUAL(1, F.requests);                   /* ask the new server for its own */
+    TEST_ASSERT_EQUAL_STRING("", F.saved.pending_href); /* and forget the old one */
+}
+
+TEST_CASE("repinning while a poll is in flight discards the stale answer", "[sk_tok]")
+{
+    reset(NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_START, NULL);
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_A);
+    request_result(202, "/signalk/v1/requests/abc", NULL);
+    tick(5000);                                         /* poll leg starts: busy */
+    TEST_ASSERT_TRUE(ST()->busy);
+
+    espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_MANUAL);
+    F.polls = 0;
+    F.requests = 0;
+    /* A's approval lands after the switch. Attributing it to the new server
+     * would hand the device a token the new server never issued. */
+    poll_result(200, "COMPLETED", "APPROVED", "tok.for.A");
+    TEST_ASSERT_NOT_EQUAL(ESPOS_SK_TOK_APPROVED, ST()->state);
+    TEST_ASSERT_EQUAL_STRING("", F.saved.token);
+    TEST_ASSERT_EQUAL(1, F.requests);                   /* start over against the new server */
+}
+
 TEST_CASE("stored token: reboot verifies it, revocation (401) re-requests", "[sk_tok]")
 {
     espos_sk_tok_store_t st = { .token = "tok.en.3", .token_self = "urn:mrn:signalk:uuid:aaaa" };
