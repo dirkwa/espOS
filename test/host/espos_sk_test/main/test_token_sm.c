@@ -17,6 +17,11 @@ static struct {
     int requests, polls, verifies, saves, notifies;
     char last_href[ESPOS_SK_HREF_MAX];
     char last_verify_token[ESPOS_SK_TOKEN_MAX];
+    /* Which server the last leg was aimed at. Counting legs cannot catch a
+     * request sent to the wrong host, which is the whole failure mode around
+     * a server change. */
+    espos_sk_server_t last_request_srv;
+    espos_sk_server_t last_poll_srv;
     espos_sk_tok_store_t saved;
     uint32_t rnd;
 } F;
@@ -24,15 +29,15 @@ static struct {
 static void f_request(void *ctx, const espos_sk_server_t *srv, const espos_sk_tok_cfg_t *cfg)
 {
     (void)ctx;
-    (void)srv;
     (void)cfg;
     F.requests++;
+    F.last_request_srv = *srv;
 }
 static void f_poll(void *ctx, const espos_sk_server_t *srv, const char *href)
 {
     (void)ctx;
-    (void)srv;
     F.polls++;
+    F.last_poll_srv = *srv;
     strcpy(F.last_href, href);
 }
 static void f_verify(void *ctx, const espos_sk_server_t *srv, const char *tok)
@@ -289,6 +294,8 @@ TEST_CASE("repinning a live device drops a pending request for the old server", 
     espos_sk_tok_event(&SM, ESPOS_SK_EV_SERVER, &SRV_MANUAL);
     TEST_ASSERT_EQUAL(0, F.polls);                      /* never poll A's href at the new host */
     TEST_ASSERT_EQUAL(1, F.requests);                   /* ask the new server for its own */
+    TEST_ASSERT_EQUAL_STRING(SRV_MANUAL.host, F.last_request_srv.host); /* at the NEW address */
+    TEST_ASSERT_EQUAL(SRV_MANUAL.port, F.last_request_srv.port);
     TEST_ASSERT_EQUAL_STRING("", F.saved.pending_href); /* and forget the old one */
 }
 
@@ -310,6 +317,8 @@ TEST_CASE("repinning while a poll is in flight discards the stale answer", "[sk_
     TEST_ASSERT_NOT_EQUAL(ESPOS_SK_TOK_APPROVED, ST()->state);
     TEST_ASSERT_EQUAL_STRING("", F.saved.token);
     TEST_ASSERT_EQUAL(1, F.requests);                   /* start over against the new server */
+    TEST_ASSERT_EQUAL_STRING(SRV_MANUAL.host, F.last_request_srv.host);
+    TEST_ASSERT_EQUAL(SRV_MANUAL.port, F.last_request_srv.port);
 }
 
 TEST_CASE("stored token: reboot verifies it, revocation (401) re-requests", "[sk_tok]")
