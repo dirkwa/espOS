@@ -1221,7 +1221,9 @@ class WifiTests(unittest.TestCase):
         self.assertIn("wifi", [e for e, _ in hello])
         # the oldest reader now sees EOF (its socket was shut down)
         got = list(readers[0].events(timeout=2))
-        self.assertTrue(all(e in ("retry", "net", "wifi", "sk", "sk_servers", "sk_ws", "sk_tls", "ota", "logs", "comment") for e, _ in got), got)
+        # "probe" is the harness's own publisher (see harness_sse_probe_init):
+        # it registers after espOS's components, like a consumer firmware's.
+        self.assertTrue(all(e in ("retry", "net", "wifi", "sk", "sk_servers", "sk_ws", "sk_tls", "ota", "logs", "probe", "comment") for e, _ in got), got)
         readers[0].sock.settimeout(1.0)
         try:
             eof = readers[0].sock.recv(10) == b""
@@ -1231,6 +1233,37 @@ class WifiTests(unittest.TestCase):
         for r in readers + [r4]:
             r.close()
         time.sleep(0.5)
+
+    def test_03c_every_registered_connect_callback_reaches_a_new_client(self):
+        """A fresh SSE client gets one snapshot per registered component.
+
+        The on-connect table used to be a hard-coded 4 while espOS shipped six
+        publishers, so on a BLE gateway the BLE snapshot silently never
+        arrived: the stream opened, every other component's hello turned up,
+        and the missing one read as an idle component rather than a failed
+        registration. The harness registers one past the configured limit, so
+        this also pins down that the overflow is refused rather than
+        overrunning the array.
+        """
+        st, _, _, js = req("GET", "/__harness/sse/cbs")
+        self.assertEqual(st, 200)
+        # espOS's own publishers (net, wifi, sk, ota) have already taken slots
+        # by the time the harness registers, which is the position a consumer
+        # firmware's publisher is in -- and where the BLE gateway lost its own.
+        self.assertGreaterEqual(js["limit"], 8, "default ceiling must fit the components espOS ships")
+        self.assertGreater(js["registered"], 0, "a consumer must still get slots after espOS took its own")
+        self.assertGreaterEqual(js["rejected"], 1, "past the limit must be refused, not written past the end")
+        self.assertEqual(js["registered"] + js["rejected"], js["limit"] + 1,
+                         "every attempt is either taken or refused")
+
+        r = SseReader()
+        self.assertIn("200", r.status)
+        # Enough events to cover every hello the app registers.
+        seen = [e for e, _ in itertools.islice(r.events(timeout=4), js["limit"] + 6)]
+        r.close()
+        probes = seen.count("probe")
+        self.assertEqual(probes, js["registered"],
+                         f"expected one probe hello per registered callback, got {probes} in {seen}")
 
     def test_04_disable_and_reenable(self):
         st, _, _, js = req("PUT", "/api/v1/config", {"wifi": {"sta_enabled": False}})

@@ -31,6 +31,23 @@ menu "espOS HTTP server"
             socket budget is 4 + this value, clamped to
             CONFIG_LWIP_MAX_SOCKETS - 3 (raise LWIP_MAX_SOCKETS for more).
 
+    config ESPOS_HTTPD_SSE_MAX_CONNECT_CBS
+        int "Maximum event-stream connect callbacks"
+        default 8
+        range 6 16
+        help
+            Each component that publishes to GET /api/v1/events registers one
+            callback here, so a newly connected client gets the current state
+            immediately instead of waiting for the next change. espOS itself
+            ships five (net, wifi, sk, ota, ble); a firmware that adds its own
+            needs room for those too. The floor is 6 rather than 5 because a
+            build that cannot fit espOS's own publishers plus one is the bug
+            this option exists to prevent.
+
+            Running out is silent from the browser's side: the stream opens
+            and every other component's snapshot arrives, so the one component
+            that missed a slot looks merely idle rather than unregistered.
+
     config ESPOS_HTTPD_SSE_PING_S
         int "Event-stream keepalive interval (s)"
         default 15

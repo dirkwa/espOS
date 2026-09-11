@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -22,6 +23,7 @@
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_httpd.h"
+#include "espos_httpd_sse.h"
 #include "espos_net.h"
 #include "espos_wifi.h"
 #include "espos_sk.h"
@@ -274,9 +276,53 @@ static esp_err_t http_probe_post(httpd_req_t *req)
     return rc;
 }
 
+/* The on-connect table is a fixed array, and overflowing it used to be
+ * invisible: the component that missed a slot still answered its REST
+ * endpoint and still published later changes, so only the snapshot a fresh
+ * SSE client gets was missing. Found on a BLE gateway, where six components
+ * competed for four slots and the BLE hello was the one that lost. These
+ * register more callbacks than the old ceiling to prove the limit is now a
+ * configured number rather than a hard-coded 4, and that going past it is
+ * reported rather than swallowed. */
+static void sse_probe_cb(int client, void *arg)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"n\":%d}", (int)(intptr_t)arg);
+    espos_httpd_sse_send(client, "probe", buf);
+}
+
+static int s_sse_cb_registered;
+static int s_sse_cb_rejected;
+
+static void harness_sse_probe_init(void)
+{
+    /* Fill whatever espOS's own components left, plus one, so the last one
+     * must be refused and must say so rather than looking like a heap
+     * problem. This runs last on purpose: it is the position a consumer
+     * firmware's own publisher is in, which is exactly where the BLE gateway
+     * lost its slot. */
+    for (int i = 0; i < CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS + 1; i++) {
+        esp_err_t err = espos_httpd_sse_on_connect(sse_probe_cb, (void *)(intptr_t)i);
+        if (err == ESP_OK) {
+            s_sse_cb_registered++;
+        } else {
+            s_sse_cb_rejected++;
+        }
+    }
+}
+
+static esp_err_t sse_probe_get(httpd_req_t *req)
+{
+    char buf[96];
+    snprintf(buf, sizeof(buf), "{\"limit\":%d,\"registered\":%d,\"rejected\":%d}",
+             CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS, s_sse_cb_registered, s_sse_cb_rejected);
+    return espos_httpd_send_json(req, NULL, buf);
+}
+
 static void harness_sk_inbound_init(void)
 {
     s_rx_lock = xSemaphoreCreateMutex();
+    harness_sse_probe_init();
     static const httpd_uri_t uris[] = {
         { .uri = "/__harness/sk/rx", .method = HTTP_GET, .handler = rx_get },
         { .uri = "/__harness/sk/rx", .method = HTTP_DELETE, .handler = rx_clear },
@@ -284,6 +330,7 @@ static void harness_sk_inbound_init(void)
         { .uri = "/__harness/sk/put", .method = HTTP_POST, .handler = put_post },
         { .uri = "/__harness/sk/put", .method = HTTP_GET, .handler = put_result_get },
         { .uri = "/__harness/sk/http", .method = HTTP_POST, .handler = http_probe_post },
+        { .uri = "/__harness/sse/cbs", .method = HTTP_GET, .handler = sse_probe_get },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         ESP_ERROR_CHECK(espos_httpd_register(&uris[i]));

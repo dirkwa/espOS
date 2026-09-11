@@ -30,7 +30,10 @@ static const char *TAG = "espos_sse";
 #ifndef CONFIG_ESPOS_HTTPD_SSE_PING_S
 #define CONFIG_ESPOS_HTTPD_SSE_PING_S 15
 #endif
-#define MAX_CONNECT_CBS 4
+#ifndef CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS
+#define CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS 8
+#endif
+#define MAX_CONNECT_CBS CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS
 
 typedef struct {
     httpd_req_t *req;   /* async copy, NULL if slot free */
@@ -157,6 +160,14 @@ esp_err_t espos_httpd_sse_on_connect(espos_httpd_sse_connect_cb_t cb, void *arg)
             return ESP_OK;
         }
     }
+    /* Loudly, because the symptom is not: the component that missed a slot
+     * still serves its REST endpoint and still publishes later changes, so a
+     * browser sees every other snapshot on connect and this one simply never
+     * appears. Callers treat this as non-fatal (the gateway logs a warning and
+     * carries on), which is right -- but without a line naming the limit the
+     * next person sees "NO_MEM" from a component that registers one small
+     * callback and goes looking in the heap. */
+    ESP_LOGE(TAG, "on-connect callbacks full (%d): raise CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS", MAX_CONNECT_CBS);
     return ESP_ERR_NO_MEM;
 }
 

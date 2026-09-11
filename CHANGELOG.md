@@ -372,6 +372,21 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Fixed
 
+- httpd: the event-stream on-connect table held four callbacks while espOS
+  itself ships five publishers (`net`, `wifi`, `sk`, `ota`, `ble`), so on a
+  firmware with more than four the last to register never delivered the
+  snapshot a fresh `GET /api/v1/events` client is documented to receive.
+  Found on the BLE gateway, where `espos_ble` was the one that lost: it logged
+  `status endpoint unavailable: ESP_ERR_NO_MEM` at boot and the web UI's BLE
+  panel then stayed empty until the first periodic update. The symptom is
+  quiet by construction — the REST endpoint still answers and later changes
+  are still published, so the component reads as idle rather than
+  unregistered, and the error names memory while nothing is short of memory.
+  The limit is now `CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS` (default 8, was a
+  hard-coded 4) and overflowing it is logged with the symbol to raise.
+  **Consumers registering their own publishers** register after espOS's, so
+  they are the ones that hit the cap; raise it rather than reordering.
+
 - sk: a change of scheme was accepted by the configuration and then silently
   dropped by the token machine, whose "same server" test compared only host
   and port. A device switched between http and https kept using the old one.

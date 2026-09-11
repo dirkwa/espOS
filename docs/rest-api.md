@@ -418,6 +418,14 @@ cookie by itself, a script sends the Bearer header. Events:
 At most `CONFIG_ESPOS_HTTPD_SSE_MAX_CLIENTS` (3) streams; when full the
 oldest stream is evicted (clients reconnect via `retry`).
 
+The "on connect" snapshots in the table above are one registered callback per
+publishing component, capped by `CONFIG_ESPOS_HTTPD_SSE_MAX_CONNECT_CBS` (8).
+A firmware that adds its own publishers registers after espOS's, so it is the
+consumer's events that go missing if the cap is too low -- and the symptom is
+quiet, because the endpoint still answers and later changes are still
+published; only the snapshot a fresh client gets is absent. Registering past
+the cap is refused with `ESP_ERR_NO_MEM` and logged by `espos_sse`.
+
 ## SignalK
 
 ### `GET /sk/status` — M3 · protected
