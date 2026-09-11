@@ -567,6 +567,12 @@ document when the pinned certificate changes).
  "available": {"version": "0.6.2", "url": "http://…/espos-esp32p4-0.6.2.bin", "size": 0,
                "sha256": "", "notes": "…", "newer": true}}
 ```
+`manifest.url` is what the last check actually fetched, which is not always
+what is configured: with `ota.manifest_src = "signalk"` the URL is derived
+from the connected server, and reporting the (empty) configured value would
+tell an operator the device looks nowhere. Before the first check it falls
+back to the configured `manifest_url`.
+
 `state` ∈ `idle checking available downloading verifying ready failed`
 (`ready` = installed, rebooting in ~1.5 s). `image_state` ∈ `valid
 pending_verify new invalid aborted undefined`; `pending_verify` is true

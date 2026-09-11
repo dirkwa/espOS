@@ -69,6 +69,13 @@ static struct {
     bool confirmed_this_boot;
     /* config snapshot */
     char manifest_url[168];
+    /* What the last check actually fetched. With manifest_src = "signalk"
+     * the configured URL is empty, so reporting it would show nothing where
+     * a real URL was used -- and an operator reading /api/v1/ota to find out
+     * where a device looks would be told "nowhere". */
+    char manifest_eff[168];
+    char manifest_src[12];
+    char manifest_path[128];
     char channel[16];
     bool auto_check, auto_install, allow_insecure;
     int32_t check_h, confirm_tmo_s;
@@ -96,6 +103,8 @@ static void load_config(void)
 {
     lock();
     espos_config_get_str(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_MANIFEST_URL, s.manifest_url, sizeof(s.manifest_url), NULL);
+    espos_config_get_str(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_MANIFEST_SRC, s.manifest_src, sizeof(s.manifest_src), NULL);
+    espos_config_get_str(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_MANIFEST_PATH, s.manifest_path, sizeof(s.manifest_path), NULL);
     espos_config_get_str(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_CHANNEL, s.channel, sizeof(s.channel), NULL);
     espos_config_get_bool(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_AUTO_CHECK, &s.auto_check);
     espos_config_get_bool(ESPOS_CFG_NS_OTA, ESPOS_CFG_OTA_AUTO_INSTALL, &s.auto_install);
@@ -157,22 +166,70 @@ static void progress_cb(size_t received, size_t total, void *arg)
     }
 }
 
+/*
+ * Where to fetch the manifest from.
+ *
+ * With ota.manifest_src = "signalk" the URL is derived from whichever server
+ * this device is already talking to, so a fresh device that finds its server
+ * also finds its updates and nothing has to be typed per device -- and a
+ * server that moves does not strand a fleet on a stale URL.
+ *
+ * espos_sk is an OPTIONAL dependency: a firmware can do OTA with no SignalK
+ * at all, and hard-requiring it to offer this one convenience would be the
+ * wrong trade. The weak symbol is what keeps that true; espos_sk provides the
+ * strong one (src/sk_ota_url.c). Same shape as the wall-clock hook in
+ * espos_httpd, and the same trap: the strong definition only wins if the
+ * linker pulls that object in, which is why espos_sk builds WHOLE_ARCHIVE.
+ */
+__attribute__((weak)) esp_err_t espos_ota_server_url_hook(const char *path, char *out, size_t n)
+{
+    (void)path;
+    (void)out;
+    (void)n;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 static void do_check(void)
 {
-    char url[168], channel[16];
+    char url[168], channel[16], src[12], path[128];
     bool insecure, auto_install;
     lock();
     snprintf(url, sizeof(url), "%s", s.manifest_url);
+    snprintf(src, sizeof(src), "%s", s.manifest_src);
+    snprintf(path, sizeof(path), "%s", s.manifest_path);
     snprintf(channel, sizeof(channel), "%s", s.channel);
     insecure = s.allow_insecure;
     auto_install = s.auto_install;
     s.last_check_at = espos_ota_port_uptime_s();
     s.next_check_at = s.last_check_at + (uint32_t)s.check_h * 3600;
     unlock();
+
+    if (strcmp(src, "signalk") == 0) {
+        esp_err_t uerr = espos_ota_server_url_hook(path, url, sizeof(url));
+        if (uerr == ESP_ERR_NOT_SUPPORTED) {
+            /* Configured to ask a server this firmware cannot talk to. Said
+             * plainly rather than falling back to manifest_url, which would
+             * silently check the wrong place. */
+            set_state(ESPOS_OTA_FAILED, "manifest source is signalk, but this firmware has no SignalK client");
+            return;
+        }
+        if (uerr != ESP_OK) {
+            /* No server selected yet -- ordinary at boot, before discovery
+             * has run. Not an error state worth alarming about; the next
+             * scheduled check will find one. */
+            set_state(ESPOS_OTA_FAILED, "no SignalK server selected yet");
+            return;
+        }
+    }
+
     if (!url[0]) {
         set_state(ESPOS_OTA_FAILED, "no manifest URL configured");
         return;
     }
+    /* Whatever we are about to fetch, that is what status should report. */
+    lock();
+    snprintf(s.manifest_eff, sizeof(s.manifest_eff), "%s", url);
+    unlock();
     set_state(ESPOS_OTA_CHECKING, NULL);
     char *body = NULL;
     size_t len = 0;
@@ -488,7 +545,8 @@ char *espos_ota_status_json(void)
     json_str(err, sizeof(err), s.last_error);
     json_str(url, sizeof(url), s.avail.url);
     json_str(notes, sizeof(notes), s.avail.notes);
-    json_str(murl, sizeof(murl), s.manifest_url);
+    json_str(murl, sizeof(murl),
+             s.manifest_eff[0] ? s.manifest_eff : s.manifest_url);
     uint32_t now = espos_ota_port_uptime_s();
     int n;
     char last[16] = "null", next[16] = "null";
