@@ -34,13 +34,15 @@ menu "espOS HTTP server"
     config ESPOS_HTTPD_SSE_MAX_CONNECT_CBS
         int "Maximum event-stream connect callbacks"
         default 8
-        range 4 16
+        range 6 16
         help
             Each component that publishes to GET /api/v1/events registers one
             callback here, so a newly connected client gets the current state
             immediately instead of waiting for the next change. espOS itself
-            ships six (net, wifi, sk, ota, ble, n2k); a firmware that adds its
-            own needs room for those too.
+            ships five (net, wifi, sk, ota, ble); a firmware that adds its own
+            needs room for those too. The floor is 6 rather than 5 because a
+            build that cannot fit espOS's own publishers plus one is the bug
+            this option exists to prevent.
 
             Running out is silent from the browser's side: the stream opens
             and every other component's snapshot arrives, so the one component

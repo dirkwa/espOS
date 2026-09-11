@@ -373,8 +373,8 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 ### Fixed
 
 - httpd: the event-stream on-connect table held four callbacks while espOS
-  itself ships six publishers (`net`, `wifi`, `sk`, `ota`, `ble`, `n2k`), so
-  on a firmware with more than four the last to register never delivered the
+  itself ships five publishers (`net`, `wifi`, `sk`, `ota`, `ble`), so on a
+  firmware with more than four the last to register never delivered the
   snapshot a fresh `GET /api/v1/events` client is documented to receive.
   Found on the BLE gateway, where `espos_ble` was the one that lost: it logged
   `status endpoint unavailable: ESP_ERR_NO_MEM` at boot and the web UI's BLE
