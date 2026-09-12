@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Dirk Wahrheit
+# SPDX-License-Identifier: Apache-2.0
+## espos_prov component manifest: registry metadata for signalk-espos/espos_prov.
+## The version is espOS's (version.txt) and moves with it, see docs/releasing.md.
+version: "0.7.0"
+description: "BLE provisioning: WiFi credentials from a phone over GATT, without an access point"
+url: "https://github.com/signalk-espOS/espOS/tree/main/components/espos_prov"
+repository: "https://github.com/signalk-espOS/espOS.git"
+documentation: "https://github.com/signalk-espOS/espOS/blob/main/docs/provisioning.md"
+issues: "https://github.com/signalk-espOS/espOS/issues"
+license: "Apache-2.0"
+maintainers:
+  - "Dirk Wahrheit <dirkwahrheit@gmail.com>"
+tags:
+  - signalk
+  - marine
+  - esp-idf
+  - espos
+  - ble
+  - provisioning
+files:
+  exclude:
+    - "build/**/*"
+    - "build-*/**/*"
+    - "sdkconfig*"
+    - "managed_components/**/*"
+    - "dependencies.lock"
+dependencies:
+  idf: ">=6.0.0,<6.1.0"
+  signalk-espos/espos_config:
+    version: "^0.7.0"
+    override_path: "../espos_config"
+  # The JSON the config endpoint accepts. Same pin as every other component.
+  espressif/cjson: "==1.7.19~2"

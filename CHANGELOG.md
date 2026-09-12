@@ -92,6 +92,33 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Added
 
+- prov: `espos_prov`, BLE provisioning -- WiFi credentials from a phone over
+  GATT, with no access point and no captive portal. Off by default
+  (`CONFIG_ESPOS_PROV`, about 25 KB of flash).
+
+  **Credentials only: espOS keeps the radio.** Credentials arriving over BLE
+  are written to the `wifi` config namespace -- the same keys the web UI
+  writes -- and the existing WiFi state machine connects as it always does.
+  Nothing in this component calls `esp_wifi_*`. That is why it is built on
+  protocomm directly rather than on `espressif/network_provisioning`: that
+  component's manager drives the station itself (`esp_wifi_set_storage`,
+  `esp_wifi_set_config` and a connect timer, all *before* it invokes the
+  application's callback, with no Kconfig to turn it off), which would mean
+  two owners of one radio and two stores of one set of credentials.
+
+  The cost of that choice is compatibility: Espressif's *ESP BLE
+  Provisioning* phone app speaks the manager's protobuf schema and will not
+  talk to this. The endpoint here is plain JSON.
+
+  **Known limitation, unresolved:** on a firmware that also runs
+  `espos_ble`, `protocomm_ble_start()` fails `ESP_ERR_INVALID_STATE` with
+  `Bluedroid already initialised`. protocomm's `simple_ble_start()` calls
+  `esp_bluedroid_init_with_cfg()`/`esp_bluedroid_enable()` unconditionally --
+  it assumes it owns the whole stack -- and the gateway has already brought
+  it up. Provisioning and the BLE *gateway* therefore cannot both run in one
+  firmware yet; the failure is non-fatal and the device carries on scanning.
+  A provisioning-only firmware is unaffected.
+
 - `espos_flow`: the data-flow runtime — one loop task, a wrap-safe timer wheel,
   a cross-task mailbox, and a typed producer/consumer graph over them. Nodes are
   wired with `connect_to()` or `>>`, cost no allocation after start-up and need
