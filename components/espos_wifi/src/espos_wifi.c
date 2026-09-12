@@ -20,6 +20,7 @@
 
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
+#include "espos_event.h"
 #include "espos_httpd.h"
 #include "espos_httpd_sse.h"
 #include "espos_net.h"
@@ -327,10 +328,18 @@ static void drain_all_locked(void)
                 lock();
                 espos_wifi_sm_event(&s.sm, ESPOS_WIFI_EV_PORTAL_FAILED, NULL);
                 unlock();
+            } else {
+                /* Announced BEFORE anyone tries to associate. On a part whose
+                 * radio is shared with BLE -- the P4's C6 co-processor -- a
+                 * scanner running at the default duty cycle owns half the
+                 * airtime, and joining the portal then takes minutes instead
+                 * of seconds. Listeners use this to stand down. */
+                espos_event_post(ESPOS_EVENT_PORTAL_UP, NULL, 0);
             }
             break;
         case ACT_PORTAL_STOP:
             p->portal_stop(NULL);
+            espos_event_post(ESPOS_EVENT_PORTAL_DOWN, NULL, 0);
             break;
         default:
             break;

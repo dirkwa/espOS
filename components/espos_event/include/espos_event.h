@@ -48,7 +48,14 @@ typedef enum {
     ESPOS_EVENT_SK_STREAM_DISCONNECTED = 9, /* delta stream closed; data: none */
     ESPOS_EVENT_OTA_AVAILABLE = 10,         /* manifest names a newer build; data: espos_event_ota_t */
     ESPOS_EVENT_TIME_SYNCED = 11,           /* a source set the wall clock; data: espos_event_time_t */
-    ESPOS_EVENT_MAX = 12,
+    /* The setup access point came up / went away. Anything else that shares
+     * the radio should get out of the way in between: on a co-processor part
+     * (the ESP32-P4's C6) WiFi and BLE are ONE radio, and a BLE scan at the
+     * default 160/320 ms duty cycle takes half of it -- enough to make
+     * joining the portal take minutes, or fail. data: none */
+    ESPOS_EVENT_PORTAL_UP = 12,
+    ESPOS_EVENT_PORTAL_DOWN = 13,
+    ESPOS_EVENT_MAX = 14,
 } espos_event_id_t;
 
 /* ESPOS_EVENT_NETWORK_UP */

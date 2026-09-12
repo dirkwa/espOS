@@ -372,6 +372,31 @@ Entries name the component the way commit scopes do (`wifi`, `sk`, `ble`,
 
 ### Fixed
 
+- ble/wifi: the setup portal was painfully slow to join on the ESP32-P4 --
+  half a minute to get a DHCP lease, minutes to reach the page, sometimes
+  never. The C6 co-processor is ONE radio serving both WiFi and BLE, and the
+  gateway scans 160 ms out of every 320 ms, so the SoftAP lost half its
+  beacons and the association and DHCP exchange with them. The scanner now
+  stands down while the portal is up (new `ESPOS_EVENT_PORTAL_UP` /
+  `PORTAL_DOWN`, and `espos_ble_scan_suspend()` / `_resume()`), and picks up
+  again when the portal closes. A device showing its setup portal has nowhere
+  to publish advertisements to yet, so nothing is lost.
+
+  Two details that are easy to get wrong and are worth knowing if you add a
+  second radio user. **Bluedroid keeps exactly one GAP callback** --
+  `esp_ble_gap_register_callback()` is a setter, not a subscribe -- so a
+  component that registers its own (protocomm's `simple_ble`, for instance)
+  silently takes the gateway's, after which scan results stop arriving with
+  no error reported anywhere; `espos_ble_scan_resume()` reclaims it. And
+  **suspensions are counted**, because with a plain flag a second holder
+  releasing its suspension handed the radio back while the portal still
+  needed it -- observed on hardware as `suspended` followed by `resumed`
+  150 ms later, with the portal still up.
+
+  `GET /api/v1/ble/status` gains `scan_suspended`, so a device that has
+  deliberately stopped scanning is distinguishable from one whose radio
+  failed.
+
 - httpd: the event-stream on-connect table held four callbacks while espOS
   itself ships five publishers (`net`, `wifi`, `sk`, `ota`, `ble`), so on a
   firmware with more than four the last to register never delivered the

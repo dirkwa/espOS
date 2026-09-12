@@ -41,6 +41,7 @@
 #include "esp_websocket_client.h"
 #include "espos_ble.h"
 #include "espos_config.h"
+#include "espos_event.h"
 #include "espos_cfg_keys.h"
 #include "espos_sk.h"
 #include "espos_sk_http.h"
@@ -49,6 +50,10 @@
 #include "freertos/task.h"
 
 static const char *TAG = "espos_ble";
+
+/* Defined with the scan-suspend pair further down; declared here because
+ * espos_ble_start() subscribes it before that point. */
+static void on_portal_event(void *arg, esp_event_base_t base, int32_t id, void *data);
 
 #define ADV_PATH "/signalk/v2/api/ble/gateway/advertisements"
 #define WS_PATH  "/signalk/v2/api/ble/gateway/ws"
@@ -95,6 +100,25 @@ static struct {
     /* Set by gateway_task just before it deletes itself, so stop() can wait
      * without polling a task handle that may already be freed. */
     volatile bool task_exited;
+
+    /* How many callers are currently holding the radio away from the
+     * scanner. A count, not a flag: a second holder (BLE provisioning)
+     * both suspend, and on an unconfigured device they overlap exactly. With
+     * a bool, that holder failing to start resumed scanning while the portal
+     * -- which had suspended first, and still needed the airtime -- was left
+     * believing it had been granted it. Observed on the bench: "scanning
+     * suspended (setup portal)" followed 150 ms later by "scanning resumed".
+     *
+     * Distinct from "not scanning" so the status document can say which it
+     * is: on a device showing its portal, a stopped scanner is expected. */
+    unsigned scan_suspend_count;
+
+    /* True while the setup portal holds ONE of those suspensions; see
+     * espos_ble_portal_hold(). Without it the portal's two announcements --
+     * the event and the startup catch-up -- could each take a hold, and the
+     * single PORTAL_DOWN would leave the count stuck above zero with the
+     * scanner off for good. */
+    bool portal_holds_scan;
 
     /* counters */
     uint32_t adv_received, adv_posted, post_ok, post_fail;
@@ -924,7 +948,16 @@ esp_err_t espos_ble_start(void)
         return err;
     }
 
-    espos_ble_scan_start(g.active_scan, (uint16_t)g.scan_int, (uint16_t)g.scan_win);
+    /* Not if something already asked for the radio. espos_core suspends the
+     * scanner before this when the setup portal is up, and starting anyway
+     * would hand back the airtime it just took -- the portal is raised inside
+     * espos_wifi_start(), which runs first, so this ordering is the normal
+     * case on an unconfigured device rather than a corner. */
+    if (g.scan_suspend_count == 0) {
+        espos_ble_scan_start(g.active_scan, (uint16_t)g.scan_int, (uint16_t)g.scan_win);
+    } else {
+        ESP_LOGI(TAG, "not scanning yet: %s", "suspended before the gateway started");
+    }
 
     g.running = true;
     g.task_exited = false;
@@ -942,6 +975,23 @@ esp_err_t espos_ble_start(void)
         g.storage = NULL;
         return ESP_ERR_NO_MEM;
     }
+    /* Stand down while the setup portal is up; see on_portal_event. Also
+     * non-fatal: without it the gateway still scans, it just makes the portal
+     * painfully slow to join on a shared-radio part. */
+    esp_err_t ev_err = espos_event_subscribe(ESPOS_EVENT_PORTAL_UP, on_portal_event, NULL);
+    if (ev_err == ESP_OK) {
+        ev_err = espos_event_subscribe(ESPOS_EVENT_PORTAL_DOWN, on_portal_event, NULL);
+        if (ev_err != ESP_OK) {
+            /* Half a subscription is worse than none: we would suspend on
+             * PORTAL_UP and never hear the DOWN that resumes us, leaving a
+             * gateway that stops scanning the first time the portal appears
+             * and never starts again. */
+            espos_event_unsubscribe(ESPOS_EVENT_PORTAL_UP, on_portal_event);
+        }
+    }
+    if (ev_err != ESP_OK) {
+        ESP_LOGW(TAG, "not watching the portal: %s; joining it may be slow", esp_err_to_name(ev_err));
+    }
     /* Non-fatal: the gateway still works without its status endpoint. */
     esp_err_t api_err = espos_ble_register_api();
     if (api_err != ESP_OK) {
@@ -951,6 +1001,105 @@ esp_err_t espos_ble_start(void)
     ESP_LOGI(TAG, "started");
     return ESP_OK;
 }
+
+/* The setup portal is up, so the radio belongs to WiFi for a while.
+ *
+ * On the ESP32-P4 the C6 co-processor is ONE radio doing both, and the
+ * gateway's default scan is 160 ms of listening every 320 ms -- half the
+ * airtime. That is enough to lose the SoftAP's beacons and the association
+ * and DHCP exchange with them: joining the portal takes minutes, or never
+ * completes, which reads to whoever is holding the phone as a broken device.
+ *
+ * A device showing its setup portal has, by definition, nowhere to publish
+ * advertisements to yet, so there is nothing to lose by standing down. */
+/* The count is read-modify-written by every holder, and holders are not all
+ * on one task: the portal arrives on the default event loop's task, the
+ * startup catch-up on whichever task called espos_start(), and a firmware
+ * with its own holder may use a third. A spinlock rather than the component's
+ * mutex because the critical section is three instructions and one of these
+ * callers may be an event handler that must not block. */
+static portMUX_TYPE s_suspend_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* The portal is ONE holder of the scan suspension, however many times we are
+ * told about it: the event fires for later transitions, and espos_start()
+ * checks at boot because the portal is raised inside espos_wifi_start(),
+ * before the gateway exists to hear the event. Whichever arrives second must
+ * not take a second hold -- only one PORTAL_DOWN ever arrives to release it,
+ * and the count would never reach zero, leaving the scanner off for good. */
+void espos_ble_portal_hold(bool up)
+{
+    /* Test-and-set under the same lock as the count: the event and the
+     * startup catch-up can land on different tasks, and two "portal is up"
+     * arriving at once must still take exactly one hold. */
+    taskENTER_CRITICAL(&s_suspend_lock);
+    bool changed = (up != g.portal_holds_scan);
+    g.portal_holds_scan = up;
+    taskEXIT_CRITICAL(&s_suspend_lock);
+    if (!changed) {
+        return;
+    }
+    if (up) {
+        espos_ble_scan_suspend("setup portal is up (shared radio)");
+    } else {
+        espos_ble_scan_resume();
+    }
+}
+
+static void on_portal_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    (void)base;
+    (void)data;
+    espos_ble_portal_hold(id == ESPOS_EVENT_PORTAL_UP);
+}
+
+esp_err_t espos_ble_scan_suspend(const char *reason)
+{
+    taskENTER_CRITICAL(&s_suspend_lock);
+    unsigned before = g.scan_suspend_count++;
+    taskEXIT_CRITICAL(&s_suspend_lock);
+    /* Logged at INFO and naming the reason: a silent scanner is the symptom
+     * of both this (deliberate) and a stolen GAP callback (a bug), and the
+     * log is where someone will look to tell them apart. */
+    ESP_LOGI(TAG, "scanning suspended (%s)%s", reason ? reason : "unspecified",
+             before ? " [already suspended]" : "");
+    if (before > 0) return ESP_OK;
+    if (!g.running) return ESP_OK;
+    return espos_ble_scan_stop();
+}
+
+esp_err_t espos_ble_scan_resume(void)
+{
+    taskENTER_CRITICAL(&s_suspend_lock);
+    bool held = g.scan_suspend_count > 0;
+    unsigned left = held ? --g.scan_suspend_count : 0;
+    taskEXIT_CRITICAL(&s_suspend_lock);
+    if (!held) {
+        return ESP_OK; /* nothing was suspended; resuming is a no-op */
+    }
+    if (left > 0) {
+        ESP_LOGI(TAG, "scanning still suspended (%u holder(s) left)", left);
+        return ESP_OK;
+    }
+    if (!g.running) {
+        ESP_LOGI(TAG, "scanning resumed (gateway not running; nothing to restart)");
+        return ESP_OK;
+    }
+    /* Order matters. Whoever held the radio has almost certainly replaced the
+     * one GAP callback Bluedroid keeps, and scan results are delivered
+     * through it -- so restarting the scan without reclaiming first yields a
+     * scanner that runs and reports nothing. */
+    esp_err_t err = espos_ble_gap_reclaim();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not reclaim the GAP callback: %s; scan results would be lost",
+                 esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "scanning resumed");
+    return espos_ble_scan_start(g.active_scan, (uint16_t)g.scan_int, (uint16_t)g.scan_win);
+}
+
+bool espos_ble_scan_is_suspended(void) { return g.scan_suspend_count > 0; }
 
 esp_err_t espos_ble_stop(void)
 {
@@ -1013,6 +1162,7 @@ esp_err_t espos_ble_get_status(espos_ble_status_t *out)
     memset(out, 0, sizeof(*out));
     out->enabled = g.running;
     out->scanning = espos_ble_is_scanning();
+    out->scan_suspended = g.scan_suspend_count > 0;
     snprintf(out->mac, sizeof(out->mac), "%s", espos_ble_mac());
     out->scan_hits = espos_ble_scan_hits();
     out->adv_received = g.adv_received;
