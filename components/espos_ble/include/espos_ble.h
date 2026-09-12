@@ -64,6 +64,16 @@ esp_err_t espos_ble_scan_suspend(const char *reason);
  * when the count reaches zero. A no-op if nothing is suspended. */
 esp_err_t espos_ble_scan_resume(void);
 
+/** Take or release the setup portal's suspension, idempotently.
+ *
+ * The portal is announced twice by design -- ESPOS_EVENT_PORTAL_UP for later
+ * transitions, and a check from espos_start() at boot, because the portal is
+ * raised inside espos_wifi_start() before this component exists to hear the
+ * event. This makes the portal exactly ONE holder either way: taking two
+ * holds when only one PORTAL_DOWN will ever arrive would leave the scanner
+ * suspended for good. */
+void espos_ble_portal_hold(bool up);
+
 /** True while suspended by espos_ble_scan_suspend(). Mirrored into
  * GET /api/v1/ble/status as `scan_suspended`, because "scanning: false" on a
  * device whose setup portal is up is expected, not a fault. */

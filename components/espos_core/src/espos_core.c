@@ -218,7 +218,7 @@ esp_err_t espos_start_network(void)
      * to publish advertisements to anyway. */
     espos_wifi_status_t wst;
     if (espos_wifi_get_status(&wst) == ESP_OK && wst.sm.portal_active) {
-        espos_ble_scan_suspend("setup portal is up (shared radio)");
+        espos_ble_portal_hold(true);
     }
 #endif
 #endif

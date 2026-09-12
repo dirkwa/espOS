@@ -113,6 +113,13 @@ static struct {
      * is: on a device showing its portal, a stopped scanner is expected. */
     unsigned scan_suspend_count;
 
+    /* True while the setup portal holds ONE of those suspensions; see
+     * espos_ble_portal_hold(). Without it the portal's two announcements --
+     * the event and the startup catch-up -- could each take a hold, and the
+     * single PORTAL_DOWN would leave the count stuck above zero with the
+     * scanner off for good. */
+    bool portal_holds_scan;
+
     /* counters */
     uint32_t adv_received, adv_posted, post_ok, post_fail;
     /* Advertisements dropped because the ingest callback could not take
@@ -974,6 +981,13 @@ esp_err_t espos_ble_start(void)
     esp_err_t ev_err = espos_event_subscribe(ESPOS_EVENT_PORTAL_UP, on_portal_event, NULL);
     if (ev_err == ESP_OK) {
         ev_err = espos_event_subscribe(ESPOS_EVENT_PORTAL_DOWN, on_portal_event, NULL);
+        if (ev_err != ESP_OK) {
+            /* Half a subscription is worse than none: we would suspend on
+             * PORTAL_UP and never hear the DOWN that resumes us, leaving a
+             * gateway that stops scanning the first time the portal appears
+             * and never starts again. */
+            espos_event_unsubscribe(ESPOS_EVENT_PORTAL_UP, on_portal_event);
+        }
     }
     if (ev_err != ESP_OK) {
         ESP_LOGW(TAG, "not watching the portal: %s; joining it may be slow", esp_err_to_name(ev_err));
@@ -998,35 +1012,73 @@ esp_err_t espos_ble_start(void)
  *
  * A device showing its setup portal has, by definition, nowhere to publish
  * advertisements to yet, so there is nothing to lose by standing down. */
+/* The count is read-modify-written by every holder, and holders are not all
+ * on one task: the portal arrives on the default event loop's task, the
+ * startup catch-up on whichever task called espos_start(), and a firmware
+ * with its own holder may use a third. A spinlock rather than the component's
+ * mutex because the critical section is three instructions and one of these
+ * callers may be an event handler that must not block. */
+static portMUX_TYPE s_suspend_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* The portal is ONE holder of the scan suspension, however many times we are
+ * told about it: the event fires for later transitions, and espos_start()
+ * checks at boot because the portal is raised inside espos_wifi_start(),
+ * before the gateway exists to hear the event. Whichever arrives second must
+ * not take a second hold -- only one PORTAL_DOWN ever arrives to release it,
+ * and the count would never reach zero, leaving the scanner off for good. */
+void espos_ble_portal_hold(bool up)
+{
+    /* Test-and-set under the same lock as the count: the event and the
+     * startup catch-up can land on different tasks, and two "portal is up"
+     * arriving at once must still take exactly one hold. */
+    taskENTER_CRITICAL(&s_suspend_lock);
+    bool changed = (up != g.portal_holds_scan);
+    g.portal_holds_scan = up;
+    taskEXIT_CRITICAL(&s_suspend_lock);
+    if (!changed) {
+        return;
+    }
+    if (up) {
+        espos_ble_scan_suspend("setup portal is up (shared radio)");
+    } else {
+        espos_ble_scan_resume();
+    }
+}
+
 static void on_portal_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     (void)base;
     (void)data;
-    if (id == ESPOS_EVENT_PORTAL_UP) {
-        espos_ble_scan_suspend("setup portal is up (shared radio)");
-    } else if (id == ESPOS_EVENT_PORTAL_DOWN) {
-        espos_ble_scan_resume();
-    }
+    espos_ble_portal_hold(id == ESPOS_EVENT_PORTAL_UP);
 }
 
 esp_err_t espos_ble_scan_suspend(const char *reason)
 {
+    taskENTER_CRITICAL(&s_suspend_lock);
+    unsigned before = g.scan_suspend_count++;
+    taskEXIT_CRITICAL(&s_suspend_lock);
     /* Logged at INFO and naming the reason: a silent scanner is the symptom
      * of both this (deliberate) and a stolen GAP callback (a bug), and the
      * log is where someone will look to tell them apart. */
     ESP_LOGI(TAG, "scanning suspended (%s)%s", reason ? reason : "unspecified",
-             g.scan_suspend_count ? " [already suspended]" : "");
-    if (g.scan_suspend_count++ > 0) return ESP_OK;
+             before ? " [already suspended]" : "");
+    if (before > 0) return ESP_OK;
     if (!g.running) return ESP_OK;
     return espos_ble_scan_stop();
 }
 
 esp_err_t espos_ble_scan_resume(void)
 {
-    if (g.scan_suspend_count == 0) return ESP_OK;
-    if (--g.scan_suspend_count > 0) {
-        ESP_LOGI(TAG, "scanning still suspended (%u holder(s) left)", g.scan_suspend_count);
+    taskENTER_CRITICAL(&s_suspend_lock);
+    bool held = g.scan_suspend_count > 0;
+    unsigned left = held ? --g.scan_suspend_count : 0;
+    taskEXIT_CRITICAL(&s_suspend_lock);
+    if (!held) {
+        return ESP_OK; /* nothing was suspended; resuming is a no-op */
+    }
+    if (left > 0) {
+        ESP_LOGI(TAG, "scanning still suspended (%u holder(s) left)", left);
         return ESP_OK;
     }
     if (!g.running) {
