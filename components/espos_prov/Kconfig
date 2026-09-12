@@ -1,0 +1,39 @@
+menu "espOS BLE provisioning"
+
+    config ESPOS_PROV
+        bool "BLE provisioning (credentials from a phone, no access point)"
+        default n
+        depends on BT_BLUEDROID_ENABLED
+        select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
+        help
+            Lets a phone hand this device its WiFi credentials over BLE GATT
+            instead of the setup access point.
+
+            Off by default: it costs about 23 KB of flash and only makes sense
+            on a device that has BLE at all. It needs Bluedroid; the
+            application must already have brought the stack up (espos_ble does
+            this, including the ESP32-P4's hosted co-processor path).
+
+            NOTE this is built on protocomm directly, NOT on
+            espressif/network_provisioning, because that component's manager
+            drives the WiFi station itself and espOS's own state machine
+            already owns those calls. The practical consequence is that
+            Espressif's "ESP BLE Provisioning" phone app will NOT talk to this
+            device -- it speaks the manager's protobuf schema. The endpoint
+            here is plain JSON. See docs/provisioning.md.
+
+            While provisioning is active BLE SCANNING IS SUSPENDED: Bluedroid
+            keeps a single GAP callback and protocomm takes it, so a gateway
+            left scanning would receive nothing at all and report no error.
+
+    config ESPOS_PROV_TIMEOUT_S
+        int "Stop advertising after this many seconds (0 = never)"
+        default 600
+        range 0 86400
+        depends on ESPOS_PROV
+        help
+            A device left advertising for provisioning is a device anyone in
+            range can try to configure. The default gives ten minutes to get
+            a phone out, then closes the window.
+
+endmenu
