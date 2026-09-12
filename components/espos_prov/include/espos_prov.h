@@ -47,14 +47,22 @@ typedef struct {
      * the same short device id used for the hostname and the portal SSID, so
      * one device is one recognisable name everywhere. */
     const char *service_name;
-    /* Proof of possession. Empty derives one from the MAC, which is printed
-     * on the log and served by GET /api/v1/prov so it can be shown to whoever
-     * is holding the phone. A PoP the device chooses is better than none;
-     * a PoP printed on the enclosure would be better still. */
+    /* Proof of possession, at most 23 characters; longer is rejected rather
+     * than truncated. Empty makes the device generate a random one on first
+     * use and keep it (config key `prov.pop`), printed on the log and served
+     * by GET /api/v1/prov so it can be shown to whoever is holding the phone.
+     *
+     * It is deliberately NOT derived from the MAC or the device id: the
+     * advertised name already carries the id, so a derived PoP would travel
+     * over the air beside the thing it protects. A PoP printed on the
+     * enclosure at manufacture is better still, and is what this field is
+     * for. */
     const char *pop;
-    /* Stop advertising after this many seconds with nobody connected. 0 keeps
-     * it up until credentials arrive. A device left advertising forever is a
-     * device anyone in the marina can try to provision. */
+    /* Stop advertising after this many seconds. 0 takes
+     * CONFIG_ESPOS_PROV_TIMEOUT_S. A device left advertising is a device
+     * anyone in the marina can try to provision, so the window closes on its
+     * own -- and closes early, a few seconds after credentials arrive, since
+     * the job is then done. */
     uint32_t timeout_s;
 } espos_prov_cfg_t;
 

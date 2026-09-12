@@ -32,13 +32,18 @@
 #if CONFIG_ESPOS_PROV
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 
 #include "cJSON.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_random.h"
 #include "esp_srp.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_prov.h"
@@ -96,6 +101,10 @@ static struct {
     int verifier_len;
     protocomm_security2_params_t sec_params;
     bool suspended_scan;
+    /* Closes the advertising window. A device left advertising is a device
+     * anyone in range can try to provision, and one that has already been
+     * given credentials has no reason to keep listening. */
+    esp_timer_handle_t deadline;
 } s;
 
 /* ------------------------------------------------------------ helpers */
@@ -181,6 +190,14 @@ static esp_err_t config_handler(uint32_t session_id, const uint8_t *inbuf, ssize
     if (err == ESP_OK) {
         s.got_creds = true;
         reply = "{\"ok\":true}";
+        /* The job is done: close the window shortly, so a provisioned device
+         * does not sit advertising for the rest of the timeout. Shortly, not
+         * now -- this runs on protocomm's session and the reply below still
+         * has to reach the phone. */
+        if (s.deadline) {
+            esp_timer_stop(s.deadline);
+            esp_timer_start_once(s.deadline, 3ULL * 1000000ULL);
+        }
     } else {
         ESP_LOGW(TAG, "could not apply configuration: %s", esp_err_to_name(err));
         reply = "{\"ok\":false,\"error\":\"rejected\"}";
@@ -196,6 +213,30 @@ respond:
     }
     memcpy(*outbuf, reply, (size_t)*outlen);
     return ESP_OK;
+}
+
+/* esp_timer callbacks run on the timer task, where the stack is small and
+ * blocking is rude; espos_prov_stop() tears down protocomm and talks to
+ * Bluedroid. Do it on a short-lived task of our own instead. */
+static void stopper_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "provisioning window closed");
+    espos_prov_stop();
+    vTaskDelete(NULL);
+}
+
+static void on_deadline(void *arg)
+{
+    (void)arg;
+    if (!s.active) {
+        return;
+    }
+    if (xTaskCreate(stopper_task, "espos_prov_stop", 4096, NULL, 4, NULL) != pdPASS) {
+        /* Leaving it advertising is the wrong failure, but there is nothing
+         * safe to do from here; say so rather than fail silently. */
+        ESP_LOGE(TAG, "could not stop provisioning: still advertising");
+    }
 }
 
 /* ------------------------------------------------------------ lifecycle */
@@ -216,13 +257,39 @@ esp_err_t espos_prov_start(const espos_prov_cfg_t *cfg)
         snprintf(s.service_name, sizeof(s.service_name), "ESPOS_%s", id);
     }
     if (cfg && cfg->pop && cfg->pop[0]) {
+        if (strlen(cfg->pop) >= sizeof(s.pop)) {
+            /* Truncating would leave the device expecting a different secret
+             * from the one the caller set, and the mismatch would only show
+             * up as an unexplained authentication failure from the phone. */
+            ESP_LOGE(TAG, "pop too long (max %u)", (unsigned)(sizeof(s.pop) - 1));
+            return ESP_ERR_INVALID_ARG;
+        }
         snprintf(s.pop, sizeof(s.pop), "%s", cfg->pop);
     } else {
-        /* Derived, not absent. A PoP the device picks is weak -- anyone who
-         * can read the advertised name can guess the scheme -- but it still
-         * forces an active attacker to know the MAC, and it is printed so a
-         * human can type it. */
-        snprintf(s.pop, sizeof(s.pop), "espos%s", id);
+        /* Random, and kept. NOT derived from the MAC or the device id: the
+         * advertised name already carries the id, so a derived PoP would be
+         * printed on the air next to the thing it is meant to protect --
+         * which is no protection at all.
+         *
+         * Persisted so it survives a reboot: whoever is standing at the
+         * device has read it from the log or GET /api/v1/prov, and a new
+         * value on every boot would make it unusable rather than secure.
+         * A PoP printed on the enclosure at manufacture would be better
+         * still, and is what cfg->pop is for. */
+        char stored[sizeof(s.pop)] = { 0 };
+        espos_config_get_str(ESPOS_CFG_NS_PROV, ESPOS_CFG_PROV_POP, stored, sizeof(stored), NULL);
+        if (stored[0]) {
+            snprintf(s.pop, sizeof(s.pop), "%s", stored);
+        } else {
+            static const char kAlphabet[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; /* no 0/O/1/I */
+            uint8_t rnd[12];
+            esp_fill_random(rnd, sizeof(rnd));
+            for (size_t i = 0; i < sizeof(rnd); i++) {
+                s.pop[i] = kAlphabet[rnd[i] % (sizeof(kAlphabet) - 1)];
+            }
+            s.pop[sizeof(rnd)] = '\0';
+            espos_config_set_str(ESPOS_CFG_NS_PROV, ESPOS_CFG_PROV_POP, s.pop);
+        }
     }
 
     /* SRP6a salt and verifier for Security 2, derived at boot from the PoP.
@@ -286,6 +353,22 @@ esp_err_t espos_prov_start(const espos_prov_cfg_t *cfg)
     s.active = true;
     ESP_LOGI(TAG, "provisioning over BLE as \"%s\", pop \"%s\"", s.service_name, s.pop);
 
+    uint32_t window_s = (cfg && cfg->timeout_s) ? cfg->timeout_s : CONFIG_ESPOS_PROV_TIMEOUT_S;
+    if (window_s) {
+        const esp_timer_create_args_t targs = {
+            .callback = on_deadline,
+            .name = "espos_prov",
+        };
+        if (esp_timer_create(&targs, &s.deadline) == ESP_OK &&
+            esp_timer_start_once(s.deadline, (uint64_t)window_s * 1000000ULL) == ESP_OK) {
+            ESP_LOGI(TAG, "advertising for %" PRIu32 " s", window_s);
+        } else {
+            /* Non-fatal, but say so: the window is a security control, and
+             * silently advertising for ever is not what was asked for. */
+            ESP_LOGW(TAG, "no provisioning deadline: will advertise until stopped");
+        }
+    }
+
     esp_err_t api_err = espos_prov_register_api();
     if (api_err != ESP_OK) {
         /* Non-fatal, as everywhere else: provisioning works without its
@@ -301,6 +384,11 @@ fail:
 
 esp_err_t espos_prov_stop(void)
 {
+    if (s.deadline) {
+        esp_timer_stop(s.deadline);
+        esp_timer_delete(s.deadline);
+        s.deadline = NULL;
+    }
     if (s.pc) {
         protocomm_ble_stop(s.pc);
         protocomm_delete(s.pc);

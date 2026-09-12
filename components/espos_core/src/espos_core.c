@@ -71,8 +71,20 @@ static bool any_wifi_network_configured(void)
     static const char *const ssid_keys[] = { ESPOS_CFG_WIFI_SSID0, ESPOS_CFG_WIFI_SSID1,
                                              ESPOS_CFG_WIFI_SSID2, ESPOS_CFG_WIFI_SSID3 };
     for (size_t i = 0; i < sizeof(ssid_keys) / sizeof(ssid_keys[0]); i++) {
+        /* 33 = the 32-octet maximum SSID plus its terminator, so a full-length
+         * SSID reads back whole rather than ESP_ERR_INVALID_SIZE. */
         char ssid[33] = { 0 };
-        espos_config_get_str(ESPOS_CFG_NS_WIFI, ssid_keys[i], ssid, sizeof(ssid), NULL);
+        esp_err_t err = espos_config_get_str(ESPOS_CFG_NS_WIFI, ssid_keys[i], ssid, sizeof(ssid), NULL);
+        /* A read cannot fail for a declared key (it yields the stored value or
+         * the default), and these four are declared by espos_wifi. If one ever
+         * does, treat it as "might be configured" and skip provisioning: a
+         * device that quietly advertises for anyone to claim is the worse
+         * outcome of the two. */
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "could not read %s (%s); not starting BLE provisioning", ssid_keys[i],
+                     esp_err_to_name(err));
+            return true;
+        }
         if (ssid[0]) {
             return true;
         }
