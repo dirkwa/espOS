@@ -38,7 +38,7 @@ idf_component_register(
 # Optional stages: link them only when they are in the build, and tell the
 # source which ones are, so espos_start() can call into them without an
 # #include that would fail in a firmware built without them.
-idf_component_optional_requires(PRIVATE espos_sk espos_ota espos_ble)
+idf_component_optional_requires(PRIVATE espos_sk espos_ota espos_ble espos_prov)
 idf_build_get_property(comps BUILD_COMPONENTS)
 if(espos_wifi IN_LIST comps)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPOS_HAVE_WIFI=1)
@@ -55,6 +55,13 @@ endif()
 # firmware may link the component without enabling the stack.
 if(espos_ble IN_LIST comps AND NOT target STREQUAL "linux")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPOS_HAVE_BLE=1)
+endif()
+
+# Same shape for BLE provisioning. It also gates on CONFIG_ESPOS_PROV in the
+# source: unlike the gateway, linking the component is not the same as wanting
+# it started -- it suspends BLE scanning while it runs.
+if(espos_prov IN_LIST comps AND NOT target STREQUAL "linux")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPOS_HAVE_PROV=1)
 endif()
 
 # espOS's own version, as distinct from the application's PROJECT_VER: in the
