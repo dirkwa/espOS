@@ -224,6 +224,18 @@ esp_err_t espos_ble_scan_stop(void)
     return esp_ble_gap_stop_scanning();
 }
 
+esp_err_t espos_ble_gap_reclaim(void)
+{
+    /* Cheap and idempotent, so callers do not have to track who holds it.
+     * esp_ble_gap_get_callback() is the only way to know: registering is
+     * silent whether or not it displaced someone. */
+    if (esp_ble_gap_get_callback() == gap_cb) {
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "GAP callback was taken by another component; reclaiming");
+    return esp_ble_gap_register_callback(gap_cb);
+}
+
 bool espos_ble_is_scanning(void) { return s_scanning; }
 uint32_t espos_ble_scan_hits(void) { return s_scan_hits; }
 const char *espos_ble_mac(void) { return s_mac; }

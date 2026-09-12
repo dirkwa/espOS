@@ -205,6 +205,22 @@ esp_err_t espos_start_network(void)
 #endif
 #if START_BLE
     STAGE(espos_ble_start());
+#if ESPOS_HAVE_WIFI
+    /* The setup portal is raised inside espos_wifi_start(), which ran above,
+     * so the gateway missed the PORTAL_UP event that tells it to stand down.
+     * Catch up here.
+     *
+     * This is not a nicety on a co-processor part: the ESP32-P4's C6 is ONE
+     * radio serving WiFi and BLE, and the gateway's default scan takes half
+     * the airtime (160 ms window, 320 ms interval). Joining the portal then
+     * takes minutes, or fails at DHCP -- measured on the bench, and reported
+     * from a phone as "takes ages". A device showing its portal has nowhere
+     * to publish advertisements to anyway. */
+    espos_wifi_status_t wst;
+    if (espos_wifi_get_status(&wst) == ESP_OK && wst.sm.portal_active) {
+        espos_ble_scan_suspend("setup portal is up (shared radio)");
+    }
+#endif
 #endif
     s.network_started = true;
     return ESP_OK;

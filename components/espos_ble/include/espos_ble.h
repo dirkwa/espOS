@@ -38,11 +38,46 @@ extern "C" {
 esp_err_t espos_ble_start(void);
 esp_err_t espos_ble_stop(void);
 
+/** Suspend scanning, leaving the BLE stack up, so another component may own
+ * the radio for a while. The setup portal is the reason this exists.
+ *
+ * This is NOT espos_ble_stop(): the stack stays initialised, the tasks keep
+ * running, and the counters keep their values. Only the scan stops.
+ *
+ * It is also not merely a courtesy. Bluedroid keeps exactly ONE GAP callback
+ * and registering is a setter, so a component like protocomm's simple_ble
+ * silently takes ours when it starts -- after which scan results stop
+ * arriving with no error reported anywhere. Suspending makes that explicit
+ * instead of leaving a scanner that appears to run and receives nothing.
+ *
+ * Suspensions are COUNTED, so callers must pair them: scanning restarts only
+ * when the last holder resumes. A firmware that adds a second holder -- BLE
+ * provisioning is the obvious one -- overlaps the portal exactly on an
+ * unconfigured device, and a plain flag there let one hand the radio back
+ * while the other still needed it.
+ *
+ * Safe to call when the gateway was never started. */
+esp_err_t espos_ble_scan_suspend(const char *reason);
+
+/** Release one suspension taken by espos_ble_scan_suspend(). Scanning
+ * restarts, and the GAP callback is reclaimed if something else took it, only
+ * when the count reaches zero. A no-op if nothing is suspended. */
+esp_err_t espos_ble_scan_resume(void);
+
+/** True while suspended by espos_ble_scan_suspend(). Mirrored into
+ * GET /api/v1/ble/status as `scan_suspended`, because "scanning: false" on a
+ * device whose setup portal is up is expected, not a fault. */
+bool espos_ble_scan_is_suspended(void);
+
 /** Runtime counters, mirrored into GET /api/v1/ble/status and the `ble` SSE
  * event. */
 typedef struct {
     bool enabled;
     bool scanning;
+    /* Scanning was stopped on purpose (see espos_ble_scan_suspend), not
+     * because the radio failed. Without this a device showing its setup
+     * portal and a broken one produce the same status document. */
+    bool scan_suspended;
     char mac[18];             /* controller address, "" if unknown */
     uint32_t scan_hits;       /* advertisements seen by the scanner */
     uint32_t adv_received;    /* handed to the gateway */

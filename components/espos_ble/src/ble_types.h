@@ -70,6 +70,16 @@ esp_err_t espos_ble_backend_deinit(void);
 esp_err_t espos_ble_scan_start(bool active, uint16_t interval_ms, uint16_t window_ms);
 esp_err_t espos_ble_scan_stop(void);
 bool espos_ble_is_scanning(void);
+
+/* Take the Bluedroid GAP callback back.
+ *
+ * Bluedroid holds exactly ONE GAP callback -- esp_ble_gap_register_callback()
+ * is a setter (btc_profile_cb_set), not a subscribe -- so any other component
+ * that registers one replaces ours and our scan-result events stop arriving,
+ * with no error anywhere (protocomm's simple_ble does exactly that). Call
+ * this after such a component has finished, before scanning again; scanning
+ * without it looks like a dead radio. */
+esp_err_t espos_ble_gap_reclaim(void);
 uint32_t espos_ble_scan_hits(void);
 /* Controller address as "AA:BB:...", or "" if unavailable. */
 const char *espos_ble_mac(void);

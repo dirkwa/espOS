@@ -30,6 +30,7 @@ esp_err_t espos_ble_status_json(char **out_json)
     if (!d) return ESP_ERR_NO_MEM;
     cJSON_AddBoolToObject(d, "enabled", st.enabled);
     cJSON_AddBoolToObject(d, "scanning", st.scanning);
+    cJSON_AddBoolToObject(d, "scan_suspended", st.scan_suspended);
     cJSON_AddStringToObject(d, "mac", st.mac);
     cJSON_AddNumberToObject(d, "scan_hits", st.scan_hits);
     cJSON_AddNumberToObject(d, "adv_received", st.adv_received);
