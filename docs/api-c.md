@@ -61,6 +61,7 @@ table before calling anything from inside a callback.
 | [`espos_ota.h`](api-c/espos__ota_8h.md) | `espos_ota` | signed OTA with rollback: start, status, check, install, confirm |
 | [`espos_ota_manifest.h`](api-c/espos__ota__manifest_8h.md) | `espos_ota` | manifest parsing and version comparison (pure C) |
 | [`espos_ble.h`](api-c/espos__ble_8h.md) | `espos_ble` | the BLE gateway: start, status |
+| [`espos_prov.h`](api-c/espos__prov_8h.md) | `espos_prov` | BLE provisioning: WiFi credentials over GATT, written to config |
 | [`espos_flow.h`](api-c/espos__flow_8h.md) | `espos_flow` | the loop task, timers and mailbox, callable from plain C |
 | [`espos_sched.h`](api-c/espos__sched_8h.md) | `espos_sched` | the wrap-safe timer wheel over an injected clock (pure C) |
 | [`espos_adc.h`](api-c/espos__adc_8h.md) | `espos_sensors` | calibrated one-shot ADC reads, in volts |

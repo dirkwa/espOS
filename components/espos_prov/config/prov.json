@@ -1,0 +1,17 @@
+{
+  "namespace": "prov",
+  "version": 1,
+  "title": "BLE provisioning",
+  "description": "Hands the device its WiFi credentials from a phone over BLE, instead of the setup access point. Credentials land in the wifi namespace; nothing here touches the radio.",
+  "keys": [
+    {
+      "name": "pop",
+      "type": "string",
+      "default": "",
+      "maxLength": 23,
+      "secret": true,
+      "title": "Proof of possession",
+      "description": "The passphrase a phone must present to provision this device. Generated at random on first use and kept, so it can be read once and reused; deliberately NOT derived from the MAC or the device id, because the advertised name already carries those. Clearing it makes the device pick a new one."
+    }
+  ]
+}

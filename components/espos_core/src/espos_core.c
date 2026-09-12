@@ -16,6 +16,7 @@
 #include "sdkconfig.h"
 
 #include "espos.h"
+#include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_event.h"
 #include "espos_health.h"
@@ -48,8 +49,49 @@
 #else
 #define START_BLE 0
 #endif
+/* BLE provisioning, for a device with no network yet. Like the gateway it
+ * needs Bluedroid, and it needs its Kconfig switch: it costs flash and takes
+ * the radio from the BLE scanner while it runs. */
+#if ESPOS_HAVE_PROV && CONFIG_ESPOS_PROV && defined(CONFIG_BT_BLUEDROID_ENABLED)
+#define START_PROV 1
+#include "espos_prov.h"
+#else
+#define START_PROV 0
+#endif
 
 static const char *TAG = "espos";
+
+#if START_PROV
+/* Read from config rather than asking espos_wifi: this must answer the same
+ * on a build where the state machine has not started, and espos_core should
+ * not reach into espos_wifi's internals for one boolean. Same four keys
+ * espos_wifi itself loads. */
+static bool any_wifi_network_configured(void)
+{
+    static const char *const ssid_keys[] = { ESPOS_CFG_WIFI_SSID0, ESPOS_CFG_WIFI_SSID1,
+                                             ESPOS_CFG_WIFI_SSID2, ESPOS_CFG_WIFI_SSID3 };
+    for (size_t i = 0; i < sizeof(ssid_keys) / sizeof(ssid_keys[0]); i++) {
+        /* 33 = the 32-octet maximum SSID plus its terminator, so a full-length
+         * SSID reads back whole rather than ESP_ERR_INVALID_SIZE. */
+        char ssid[33] = { 0 };
+        esp_err_t err = espos_config_get_str(ESPOS_CFG_NS_WIFI, ssid_keys[i], ssid, sizeof(ssid), NULL);
+        /* A read cannot fail for a declared key (it yields the stored value or
+         * the default), and these four are declared by espos_wifi. If one ever
+         * does, treat it as "might be configured" and skip provisioning: a
+         * device that quietly advertises for anyone to claim is the worse
+         * outcome of the two. */
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "could not read %s (%s); not starting BLE provisioning", ssid_keys[i],
+                     esp_err_to_name(err));
+            return true;
+        }
+        if (ssid[0]) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 /* Filled in by CMakeLists.txt; the fallbacks only matter to a build that
  * compiles this file outside the component (a host unit test, say). */
@@ -221,6 +263,22 @@ esp_err_t espos_start_network(void)
         espos_ble_portal_hold(true);
     }
 #endif
+#endif
+#if START_PROV
+    /* Only when nothing is configured to join. A device already on a network
+     * must not sit advertising for anyone in range to reconfigure it, and the
+     * scanner provisioning displaces is the gateway's whole job. Re-provisioning
+     * a working device is deliberate: clear the networks, or call
+     * espos_prov_start() from the application.
+     *
+     * Deliberately not fatal: a device that cannot advertise should still come
+     * up on a network it already knows. */
+    if (!any_wifi_network_configured()) {
+        esp_err_t prov_err = espos_prov_start(NULL);
+        if (prov_err != ESP_OK) {
+            ESP_LOGW(TAG, "BLE provisioning unavailable: %s", esp_err_to_name(prov_err));
+        }
+    }
 #endif
     s.network_started = true;
     return ESP_OK;
